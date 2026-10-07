@@ -2,6 +2,8 @@
 
 这是一个 Windows 桌面角色和贴在角色上方的交互气泡的第一阶段实现。它把“说话/请求 → 提议动作 → 用户批准 → 执行 → 核验”的任务闭环放在同一个应用里。当前真实操作仅能在本项目的 `sandbox/notes` 新建 Markdown 测试笔记。
 
+仓库地址：<https://github.com/xbx787/desktop-resident-agent>。M0 已验收，M1 语音实体计划见 [docs/2026-10-08-m1-voice-plan.md](./docs/2026-10-08-m1-voice-plan.md)。
+
 ## 本机运行
 
 需要 Windows 和 Node.js 24。首次在项目根目录运行：
