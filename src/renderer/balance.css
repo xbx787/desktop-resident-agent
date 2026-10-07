@@ -1,0 +1,39 @@
+.balance-peek {
+  position: absolute;
+  z-index: 12;
+  left: 10px;
+  bottom: 192px;
+  width: 276px;
+  height: 160px;
+  padding: 12px 14px 11px;
+  border: 1px solid rgba(184, 209, 255, .28);
+  border-radius: 17px;
+  color: #edf3ff;
+  background: linear-gradient(155deg, rgba(39, 66, 126, .94), rgba(22, 40, 84, .93) 48%, rgba(12, 27, 62, .93));
+  backdrop-filter: blur(24px) saturate(1.15);
+  -webkit-backdrop-filter: blur(24px) saturate(1.15);
+  font-family: "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif;
+  animation: balance-appear .19s cubic-bezier(.22, .75, .25, 1) both;
+}
+.balance-peek::after { content: ""; position: absolute; right: 64px; bottom: -7px; width: 13px; height: 13px; border-right: 1px solid rgba(184, 209, 255, .28); border-bottom: 1px solid rgba(184, 209, 255, .28); background: #12254e; transform: rotate(45deg); pointer-events: none; }
+.balance-header, .balance-actions, .balance-amounts, .balance-period, .balance-foot { display: flex; align-items: center; }
+.balance-header { justify-content: space-between; color: #c8d8f7; font-size: 11px; letter-spacing: .01em; }
+.balance-actions { gap: 3px; }
+.balance-actions button { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; color: #cbd9f5; background: transparent; font: 18px/1 "Segoe UI Symbol", sans-serif; cursor: pointer; }
+.balance-actions button:hover { color: #fff; background: rgba(181, 205, 255, .15); }
+.balance-actions button:disabled { opacity: .45; cursor: default; }
+.balance-amounts { gap: 14px; min-height: 48px; overflow: hidden; }
+.balance-amount { display: flex; align-items: baseline; gap: 5px; min-width: 0; white-space: nowrap; }
+.balance-amount strong { overflow: hidden; color: #f3f6ff; font-family: Bahnschrift, "Segoe UI", sans-serif; font-size: 20px; font-weight: 600; text-overflow: ellipsis; }
+.balance-amount small { color: #a9c3ef; font-size: 10px; }
+.balance-placeholder { color: #a8bbe4; font-size: 13px; }
+.balance-period { gap: 8px; min-height: 27px; color: #d9e5ff; font-size: 11px; white-space: nowrap; }
+.balance-period-badge { flex: none; padding: 3px 7px; border-radius: 7px; font-size: 11px; }
+.balance-period-peak { color: #ffe0b7; background: rgba(242, 190, 121, .16); }
+.balance-period-off_peak { color: #bddbff; background: rgba(137, 178, 243, .17); }
+.balance-period-unknown { color: #d4ddf1; background: rgba(170, 185, 215, .13); }
+.balance-foot { justify-content: space-between; gap: 6px; margin-top: 7px; overflow: hidden; color: #9fb4df; font-size: 10px; white-space: nowrap; }
+.balance-foot span:first-child { overflow: hidden; text-overflow: ellipsis; }
+.balance-foot span:last-child { flex: none; }
+@keyframes balance-appear { from { opacity: 0; transform: translateY(7px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
+@media (prefers-reduced-motion: reduce) { .balance-peek { animation: none; } }

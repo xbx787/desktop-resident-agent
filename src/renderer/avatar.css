@@ -1,0 +1,58 @@
+:root { color: #eafaf7; }
+* { box-sizing: border-box; }
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+body.avatar-window { -webkit-user-select: none; user-select: none; }
+.avatar-stage { position: relative; width: 100%; height: 100%; }
+
+.avatar-hit-target {
+  position: absolute;
+  right: 8px;
+  bottom: 6px;
+  display: block;
+  width: 160px;
+  height: 180px;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  cursor: grab;
+  touch-action: none;
+}
+
+.avatar-hit-target:active { cursor: grabbing; }
+.avatar-hit-target:focus-visible { outline: 2px solid #9fe5d9; outline-offset: -3px; }
+.avatar-portrait { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
+.avatar-artwork { grid-area: 1 / 1; width: 100%; height: 100%; object-fit: contain; }
+
+.avatar-context-menu {
+  position: absolute;
+  z-index: 20;
+  left: 10px;
+  bottom: 20px;
+  width: 174px;
+  height: 50px;
+  padding: 7px;
+  border: 1px solid rgba(190, 212, 255, .30);
+  border-radius: 13px;
+  color: #edf3ff;
+  background: linear-gradient(155deg, rgba(42, 65, 117, .96), rgba(17, 33, 72, .96));
+  backdrop-filter: blur(20px) saturate(1.15);
+  -webkit-backdrop-filter: blur(20px) saturate(1.15);
+  font-family: "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif;
+  animation: avatar-menu-appear .16s cubic-bezier(.22, .75, .25, 1) both;
+}
+.avatar-context-menu button { font: inherit; cursor: pointer; }
+.avatar-context-menu button:focus-visible { outline: 2px solid #c6dcff; outline-offset: -2px; }
+.avatar-menu-action { display: flex; align-items: center; width: 100%; min-height: 34px; padding: 0 10px; border: 0; border-radius: 7px; color: #edf3ff; background: transparent; font-size: 12px !important; text-align: left; }
+.avatar-menu-action:hover { background: rgba(181, 205, 255, .16); }
+.avatar-menu-exit { width: 100%; color: #d9e5ff; }
+@keyframes avatar-menu-appear { from { opacity: 0; transform: translateX(7px) scale(.985); } to { opacity: 1; transform: translateX(0) scale(1); } }
+@media (prefers-reduced-motion: reduce) { .avatar-context-menu { animation: none; } }

@@ -1,0 +1,51 @@
+{
+  "name": "desktop-resident-agent",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "author": "DesktopPetProject",
+  "description": "A resident Windows companion with an auditable task loop",
+  "main": "./out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "pack:dir": "npm run build && electron-builder --win --dir"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.292",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@swc/core": "^1.13.5",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "electron": "^44.6.0",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
+    "typescript": "^7.0.2",
+    "vite": "^7.3.7",
+    "vitest": "^3.2.7"
+  },
+  "build": {
+    "appId": "local.desktop.resident.agent",
+    "productName": "Whale Companion Preview",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "node_modules/@anthropic-ai/claude-agent-sdk/**/*",
+      "node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": "dir"
+    }
+  }
+}
