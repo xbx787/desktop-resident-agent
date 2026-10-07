@@ -96,8 +96,11 @@
 .panel-stop:hover:not(:disabled) { background: rgba(249, 182, 192, .12); }
 .panel-stop:disabled { opacity: .5; }
 .panel-stop-square { width: 7px; height: 7px; border: 1px solid currentColor; border-radius: 1px; }
-.panel-error { flex: none; margin: 9px 14px 0; padding: 8px 10px; border: 1px solid rgba(243, 167, 170, .28); border-radius: 9px; color: #ffced3; background: rgba(105, 32, 67, .23); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
-.panel-voice-error { flex: none; margin: 9px 14px 0; padding: 8px 10px; border: 1px solid rgba(255, 200, 130, .28); border-radius: 9px; color: #ffe8c2; background: rgba(110, 75, 20, .23); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.panel-toast-stack { position: absolute; z-index: 6; left: 50%; bottom: calc(100% + 8px); transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; width: max-content; max-width: calc(100vw - 24px); pointer-events: none; }
+.panel-toast { pointer-events: auto; padding: 8px 12px; border-radius: 10px; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; box-shadow: 0 6px 20px rgba(0, 0, 0, .35); animation: toast-appear .18s cubic-bezier(.22, .75, .25, 1) both; }
+.panel-toast-error { color: #ffced3; background: linear-gradient(155deg, rgba(105, 32, 67, .96), rgba(76, 22, 50, .96)); border: 1px solid rgba(243, 167, 170, .4); }
+.panel-toast-voice { color: #ffe8c2; background: linear-gradient(155deg, rgba(110, 75, 20, .96), rgba(76, 52, 14, .96)); border: 1px solid rgba(255, 200, 130, .4); }
+@keyframes toast-appear { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 .panel-voice-caption { display: flex; align-items: center; gap: 8px; flex: none; padding: 6px 8px; border-radius: 8px; color: #d5e7ff; background: rgba(9, 35, 82, .45); font-size: 12px; line-height: 1.45; }
 .panel-voice-dot { width: 7px; height: 7px; border-radius: 50%; background: #9fbfff; }
 .panel-voice-dot.is-active { animation: voice-pulse 1s ease-in-out infinite; background: #ff6b6b; }

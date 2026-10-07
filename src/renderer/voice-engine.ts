@@ -25,8 +25,14 @@ export interface VoiceEngine {
   destroy(): void
 }
 
+function siliconFlowUsable(): boolean {
+  return typeof MediaRecorder !== 'undefined'
+    && typeof navigator !== 'undefined'
+    && Boolean(navigator.mediaDevices?.getUserMedia)
+}
+
 function createAsrEngine(events: AsrEvents, siliconFlow?: SiliconFlowAsrConfig): AsrEngine {
-  if (siliconFlow?.apiKey) {
+  if (siliconFlow?.apiKey && siliconFlowUsable()) {
     return new SiliconFlowAsrEngine(siliconFlow, events)
   }
   return new WebSpeechAsrEngine(events)

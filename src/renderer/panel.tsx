@@ -109,6 +109,12 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const voiceManagerRef = useRef<VoiceManager | null>(null);
 
   useEffect(() => {
+    if (!voiceError) return
+    const timer = window.setTimeout(() => setVoiceError(null), 4000)
+    return () => window.clearTimeout(timer)
+  }, [voiceError])
+
+  useEffect(() => {
     if (!visible) {
       setComposerOpen(false);
       setModelPickerOpen(false);
@@ -244,8 +250,8 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
 
   function toggleVoice() {
     const manager = voiceManagerRef.current;
-    if (!manager || !manager.available) {
-      setVoiceError('本机不支持语音功能，请使用文字输入。');
+    if (!manager) {
+      setVoiceError('语音功能尚未就绪，请稍后再试。');
       return;
     }
     setVoiceError(null);
@@ -272,6 +278,12 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
 
   return (
     <section className={`panel-bubble${empty ? ' is-empty' : ''}${composerOpen ? ' is-composing' : ''}${attachments.length ? ' has-attachments' : ''}${modelPickerOpen ? ' is-choosing-model' : ''}`} aria-label="交互气泡" hidden={!visible}>
+      {(error || voiceError) && (
+        <div className="panel-toast-stack" aria-label="通知">
+          {error && <div className="panel-toast panel-toast-error" role="alert">{error}</div>}
+          {voiceError && <div className="panel-toast panel-toast-voice" role="status">{voiceError}</div>}
+        </div>
+      )}
       <section className="panel-workspace">
         {(status !== 'idle' || snapshot?.currentTask) && (
           <div className="panel-status-row">
@@ -282,9 +294,6 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
             </button>}
           </div>
         )}
-
-        {error && <div className="panel-error" role="alert">{error}</div>}
-        {voiceError && <div className="panel-voice-error" role="status">{voiceError}</div>}
 
         <div className="panel-feed" ref={feedRef} aria-label="对话与任务时间线">
           {snapshot?.timeline.map((entry) => <TimelineItem key={entry.id} entry={entry} />)}
