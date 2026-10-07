@@ -245,11 +245,11 @@ function registerIpc(): void {
   ipcMain.handle('pet:transcribe-audio', async (event, request: unknown) => {
     if (event.sender.id !== avatarWindow?.webContents.id) throw new Error('无效的界面请求。')
     if (!request || typeof request !== 'object') throw new Error('转写请求无效。')
-    const req = request as { buffer?: ArrayBuffer; mimeType?: string; apiKey?: string; model?: string; baseUrl?: string }
-    if (!req.buffer || !(req.buffer instanceof ArrayBuffer)) throw new Error('音频数据无效。')
+    const req = request as { bytes?: number[]; mimeType?: string; apiKey?: string; model?: string; baseUrl?: string }
+    if (!Array.isArray(req.bytes) || req.bytes.length === 0) throw new Error('音频数据无效。')
     if (!req.apiKey) throw new Error('未配置 SiliconFlow API Key。')
     return transcribeAudio({
-      buffer: req.buffer,
+      bytes: req.bytes,
       mimeType: req.mimeType ?? 'audio/webm',
       apiKey: req.apiKey,
       model: req.model,

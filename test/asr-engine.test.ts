@@ -145,6 +145,8 @@ describe('SiliconFlowAsrEngine', () => {
     await new Promise((resolve) => setTimeout(resolve, 20))
 
     expect(transcribeMock).toHaveBeenCalledTimes(1)
+    expect(transcribeMock.mock.calls[0]?.[0].bytes).toBeInstanceOf(Array)
+    expect(transcribeMock.mock.calls[0]?.[0].bytes.length).toBeGreaterThan(0)
     expect(onFinal).toHaveBeenCalledWith('hello world')
   })
 
