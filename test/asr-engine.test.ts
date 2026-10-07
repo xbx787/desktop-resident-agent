@@ -104,9 +104,11 @@ describe('SiliconFlowAsrEngine', () => {
   }
 
   let transcribeMock: ReturnType<typeof vi.fn>
+  let voiceLogMock: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     transcribeMock = vi.fn()
+    voiceLogMock = vi.fn().mockResolvedValue(undefined)
     Object.assign(globalThis, {
       MediaRecorder: MockMediaRecorder,
       navigator: {
@@ -131,7 +133,7 @@ describe('SiliconFlowAsrEngine', () => {
     const onStateChange = vi.fn()
     const engine = new SiliconFlowAsrEngine(
       { apiKey: 'sk-test', model: 'm' },
-      { transcribeAudio: transcribeMock },
+      { transcribeAudio: transcribeMock, voiceLog: voiceLogMock },
       { onFinal, onStateChange }
     )
 
@@ -156,7 +158,7 @@ describe('SiliconFlowAsrEngine', () => {
     const onError = vi.fn()
     const engine = new SiliconFlowAsrEngine(
       { apiKey: 'sk-test' },
-      { transcribeAudio: transcribeMock },
+      { transcribeAudio: transcribeMock, voiceLog: voiceLogMock },
       { onError }
     )
 
@@ -174,7 +176,7 @@ describe('SiliconFlowAsrEngine', () => {
 
   it('reports missing api key', () => {
     const onError = vi.fn()
-    const engine = new SiliconFlowAsrEngine({ apiKey: '' }, { transcribeAudio: transcribeMock }, { onError })
+    const engine = new SiliconFlowAsrEngine({ apiKey: '' }, { transcribeAudio: transcribeMock, voiceLog: voiceLogMock }, { onError })
     engine.start()
     expect(onError).toHaveBeenCalledWith('未配置 SiliconFlow API Key。')
   })

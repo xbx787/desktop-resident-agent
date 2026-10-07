@@ -7,6 +7,7 @@ import { findClaudeExecutable } from './claude-code'
 import { DeepSeekClient } from './deepseek'
 import { fetchDeepSeekBalance } from './deepseek-balance'
 import { transcribeAudio } from './asr-server'
+import { voiceLog, voiceLogError } from './voice-log'
 import { NoteStore } from './note-store'
 import { getEnabledDeepSeekKey } from './model-config'
 import type { BubbleLayout } from '../shared/contracts'
@@ -243,18 +244,32 @@ function registerIpc(): void {
     }
   })
   ipcMain.handle('pet:transcribe-audio', async (event, request: unknown) => {
+    voiceLog('[ipc] transcribe-audio called', { hasRequest: !!request, senderId: event.sender.id })
     if (event.sender.id !== avatarWindow?.webContents.id) throw new Error('无效的界面请求。')
     if (!request || typeof request !== 'object') throw new Error('转写请求无效。')
     const req = request as { bytes?: number[]; mimeType?: string; apiKey?: string; model?: string; baseUrl?: string }
+    voiceLog('[ipc] request', { bytesLen: req.bytes?.length, mimeType: req.mimeType, hasKey: !!req.apiKey, model: req.model })
     if (!Array.isArray(req.bytes) || req.bytes.length === 0) throw new Error('音频数据无效。')
     if (!req.apiKey) throw new Error('未配置 SiliconFlow API Key。')
-    return transcribeAudio({
-      bytes: req.bytes,
-      mimeType: req.mimeType ?? 'audio/webm',
-      apiKey: req.apiKey,
-      model: req.model,
-      baseUrl: req.baseUrl,
-    })
+    try {
+      const result = await transcribeAudio({
+        bytes: req.bytes,
+        mimeType: req.mimeType ?? 'audio/webm',
+        apiKey: req.apiKey,
+        model: req.model,
+        baseUrl: req.baseUrl,
+      })
+      voiceLog('[ipc] transcribe success', result)
+      return result
+    } catch (error) {
+      voiceLogError('[ipc] transcribe failed', error)
+      throw error
+    }
+  })
+  ipcMain.handle('pet:voice-log', (event, level: unknown, message: unknown, data: unknown) => {
+    if (event.sender.id !== avatarWindow?.webContents.id) return
+    if (level === 'error') voiceLogError(String(message ?? ''), data)
+    else voiceLog(String(message ?? ''), data)
   })
   ipcMain.handle('pet:quit', (event) => { if (trusted(event)) app.quit() })
   ipcMain.handle('pet:begin-drag', (event, cursor: unknown) => {
@@ -277,9 +292,43 @@ function registerIpc(): void {
   })
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   registerIpc()
   avatarWindow = createAvatarWindow()
+
+  // 自检模式：node/electron --self-test-asr 用测试音频调用 transcribeAudio
+  if (process.argv.includes('--self-test-asr')) {
+    voiceLog('[selftest] start', { args: process.argv })
+    try {
+      const fs = await import('node:fs')
+      const testAudio = path.join(projectRoot, 'scripts', 'test-zh.wav')
+      voiceLog('[selftest] audio path', { testAudio, exists: fs.existsSync(testAudio) })
+      if (fs.existsSync(testAudio)) {
+        const buffer = fs.readFileSync(testAudio)
+        const bytes = Array.from(buffer)
+        const apiKey = process.env.SILICONFLOW_API_KEY
+        voiceLog('[selftest] config', { bytesLen: bytes.length, hasKey: !!apiKey })
+        if (apiKey) {
+          const result = await transcribeAudio({
+            bytes,
+            mimeType: 'audio/wav',
+            apiKey,
+            model: 'FunAudioLLM/SenseVoiceSmall',
+          })
+          voiceLog('[selftest] result', result)
+        } else {
+          voiceLogError('[selftest] no SILICONFLOW_API_KEY', new Error('missing key'))
+        }
+      } else {
+        voiceLogError('[selftest] test audio not found', { testAudio })
+      }
+    } catch (error) {
+      voiceLogError('[selftest] failed', error)
+    } finally {
+      voiceLog('[selftest] done, quitting', undefined)
+      setTimeout(() => app.quit(), 500)
+    }
+  }
 })
 
 app.on('before-quit', () => {

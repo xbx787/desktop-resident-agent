@@ -162,6 +162,7 @@ export interface SiliconFlowAsrConfig {
 
 export interface TranscribeBridge {
   transcribeAudio(request: { bytes: number[]; mimeType: string; apiKey: string; model?: string; baseUrl?: string }): Promise<{ text: string }>
+  voiceLog(level: 'info' | 'error', message: string, data?: unknown): Promise<void>
 }
 
 export class SiliconFlowAsrEngine implements AsrEngine {
@@ -220,11 +221,12 @@ export class SiliconFlowAsrEngine implements AsrEngine {
           if (event.data.size > 0) this.chunks.push(event.data)
         })
         this.mediaRecorder.addEventListener('stop', () => {
-          console.log('[asr] mediaRecorder stop, chunks=', this.chunks.length, 'totalSize=', this.chunks.reduce((s, c) => s + c.size, 0))
+          const total = this.chunks.reduce((s, c) => s + c.size, 0)
+          void this.bridge.voiceLog('info', '[asr] mediaRecorder stop', { chunks: this.chunks.length, totalSize: total })
           void this.transcribe()
         })
         this.mediaRecorder.addEventListener('error', (event) => {
-          console.error('[asr] mediaRecorder error', event)
+          void this.bridge.voiceLog('error', '[asr] mediaRecorder error', String(event))
         })
         this.mediaRecorder.start(200)
         this._listening = true
@@ -276,7 +278,7 @@ export class SiliconFlowAsrEngine implements AsrEngine {
     try {
       const buffer = await blob.arrayBuffer()
       const bytes = new Uint8Array(buffer)
-      console.log('[asr] transcribe start, bytes=', bytes.length, 'mimeType=', mimeType)
+      await this.bridge.voiceLog('info', '[asr] transcribe start', { bytes: bytes.length, mimeType })
       const result = await this.bridge.transcribeAudio({
         bytes: Array.from(bytes),
         mimeType,
@@ -284,7 +286,7 @@ export class SiliconFlowAsrEngine implements AsrEngine {
         model: this.config.model,
         baseUrl: this.config.baseUrl,
       })
-      console.log('[asr] transcribe result', result)
+      await this.bridge.voiceLog('info', '[asr] transcribe result', result)
       const text = (result.text ?? '').trim()
       if (text) {
         this.events.onFinal(text)
@@ -292,7 +294,7 @@ export class SiliconFlowAsrEngine implements AsrEngine {
         this.events.onError('转写结果为空。')
       }
     } catch (error) {
-      console.error('[asr] transcribe error', error)
+      await this.bridge.voiceLog('error', '[asr] transcribe error', error instanceof Error ? `${error.message}\n${error.stack ?? ''}` : String(error))
       if (error instanceof DOMException && error.name === 'AbortError') {
         return
       }

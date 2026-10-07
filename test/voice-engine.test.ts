@@ -76,7 +76,10 @@ describe('BrowserVoiceEngine', () => {
     vi.restoreAllMocks()
   })
 
-  const noopBridge = { transcribeAudio: vi.fn(async () => ({ text: '' })) }
+  const noopBridge = {
+    transcribeAudio: vi.fn(async () => ({ text: '' })),
+    voiceLog: vi.fn(async () => undefined),
+  }
 
   it('reports availability when SpeechRecognition and speechSynthesis exist', () => {
     const engine = new BrowserVoiceEngine({}, undefined, noopBridge)
