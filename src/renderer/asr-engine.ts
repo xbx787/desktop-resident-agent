@@ -166,6 +166,7 @@ export class SiliconFlowAsrEngine implements AsrEngine {
   private stream: MediaStream | undefined
   private _listening = false
   private destroyed = false
+  private abortController: AbortController | undefined
   private readonly events: Required<AsrEvents>
 
   constructor(
@@ -246,6 +247,7 @@ export class SiliconFlowAsrEngine implements AsrEngine {
 
   destroy(): void {
     this.destroyed = true
+    this.abortController?.abort()
     this.stop()
   }
 
@@ -254,11 +256,18 @@ export class SiliconFlowAsrEngine implements AsrEngine {
     const blob = new Blob(this.chunks, { type: this.mediaRecorder?.mimeType ?? 'audio/webm' })
     this.chunks = []
 
+    if (blob.size === 0) {
+      this.events.onError('录音为空，请再说一次。')
+      this.events.onStateChange(false)
+      return
+    }
+
     const form = new FormData()
     form.append('file', blob, 'recording.webm')
     form.append('model', this.config.model ?? 'FunAudioLLM/SenseVoiceSmall')
 
     const baseUrl = (this.config.baseUrl ?? 'https://api.siliconflow.com').replace(/\/$/, '')
+    this.abortController = new AbortController()
     try {
       const response = await fetch(`${baseUrl}/v1/audio/transcriptions`, {
         method: 'POST',
@@ -266,6 +275,7 @@ export class SiliconFlowAsrEngine implements AsrEngine {
           Authorization: `Bearer ${this.config.apiKey}`,
         },
         body: form,
+        signal: this.abortController.signal,
       })
       if (!response.ok) {
         const body = await response.text().catch(() => '')
@@ -279,8 +289,12 @@ export class SiliconFlowAsrEngine implements AsrEngine {
         this.events.onError('转写结果为空。')
       }
     } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        return
+      }
       this.events.onError(error instanceof Error ? error.message : '在线转写出错。')
     } finally {
+      this.abortController = undefined
       this.events.onStateChange(false)
     }
   }
