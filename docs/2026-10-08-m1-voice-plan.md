@@ -75,15 +75,17 @@ M1 尽量不改动主进程；仅在需要时：
 
 ## 4. 实现步骤
 
-### Step 1：语音引擎抽象（建议由第一个 Agent 完成）
+### Step 1：语音引擎抽象（已完成）
 
 - 创建 `src/renderer/voice-engine.ts`。
 - 检测 `SpeechRecognition` / `webkitSpeechRecognition` 可用性。
 - 设置 `lang: 'zh-CN'`，启用 `interimResults` 和 `continuous: false`（单句识别，避免过长时间的识别会话）。
-- 提供事件：`onStart`, `onPartial(text)`, `onFinal(text)`, `onError(error)`, `onEnd`。
-- TTS 部分：选择中文 voice（`speechSynthesis.getVoices()` 中 `lang.startsWith('zh')`），按句/按段落切分，播放队列；提供 `onSpeakStart`, `onSpeakEnd`, `onSpeakBoundary`（可选）。
+- 提供事件：`onStateChange`, `onPartial(text)`, `onFinal(text)`, `onError(error)`。
+- TTS 部分：选择中文 voice（`speechSynthesis.getVoices()` 中 `lang.startsWith('zh')`），按句/按段落切分，播放队列；提供 `onSpeakStart`, `onSpeakEnd`。
 
-### Step 2：语音管理器（建议由第二个 Agent 完成）
+实现文件：`src/renderer/voice-engine.ts`；测试文件：`test/voice-engine.test.ts`。
+
+### Step 2：语音管理器（已完成）
 
 - 创建 `src/renderer/voice-manager.ts`。
 - 持有 `VoiceEngine` 实例。
@@ -91,30 +93,32 @@ M1 尽量不改动主进程；仅在需要时：
   - `idle` → 点击麦克风 → `listening` → 有 final → `processing`（调用模型）→ 有回复 → `speaking` → 结束 → `idle`。
   - 任何阶段用户再次触发麦克风 → 停止当前 TTS，丢弃当前识别，回到 `listening`。
 - 将识别结果通过 `petBridge().sendMessage(text)` 发送给主进程，与现有文字输入共享同一任务流程。
-- 模型回复文本到达后，调用 TTS；TTS 期间通过 `petBridge()` 暂无直接改变 avatar 状态的 API，需通过时间线 `system` 消息或利用现有 `taskStatus`/`avatarState` 联动（见 Step 3 讨论）。
+- 模型回复文本到达后，调用 TTS；TTS 期间通过 `petBridge.setAvatarState` 驱动角色状态。
 
-### Step 3：状态联动与 UI（建议由第三个 Agent 完成）
+实现文件：`src/renderer/voice-manager.ts`；测试文件：`test/voice-manager.test.ts`。
 
-- 讨论并决定：`speaking` 状态由谁来维护？
-  - 选项 A：渲染进程自行通过 `voice-manager` 在 TTS 开始/结束时调用某 IPC 设置 `avatarState`。需要在 `contracts.ts` 和 `preload/index.ts` 增加 `setAvatarState(state)`。
-  - 选项 B：主进程 `AgentRuntime` 在任务状态变化时自动设置 `avatarState: 'speaking'`，但主进程不知道 TTS 何时开始/结束。
-  - **推荐**：选项 A，M1 在渲染层增加 `pet:set-avatar-state` IPC，让语音管理器直接驱动角色状态；同时保持主进程对任务状态（planning/executing 等）的权威。
-- 更新 `src/shared/contracts.ts`：
-  - `AvatarState` 增加 `'listening'`（可选）。
+### Step 3：状态联动与 UI（已完成基础版本，待实机微调）
+
+- 决定：采用选项 A，渲染进程通过 `pet:set-avatar-state` IPC 设置 `avatarState`，主进程保留任务状态权威。
+- 已更新 `src/shared/contracts.ts`：
+  - `AvatarState` 增加 `'listening'`。
   - `PetAPI` 增加 `setAvatarState(state: AvatarState): Promise<void>`。
-- 更新 `src/preload/index.ts` 暴露该 IPC。
-- 更新 `src/main/index.ts` 处理 `pet:set-avatar-state`，仅允许渲染进程在限定状态集合内设置，且不能与主进程当前任务状态冲突（例如主进程处于 `executing` 时不允许改为 `idle`）。
-- 更新 `src/renderer/panel.tsx` 麦克风按钮、状态提示、打断按钮。
-- 更新 `src/renderer/avatar.tsx` / `WhalePortrait.tsx` 显示 speaking/listening 视觉。
+- 已更新 `src/preload/index.ts` 暴露该 IPC。
+- 已更新 `src/main/index.ts` 处理 `pet:set-avatar-state`，仅允许渲染进程在限定状态集合内设置，且不能与主进程当前任务状态冲突（例如主进程处于 `executing` 时不允许改为 `idle`）。
+- 已更新 `src/renderer/panel.tsx`：麦克风按钮可用，显示 listening/speaking 状态，显示 partial/final 字幕与语音错误。
+- 已更新 `src/renderer/avatar.tsx` 与 `src/renderer/avatar.css`：speaking/listening 时角色有光晕和缩放反馈。
 
-### Step 4：测试与验收（建议由第四个 Agent 或同一 Agent 收尾）
+待实机验收后决定：是否增加口型动画、是否在角色旁显示音波动画、麦克风按钮是否改为长按触发。
 
-- 为 `voice-engine.ts` 编写 mock 测试。
-- 为 `voice-manager.ts` 编写打断与状态测试。
-- 更新 `README.md` 说明语音功能、权限、已知限制。
-- 运行 `npm.cmd run check` 和 `npm.cmd test`。
-- 实机测试中文问答、打断、失败回退。
-- 更新 `docs/2026-10-08-m1-acceptance.md` 记录验收结果。
+### Step 4：测试与验收（单元测试已完成，实机待验）
+
+- 已新增 `test/voice-engine.test.ts`（jsdom + mock 测试 ASR 事件与错误）。
+- 已新增 `test/voice-manager.test.ts`（测试打断、final 提交、TTS 触发、avatar 状态同步）。
+- 已更新 `README.md` 说明仓库地址和 M1 计划入口。
+- 已运行 `npm.cmd run check` 和 `npm.cmd test`，全部通过。
+- 已运行 `npm.cmd run build`，构建成功。
+- 待实机测试：中文问答、打断、失败回退。
+- 待填写：`docs/2026-10-08-m1-acceptance.md`。
 
 ## 5. 文件变更清单
 

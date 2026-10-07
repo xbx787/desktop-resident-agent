@@ -242,7 +242,7 @@ function Avatar() {
   }
 
   return (
-    <main className={`avatar-stage${panelOpen ? ' is-panel-open' : ''}`} onContextMenu={(event) => { void openContextMenu(event); }}>
+    <main className={`avatar-stage${panelOpen ? ' is-panel-open' : ''}${snapshot?.avatarState === 'speaking' ? ' is-speaking' : snapshot?.avatarState === 'listening' ? ' is-listening' : ''}`} onContextMenu={(event) => { void openContextMenu(event); }}>
       <PanelBubble
         visible={panelOpen}
         snapshot={snapshot}

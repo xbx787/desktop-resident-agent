@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import type { AppSnapshot, BubbleLayout, ModelMode, PetAPI, ProposedAction, TaskStatus, TimelineEntry } from '../shared/contracts';
 import { petBridge } from './pet-state';
+import { VoiceManager, type VoiceManagerPhase } from './voice-manager';
 import './panel.css';
 
 const taskLabels: Record<TaskStatus, string> = {
@@ -98,17 +99,59 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const [attachments, setAttachments] = useState<TextAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  const [voicePhase, setVoicePhase] = useState<VoiceManagerPhase>('idle');
+  const [voicePartial, setVoicePartial] = useState('');
+  const [voiceError, setVoiceError] = useState<string | null>(null);
   const feedRef = useRef<HTMLDivElement>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const composeTriggerRef = useRef<HTMLButtonElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const voiceManagerRef = useRef<VoiceManager | null>(null);
 
   useEffect(() => {
     if (!visible) {
       setComposerOpen(false);
       setModelPickerOpen(false);
+      voiceManagerRef.current?.stop();
     }
   }, [visible]);
+
+  useEffect(() => {
+    let active = true;
+    try {
+      const bridge = petBridge();
+      const manager = new VoiceManager(bridge, {
+        onPhaseChange: (phase) => { if (active) setVoicePhase(phase); },
+        onPartial: (text) => { if (active) setVoicePartial(text); },
+        onFinal: (text) => { if (active) setVoicePartial(text); },
+        onError: (message) => { if (active) setVoiceError(message); },
+        onRequestText: async (text) => {
+          if (!active) return;
+          setVoicePartial('');
+          await bridge.sendMessage(text);
+        },
+      });
+      voiceManagerRef.current = manager;
+      return () => {
+        active = false;
+        manager.destroy();
+        voiceManagerRef.current = null;
+      };
+    } catch {
+      return () => {};
+    }
+  }, []);
+
+  useEffect(() => {
+    voiceManagerRef.current?.updateFromSnapshot(snapshot ?? {
+      mode: 'demo',
+      modelReady: false,
+      claudeCodeReady: false,
+      avatarState: 'idle',
+      taskStatus: 'idle',
+      timeline: [],
+    });
+  }, [snapshot]);
 
   useEffect(() => {
     if (!composerOpen) return;
@@ -190,8 +233,24 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   async function stop() {
     if (busy && busy !== 'send') return;
     setBusy('stop');
+    voiceManagerRef.current?.stopSpeaking();
     await run((bridge) => bridge.stop());
     setBusy(null);
+  }
+
+  function toggleVoice() {
+    const manager = voiceManagerRef.current;
+    if (!manager || !manager.available) {
+      setVoiceError('本机不支持语音功能，请使用文字输入。');
+      return;
+    }
+    setVoiceError(null);
+    if (voicePhase === 'listening') {
+      manager.stop();
+    } else {
+      manager.stop();
+      requestAnimationFrame(() => manager.start());
+    }
   }
 
   const status = snapshot?.taskStatus ?? 'idle';
@@ -221,6 +280,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
         )}
 
         {error && <div className="panel-error" role="alert">{error}</div>}
+        {voiceError && <div className="panel-voice-error" role="status">{voiceError}</div>}
 
         <div className="panel-feed" ref={feedRef} aria-label="对话与任务时间线">
           {snapshot?.timeline.map((entry) => <TimelineItem key={entry.id} entry={entry} />)}
@@ -244,6 +304,12 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
               }
             }}>
               <input ref={fileInputRef} className="panel-file-input" type="file" multiple accept=".txt,.md,.markdown,.csv,.json,.log,text/plain,text/markdown,text/csv,application/json" onChange={(event) => { void addFiles(event); }} />
+              {(voicePhase === 'listening' || voicePhase === 'processing' || voicePartial) && (
+                <div className="panel-voice-caption" aria-live="polite">
+                  <span className={`panel-voice-dot${voicePhase === 'listening' ? ' is-active' : ''}`} aria-hidden="true" />
+                  <span>{voicePhase === 'processing' ? '正在处理…' : voicePartial || '正在听…'}</span>
+                </div>
+              )}
               {attachments.length > 0 && <div className="panel-attachments" aria-label="已添加附件">
                 {attachments.map((attachment) => <span key={attachment.id} className="panel-attachment-chip" title={attachment.name}>
                   <span>{attachment.name}</span>
@@ -283,7 +349,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
                     <button type="button" role="menuitemradio" aria-checked={snapshot?.mode === 'live'} disabled={!snapshot?.modelReady} title={!snapshot?.modelReady ? '请先在启动环境中配置 DeepSeek API Key' : undefined} onClick={() => { void chooseModel('live'); }}>DeepSeek Flash{snapshot?.mode === 'live' && <span>✓</span>}</button>
                   </div>}
                 </div>
-                <button type="button" className="panel-tool-button panel-microphone-button" aria-label="语音对话，语音识别尚未接入" title="语音识别尚未接入" disabled><MicrophoneIcon /></button>
+                <button type="button" className={`panel-tool-button panel-microphone-button${voicePhase === 'listening' ? ' is-listening' : voicePhase === 'speaking' ? ' is-speaking' : ''}`} aria-label={voicePhase === 'listening' ? '停止语音输入' : voicePhase === 'speaking' ? '停止朗读' : '语音对话'} title={voicePhase === 'listening' ? '停止语音输入' : voicePhase === 'speaking' ? '停止朗读' : '语音对话'} onClick={() => { toggleVoice(); }}><MicrophoneIcon /></button>
                 <button type="submit" className="panel-send" disabled={(!draft.trim() && !attachments.length) || Boolean(busy) || !snapshot} aria-label="发送消息" title="发送消息">
                   {busy === 'send' ? <span className="panel-send-spinner" /> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11m-5-5 5 5-5 5" /></svg>}
                 </button>

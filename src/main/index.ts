@@ -22,6 +22,7 @@ let balanceOpen = false
 let bubbleLayout: BubbleLayout = 'empty'
 let dragOrigin: { cursor: Electron.Point; bounds: Electron.Rectangle } | undefined
 let shapeShrinkTimer: NodeJS.Timeout | undefined
+let rendererAvatarState: import('../shared/contracts').AvatarState | undefined
 
 const stageSize = { width: 376, height: 560 }
 const avatarRegion = { x: 208, y: 374, width: 160, height: 180 }
@@ -51,12 +52,17 @@ function applyPointerShape(): void {
 const apiKey = getEnabledDeepSeekKey(process.env)
 const claudeKey = process.env.DEEPSEEK_API_KEY?.trim()
 const claudeExecutable = findClaudeExecutable(process.env)
+function publishSnapshot(): void {
+  if (!avatarWindow || avatarWindow.isDestroyed()) return
+  const snapshot = runtime.getSnapshot()
+  if (rendererAvatarState) snapshot.avatarState = rendererAvatarState
+  avatarWindow.webContents.send('pet:snapshot', snapshot)
+}
+
 const runtime = new AgentRuntime(
   new NoteStore(projectRoot),
   apiKey ? new DeepSeekClient(apiKey) : undefined,
-  (snapshot) => {
-    if (avatarWindow && !avatarWindow.isDestroyed()) avatarWindow.webContents.send('pet:snapshot', snapshot)
-  },
+  () => publishSnapshot(),
   claudeKey && claudeExecutable ? new ClaudeAgentClient(claudeExecutable, claudeKey, projectRoot) : undefined
 )
 
@@ -214,6 +220,18 @@ function registerIpc(): void {
     if (event.sender.id !== avatarWindow?.webContents.id) return
     if (mode !== 'demo' && mode !== 'live' && mode !== 'claude_code') throw new Error('模型选项无效。')
     runtime.setModelMode(mode)
+  })
+  ipcMain.handle('pet:set-avatar-state', (event, state: unknown) => {
+    if (event.sender.id !== avatarWindow?.webContents.id) return
+    if (state !== 'idle' && state !== 'thinking' && state !== 'listening' && state !== 'speaking' && state !== 'acting' && state !== 'success' && state !== 'error') {
+      throw new Error('角色状态无效。')
+    }
+    const taskStatus = runtime.getSnapshot().taskStatus
+    if (state === 'idle' && ['planning', 'awaiting_approval', 'executing', 'verifying'].includes(taskStatus)) {
+      throw new Error('任务进行中时不能将角色状态设为待机。')
+    }
+    rendererAvatarState = state === 'idle' ? undefined : state
+    publishSnapshot()
   })
   ipcMain.handle('pet:quit', (event) => { if (trusted(event)) app.quit() })
   ipcMain.handle('pet:begin-drag', (event, cursor: unknown) => {

@@ -1,4 +1,4 @@
-export type AvatarState = 'idle' | 'thinking' | 'speaking' | 'acting' | 'success' | 'error'
+export type AvatarState = 'idle' | 'thinking' | 'listening' | 'speaking' | 'acting' | 'success' | 'error'
 export type ModelMode = 'demo' | 'live' | 'claude_code'
 export type BubbleLayout = 'empty' | 'composer' | 'composer_attachments' | 'composer_models' | 'full'
 
@@ -73,6 +73,7 @@ export interface PetAPI {
   getBalance(): Promise<BalanceSnapshot>
   setBubbleLayout(layout: BubbleLayout): Promise<void>
   setModelMode(mode: ModelMode): Promise<void>
+  setAvatarState(state: AvatarState): Promise<void>
   quit(): Promise<void>
   beginDrag(position: { x: number; y: number }): Promise<void>
   dragMove(position: { x: number; y: number }): Promise<void>
