@@ -92,7 +92,6 @@ export class ClaudeAgentClient implements ModelClient {
           mcpServers: {},
           tools: [...TOOLS],
           permissionMode: 'default',
-          permissionPrompts: 'host',
           hooks: {
             PreToolUse: [{
               hooks: [async () => ({

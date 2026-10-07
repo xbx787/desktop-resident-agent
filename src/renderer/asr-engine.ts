@@ -160,17 +160,21 @@ export interface SiliconFlowAsrConfig {
   model?: string
 }
 
+export interface TranscribeBridge {
+  transcribeAudio(request: { buffer: ArrayBuffer; mimeType: string; apiKey: string; model?: string; baseUrl?: string }): Promise<{ text: string }>
+}
+
 export class SiliconFlowAsrEngine implements AsrEngine {
   private mediaRecorder: MediaRecorder | undefined
   private chunks: Blob[] = []
   private stream: MediaStream | undefined
   private _listening = false
   private destroyed = false
-  private abortController: AbortController | undefined
   private readonly events: Required<AsrEvents>
 
   constructor(
     private readonly config: SiliconFlowAsrConfig,
+    private readonly bridge: TranscribeBridge,
     events: AsrEvents = {}
   ) {
     this.events = {
@@ -247,13 +251,16 @@ export class SiliconFlowAsrEngine implements AsrEngine {
 
   destroy(): void {
     this.destroyed = true
-    this.abortController?.abort()
     this.stop()
   }
 
   private async transcribe(): Promise<void> {
-    if (this.destroyed || this.chunks.length === 0) return
-    const blob = new Blob(this.chunks, { type: this.mediaRecorder?.mimeType ?? 'audio/webm' })
+    if (this.destroyed || this.chunks.length === 0) {
+      this.events.onStateChange(false)
+      return
+    }
+    const mimeType = this.mediaRecorder?.mimeType ?? 'audio/webm'
+    const blob = new Blob(this.chunks, { type: mimeType })
     this.chunks = []
 
     if (blob.size === 0) {
@@ -262,27 +269,16 @@ export class SiliconFlowAsrEngine implements AsrEngine {
       return
     }
 
-    const form = new FormData()
-    form.append('file', blob, 'recording.webm')
-    form.append('model', this.config.model ?? 'FunAudioLLM/SenseVoiceSmall')
-
-    const baseUrl = (this.config.baseUrl ?? 'https://api.siliconflow.com').replace(/\/$/, '')
-    this.abortController = new AbortController()
     try {
-      const response = await fetch(`${baseUrl}/v1/audio/transcriptions`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${this.config.apiKey}`,
-        },
-        body: form,
-        signal: this.abortController.signal,
+      const buffer = await blob.arrayBuffer()
+      const result = await this.bridge.transcribeAudio({
+        buffer,
+        mimeType,
+        apiKey: this.config.apiKey,
+        model: this.config.model,
+        baseUrl: this.config.baseUrl,
       })
-      if (!response.ok) {
-        const body = await response.text().catch(() => '')
-        throw new Error(`转写失败（${response.status}）：${body || response.statusText}`)
-      }
-      const data = (await response.json()) as { text?: string }
-      const text = data.text?.trim() ?? ''
+      const text = (result.text ?? '').trim()
       if (text) {
         this.events.onFinal(text)
       } else {
@@ -294,7 +290,6 @@ export class SiliconFlowAsrEngine implements AsrEngine {
       }
       this.events.onError(error instanceof Error ? error.message : '在线转写出错。')
     } finally {
-      this.abortController = undefined
       this.events.onStateChange(false)
     }
   }

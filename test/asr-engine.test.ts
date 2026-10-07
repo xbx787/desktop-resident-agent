@@ -103,7 +103,10 @@ describe('SiliconFlowAsrEngine', () => {
     }
   }
 
+  let transcribeMock: ReturnType<typeof vi.fn>
+
   beforeEach(() => {
+    transcribeMock = vi.fn()
     Object.assign(globalThis, {
       MediaRecorder: MockMediaRecorder,
       navigator: {
@@ -121,17 +124,14 @@ describe('SiliconFlowAsrEngine', () => {
     vi.restoreAllMocks()
   })
 
-  it('records and transcribes audio', async () => {
-    const fetchMock = vi.mocked(fetch)
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ text: '  hello world  ' }),
-    } as Response)
+  it('records and transcribes audio via bridge', async () => {
+    transcribeMock.mockResolvedValueOnce({ text: '  hello world  ' })
 
     const onFinal = vi.fn()
     const onStateChange = vi.fn()
     const engine = new SiliconFlowAsrEngine(
       { apiKey: 'sk-test', model: 'm' },
+      { transcribeAudio: transcribeMock },
       { onFinal, onStateChange }
     )
 
@@ -142,15 +142,37 @@ describe('SiliconFlowAsrEngine', () => {
     const blob = new Blob(['audio'], { type: 'audio/webm' })
     dataHandler?.({ data: blob } as BlobEvent)
     engine.stop()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    expect(transcribeMock).toHaveBeenCalledTimes(1)
+    expect(onFinal).toHaveBeenCalledWith('hello world')
+  })
+
+  it('reports bridge error', async () => {
+    transcribeMock.mockRejectedValueOnce(new Error('转写失败（401）：Unauthorized'))
+
+    const onError = vi.fn()
+    const engine = new SiliconFlowAsrEngine(
+      { apiKey: 'sk-test' },
+      { transcribeAudio: transcribeMock },
+      { onError }
+    )
+
+    engine.start()
     await new Promise((resolve) => setTimeout(resolve, 10))
 
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-    expect(onFinal).toHaveBeenCalledWith('hello world')
+    const blob = new Blob(['audio'], { type: 'audio/webm' })
+    dataHandler?.({ data: blob } as BlobEvent)
+    engine.stop()
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    expect(transcribeMock).toHaveBeenCalledTimes(1)
+    expect(onError).toHaveBeenCalledWith('转写失败（401）：Unauthorized')
   })
 
   it('reports missing api key', () => {
     const onError = vi.fn()
-    const engine = new SiliconFlowAsrEngine({ apiKey: '' }, { onError })
+    const engine = new SiliconFlowAsrEngine({ apiKey: '' }, { transcribeAudio: transcribeMock }, { onError })
     engine.start()
     expect(onError).toHaveBeenCalledWith('未配置 SiliconFlow API Key。')
   })

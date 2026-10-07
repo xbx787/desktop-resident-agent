@@ -53,7 +53,7 @@ export class VoiceManager {
       onSpeakEnd: () => {
         this.speaking = false
       },
-    }, voiceConfig ? toSiliconFlowConfig(voiceConfig) : undefined)
+    }, voiceConfig ? toSiliconFlowConfig(voiceConfig) : undefined, this.bridge)
   }
 
   get available(): boolean {

@@ -81,6 +81,7 @@ export interface PetAPI {
   setModelMode(mode: ModelMode): Promise<void>
   setAvatarState(state: AvatarState): Promise<void>
   getVoiceConfig(): Promise<VoiceConfig>
+  transcribeAudio(request: { buffer: ArrayBuffer; mimeType: string; apiKey: string; model?: string; baseUrl?: string }): Promise<{ text: string }>
   quit(): Promise<void>
   beginDrag(position: { x: number; y: number }): Promise<void>
   dragMove(position: { x: number; y: number }): Promise<void>

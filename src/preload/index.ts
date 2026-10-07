@@ -27,6 +27,7 @@ const api: PetAPI = {
   setModelMode: (mode) => ipcRenderer.invoke('pet:set-model-mode', mode),
   setAvatarState: (state) => ipcRenderer.invoke('pet:set-avatar-state', state),
   getVoiceConfig: () => ipcRenderer.invoke('pet:get-voice-config'),
+  transcribeAudio: (request) => ipcRenderer.invoke('pet:transcribe-audio', request),
   quit: () => ipcRenderer.invoke('pet:quit'),
   beginDrag: (position) => ipcRenderer.invoke('pet:begin-drag', position),
   dragMove: (position) => ipcRenderer.invoke('pet:drag-move', position),

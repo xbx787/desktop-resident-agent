@@ -76,15 +76,17 @@ describe('BrowserVoiceEngine', () => {
     vi.restoreAllMocks()
   })
 
+  const noopBridge = { transcribeAudio: vi.fn(async () => ({ text: '' })) }
+
   it('reports availability when SpeechRecognition and speechSynthesis exist', () => {
-    const engine = new BrowserVoiceEngine()
+    const engine = new BrowserVoiceEngine({}, undefined, noopBridge)
     expect(engine.available).toBe(true)
   })
 
   it('emits listening state and partial results', async () => {
     const onStateChange = vi.fn()
     const onPartial = vi.fn()
-    const engine = new BrowserVoiceEngine({ onStateChange, onPartial })
+    const engine = new BrowserVoiceEngine({ onStateChange, onPartial }, undefined, noopBridge)
     engine.startListen()
     await Promise.resolve()
 
@@ -97,7 +99,7 @@ describe('BrowserVoiceEngine', () => {
 
   it('emits final result and switches to processing', async () => {
     const onFinal = vi.fn()
-    const engine = new BrowserVoiceEngine({ onFinal })
+    const engine = new BrowserVoiceEngine({ onFinal }, undefined, noopBridge)
     engine.startListen()
     await Promise.resolve()
 
@@ -107,7 +109,7 @@ describe('BrowserVoiceEngine', () => {
 
   it('reports error when recognition fails', async () => {
     const onError = vi.fn()
-    const engine = new BrowserVoiceEngine({ onError })
+    const engine = new BrowserVoiceEngine({ onError }, undefined, noopBridge)
     engine.startListen()
     await Promise.resolve()
 

@@ -6,6 +6,7 @@ import { ClaudeAgentClient } from './claude-agent'
 import { findClaudeExecutable } from './claude-code'
 import { DeepSeekClient } from './deepseek'
 import { fetchDeepSeekBalance } from './deepseek-balance'
+import { transcribeAudio } from './asr-server'
 import { NoteStore } from './note-store'
 import { getEnabledDeepSeekKey } from './model-config'
 import type { BubbleLayout } from '../shared/contracts'
@@ -240,6 +241,20 @@ function registerIpc(): void {
       siliconFlowModel: process.env.SILICONFLOW_MODEL,
       siliconFlowBaseUrl: process.env.SILICONFLOW_BASE_URL,
     }
+  })
+  ipcMain.handle('pet:transcribe-audio', async (event, request: unknown) => {
+    if (event.sender.id !== avatarWindow?.webContents.id) throw new Error('无效的界面请求。')
+    if (!request || typeof request !== 'object') throw new Error('转写请求无效。')
+    const req = request as { buffer?: ArrayBuffer; mimeType?: string; apiKey?: string; model?: string; baseUrl?: string }
+    if (!req.buffer || !(req.buffer instanceof ArrayBuffer)) throw new Error('音频数据无效。')
+    if (!req.apiKey) throw new Error('未配置 SiliconFlow API Key。')
+    return transcribeAudio({
+      buffer: req.buffer,
+      mimeType: req.mimeType ?? 'audio/webm',
+      apiKey: req.apiKey,
+      model: req.model,
+      baseUrl: req.baseUrl,
+    })
   })
   ipcMain.handle('pet:quit', (event) => { if (trusted(event)) app.quit() })
   ipcMain.handle('pet:begin-drag', (event, cursor: unknown) => {

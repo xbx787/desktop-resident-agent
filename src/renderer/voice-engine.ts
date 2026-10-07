@@ -1,4 +1,4 @@
-import type { AsrEngine, AsrEvents } from './asr-engine'
+import type { AsrEngine, AsrEvents, TranscribeBridge } from './asr-engine'
 import { WebSpeechAsrEngine, SiliconFlowAsrEngine, type SiliconFlowAsrConfig } from './asr-engine'
 import type { TtsEngine, TtsEvents } from './tts-engine'
 import { BrowserTtsEngine } from './tts-engine'
@@ -31,9 +31,9 @@ function siliconFlowUsable(): boolean {
     && Boolean(navigator.mediaDevices?.getUserMedia)
 }
 
-function createAsrEngine(events: AsrEvents, siliconFlow?: SiliconFlowAsrConfig): AsrEngine {
+function createAsrEngine(events: AsrEvents, siliconFlow: SiliconFlowAsrConfig | undefined, bridge: TranscribeBridge): AsrEngine {
   if (siliconFlow?.apiKey && siliconFlowUsable()) {
-    return new SiliconFlowAsrEngine(siliconFlow, events)
+    return new SiliconFlowAsrEngine(siliconFlow, bridge, events)
   }
   return new WebSpeechAsrEngine(events)
 }
@@ -47,7 +47,8 @@ export class BrowserVoiceEngine implements VoiceEngine {
 
   constructor(
     events: VoiceEngineEvents = {},
-    private readonly siliconFlow?: SiliconFlowAsrConfig
+    private readonly siliconFlow: SiliconFlowAsrConfig | undefined,
+    private readonly bridge: TranscribeBridge
   ) {
     this.events = {
       onStateChange: events.onStateChange ?? (() => {}),
@@ -77,7 +78,8 @@ export class BrowserVoiceEngine implements VoiceEngine {
           this.events.onError(message)
         },
       },
-      this.siliconFlow
+      this.siliconFlow,
+      this.bridge
     )
 
     this.tts = new BrowserTtsEngine({
