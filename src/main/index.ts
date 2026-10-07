@@ -233,6 +233,14 @@ function registerIpc(): void {
     rendererAvatarState = state === 'idle' ? undefined : state
     publishSnapshot()
   })
+  ipcMain.handle('pet:get-voice-config', (event) => {
+    if (event.sender.id !== avatarWindow?.webContents.id) return {}
+    return {
+      siliconFlowApiKey: process.env.SILICONFLOW_API_KEY,
+      siliconFlowModel: process.env.SILICONFLOW_MODEL,
+      siliconFlowBaseUrl: process.env.SILICONFLOW_BASE_URL,
+    }
+  })
   ipcMain.handle('pet:quit', (event) => { if (trusted(event)) app.quit() })
   ipcMain.handle('pet:begin-drag', (event, cursor: unknown) => {
     if (event.sender.id !== avatarWindow?.webContents.id || !avatarWindow || !isScreenPoint(cursor)) return

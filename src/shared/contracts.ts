@@ -57,6 +57,12 @@ export interface AppSnapshot {
   claudeCodeReady: boolean
 }
 
+export interface VoiceConfig {
+  siliconFlowApiKey?: string
+  siliconFlowModel?: string
+  siliconFlowBaseUrl?: string
+}
+
 export interface PetAPI {
   getSnapshot(): Promise<AppSnapshot>
   sendMessage(text: string, attachments?: UserAttachment[]): Promise<void>
@@ -74,6 +80,7 @@ export interface PetAPI {
   setBubbleLayout(layout: BubbleLayout): Promise<void>
   setModelMode(mode: ModelMode): Promise<void>
   setAvatarState(state: AvatarState): Promise<void>
+  getVoiceConfig(): Promise<VoiceConfig>
   quit(): Promise<void>
   beginDrag(position: { x: number; y: number }): Promise<void>
   dragMove(position: { x: number; y: number }): Promise<void>

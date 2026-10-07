@@ -26,6 +26,7 @@ const api: PetAPI = {
   setBubbleLayout: (layout) => ipcRenderer.invoke('pet:set-bubble-layout', layout),
   setModelMode: (mode) => ipcRenderer.invoke('pet:set-model-mode', mode),
   setAvatarState: (state) => ipcRenderer.invoke('pet:set-avatar-state', state),
+  getVoiceConfig: () => ipcRenderer.invoke('pet:get-voice-config'),
   quit: () => ipcRenderer.invoke('pet:quit'),
   beginDrag: (position) => ipcRenderer.invoke('pet:begin-drag', position),
   dragMove: (position) => ipcRenderer.invoke('pet:drag-move', position),

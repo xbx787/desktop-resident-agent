@@ -1,5 +1,5 @@
-import type { AppSnapshot, PetAPI } from '../shared/contracts'
-import { BrowserVoiceEngine, type VoiceEngine, type VoicePhase } from './voice-engine'
+import type { AppSnapshot, PetAPI, VoiceConfig } from '../shared/contracts'
+import { BrowserVoiceEngine, type VoiceEngine, type VoicePhase, type SiliconFlowAsrConfig } from './voice-engine'
 
 export type VoiceManagerPhase = VoicePhase | 'processing'
 
@@ -11,6 +11,15 @@ export interface VoiceManagerCallbacks {
   onRequestText?: (text: string) => Promise<void>
 }
 
+function toSiliconFlowConfig(config: VoiceConfig): SiliconFlowAsrConfig | undefined {
+  if (!config.siliconFlowApiKey) return undefined
+  return {
+    apiKey: config.siliconFlowApiKey,
+    model: config.siliconFlowModel,
+    baseUrl: config.siliconFlowBaseUrl,
+  }
+}
+
 export class VoiceManager {
   private readonly engine: VoiceEngine
   private phase: VoiceManagerPhase = 'idle'
@@ -20,7 +29,8 @@ export class VoiceManager {
 
   constructor(
     private readonly bridge: PetAPI,
-    private readonly callbacks: VoiceManagerCallbacks = {}
+    private readonly callbacks: VoiceManagerCallbacks = {},
+    voiceConfig?: VoiceConfig
   ) {
     this.engine = new BrowserVoiceEngine({
       onStateChange: (enginePhase) => this.handleEnginePhase(enginePhase),
@@ -43,7 +53,7 @@ export class VoiceManager {
       onSpeakEnd: () => {
         this.speaking = false
       },
-    })
+    }, voiceConfig ? toSiliconFlowConfig(voiceConfig) : undefined)
   }
 
   get available(): boolean {

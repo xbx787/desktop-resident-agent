@@ -118,28 +118,32 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
 
   useEffect(() => {
     let active = true;
-    try {
-      const bridge = petBridge();
-      const manager = new VoiceManager(bridge, {
-        onPhaseChange: (phase) => { if (active) setVoicePhase(phase); },
-        onPartial: (text) => { if (active) setVoicePartial(text); },
-        onFinal: (text) => { if (active) setVoicePartial(text); },
-        onError: (message) => { if (active) setVoiceError(message); },
-        onRequestText: async (text) => {
-          if (!active) return;
-          setVoicePartial('');
-          await bridge.sendMessage(text);
-        },
-      });
-      voiceManagerRef.current = manager;
-      return () => {
-        active = false;
-        manager.destroy();
-        voiceManagerRef.current = null;
-      };
-    } catch {
-      return () => {};
-    }
+    void (async () => {
+      try {
+        const bridge = petBridge();
+        const voiceConfig = await bridge.getVoiceConfig();
+        if (!active) return;
+        const manager = new VoiceManager(bridge, {
+          onPhaseChange: (phase) => { if (active) setVoicePhase(phase); },
+          onPartial: (text) => { if (active) setVoicePartial(text); },
+          onFinal: (text) => { if (active) setVoicePartial(text); },
+          onError: (message) => { if (active) setVoiceError(message); },
+          onRequestText: async (text) => {
+            if (!active) return;
+            setVoicePartial('');
+            await bridge.sendMessage(text);
+          },
+        }, voiceConfig);
+        voiceManagerRef.current = manager;
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      active = false;
+      voiceManagerRef.current?.destroy();
+      voiceManagerRef.current = null;
+    };
   }, []);
 
   useEffect(() => {
