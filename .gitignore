@@ -2,6 +2,8 @@ node_modules/
 .cache/
 out/
 release/
+reference/
+/小鲸.lnk
 sandbox/
 data/
 *.log

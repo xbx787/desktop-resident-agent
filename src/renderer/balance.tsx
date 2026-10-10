@@ -37,7 +37,7 @@ export function BalanceCard({ visible, snapshot, loading, error, onRefresh, onCl
   return (
     <aside className="balance-peek" aria-label="DeepSeek API 余额与峰谷时段">
       <div className="balance-header">
-        <span>DeepSeek API 余额</span>
+        <span className="balance-heading"><strong>DeepSeek</strong><small>余额</small></span>
         <div className="balance-actions">
           <button type="button" aria-label="刷新余额" title="刷新余额" disabled={loading} onClick={onRefresh}>↻</button>
           <button type="button" aria-label="收起余额卡片" title="收起" onClick={onClose}>×</button>
@@ -54,11 +54,11 @@ export function BalanceCard({ visible, snapshot, loading, error, onRefresh, onCl
         <span className={`balance-period-badge balance-period-${peak.tier}`}>
           {peak.tier === 'peak' ? '峰时' : peak.tier === 'off_peak' ? '谷时' : '时段待更新'}
         </span>
-        <span>{peak.nextChangeAt && peak.nextTier ? formatNext(peak.nextChangeAt, peak.nextTier) : '假期日历待更新'}</span>
+        <span className="balance-next">{peak.nextChangeAt && peak.nextTier ? formatNext(peak.nextChangeAt, peak.nextTier) : '切换时间待确认'}</span>
       </div>
       <div className="balance-foot">
-        <span>{error || (snapshot?.available === false ? '账户当前不可调用 API' : peak.holiday ? '法定节假日 · 全天谷时' : '工作日 09–12 · 14–18 峰时')}</span>
-        {checked && <span>更新于 {checked}</span>}
+        <span title={error || undefined}>{error || (snapshot?.available === false ? '账户当前不可调用 API' : '')}</span>
+        {checked && <span>{checked} 更新</span>}
       </div>
     </aside>
   );

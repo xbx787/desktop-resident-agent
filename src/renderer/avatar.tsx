@@ -25,17 +25,7 @@ function samePosition(a: { x: number; y: number } | null, b: { x: number; y: num
 function Avatar() {
   const { snapshot, error, run } = usePetState();
   const [panelOpen, setPanelOpen] = useState(false);
-  const [balanceOpen, setBalanceOpen] = useState(false);
-  const [balanceSnapshot, setBalanceSnapshot] = useState<BalanceSnapshot | null>(null);
-  const [balanceLoading, setBalanceLoading] = useState(false);
-  const [balanceError, setBalanceError] = useState<string | null>(null);
-  const balanceRefreshId = useRef(0);
-  const [menu, setMenu] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-  const menuFirstRef = useRef<HTMLButtonElement>(null);
-  const menuReturnFocusRef = useRef<HTMLElement | null>(null);
-  const menuDesiredRef = useRef(false);
-  const menuShapeQueue = useRef<Promise<void>>(Promise.resolve());
+  const balanceOpen = useRef(false);
   const pointer = useRef<PointerSession | null>(null);
   const lastPointerPosition = useRef({ x: 0, y: 0 });
   const lastMoveSent = useRef<{ x: number; y: number } | null>(null);
@@ -60,9 +50,7 @@ function Avatar() {
       }
     });
     const unsubscribeBalance = bridge.onBalanceOpen((open) => {
-      if (!active) return;
-      setBalanceOpen(open);
-      if (open) void refreshBalance();
+      if (active) balanceOpen.current = open;
     });
     void bridge.getPanelOpen().then((open) => {
       if (active && !receivedUpdate) setPanelOpen(open);
@@ -74,82 +62,10 @@ function Avatar() {
     };
   }, []);
 
-  async function refreshBalance() {
-    const requestId = ++balanceRefreshId.current;
-    setBalanceLoading(true);
-    setBalanceError(null);
-    try {
-      const next = await petBridge().getBalance();
-      if (requestId === balanceRefreshId.current) setBalanceSnapshot(next);
-    } catch (cause) {
-      if (requestId === balanceRefreshId.current) setBalanceError(cause instanceof Error ? cause.message : '余额查询失败。');
-    } finally {
-      if (requestId === balanceRefreshId.current) setBalanceLoading(false);
-    }
-  }
-
-  function setMenuRegion(open: boolean): Promise<boolean> {
-    const result = menuShapeQueue.current.then(() => run((bridge) => bridge.setMenuOpen(open)));
-    menuShapeQueue.current = result.then(() => undefined);
-    return result;
-  }
-
-  function closeContextMenu(restoreFocus = false) {
-    if (!menuDesiredRef.current && !menu) return;
-    menuDesiredRef.current = false;
-    setMenu(false);
-    if (restoreFocus) requestAnimationFrame(() => menuReturnFocusRef.current?.focus());
-    requestAnimationFrame(() => {
-      if (!menuDesiredRef.current) void setMenuRegion(false);
-    });
-  }
-
-  useEffect(() => {
-    const closeOnBlur = () => closeContextMenu();
-    window.addEventListener('blur', closeOnBlur);
-    return () => window.removeEventListener('blur', closeOnBlur);
-  }, [menu]);
-
-  useEffect(() => {
-    if (!menu) return;
-    menuFirstRef.current?.focus();
-    const closeOutside = (event: PointerEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) closeContextMenu();
-    };
-    const closeOnFocusLeave = (event: FocusEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) closeContextMenu();
-    };
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        closeContextMenu(true);
-      }
-    };
-    document.addEventListener('pointerdown', closeOutside, true);
-    document.addEventListener('focusin', closeOnFocusLeave);
-    window.addEventListener('keydown', closeOnEscape);
-    return () => {
-      document.removeEventListener('pointerdown', closeOutside, true);
-      document.removeEventListener('focusin', closeOnFocusLeave);
-      window.removeEventListener('keydown', closeOnEscape);
-    };
-  }, [menu]);
-
-  async function openContextMenu(event: React.MouseEvent<HTMLElement>) {
+  function openContextMenu(event: React.MouseEvent<HTMLElement>) {
+    if (!(event.target as HTMLElement).closest('.avatar-hit-target')) return;
     event.preventDefault();
-    if (!(event.target as HTMLElement).closest('.avatar-hit-target, .panel-bubble')) return;
-    menuReturnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    menuDesiredRef.current = true;
-    const accepted = await setMenuRegion(true);
-    if (!accepted) {
-      menuDesiredRef.current = false;
-      return;
-    }
-    if (menuDesiredRef.current) {
-      requestAnimationFrame(() => {
-        if (menuDesiredRef.current) setMenu(true);
-      });
-    }
+    void run((bridge) => bridge.showContextMenu());
   }
 
   function queueDrag(action: (bridge: PetAPI) => Promise<void>) {
@@ -188,7 +104,7 @@ function Avatar() {
   }
 
   function handlePointerDown(event: React.PointerEvent<HTMLButtonElement>) {
-    if (event.button !== 0 || pointer.current || menu) return;
+    if (event.button !== 0 || pointer.current) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     const position = { x: event.screenX, y: event.screenY };
@@ -249,17 +165,6 @@ function Avatar() {
         error={error}
         run={run}
       />
-      <BalanceCard
-        visible={balanceOpen}
-        snapshot={balanceSnapshot}
-        loading={balanceLoading}
-        error={balanceError}
-        onRefresh={() => { void refreshBalance(); }}
-        onClose={() => { void run((bridge) => bridge.setBalanceOpen(false)); }}
-      />
-      {menu && <div ref={menuRef} className="avatar-context-menu" role="menu" aria-label="角色菜单">
-        <button ref={menuFirstRef} type="button" role="menuitem" className="avatar-menu-action avatar-menu-exit" onClick={() => { closeContextMenu(); void run((bridge) => bridge.quit()); }}>退出</button>
-      </div>}
       <button
         className="avatar-hit-target"
         type="button"
@@ -272,7 +177,7 @@ function Avatar() {
         onAuxClick={(event) => {
           if (event.button !== 1) return;
           event.preventDefault();
-          void run((bridge) => bridge.setBalanceOpen(!balanceOpen));
+          void run((bridge) => bridge.setBalanceOpen(!balanceOpen.current));
         }}
         onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') {
@@ -287,4 +192,47 @@ function Avatar() {
   );
 }
 
-createRoot(document.getElementById('root')!).render(<Avatar />);
+function BalanceOverlay() {
+  const [snapshot, setSnapshot] = useState<BalanceSnapshot | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const refreshId = useRef(0);
+
+  async function refreshBalance() {
+    const requestId = ++refreshId.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const next = await petBridge().getBalance();
+      if (requestId === refreshId.current) setSnapshot(next);
+    } catch (cause) {
+      if (requestId === refreshId.current) setError(cause instanceof Error ? cause.message : '余额查询失败。');
+    } finally {
+      if (requestId === refreshId.current) setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    const unsubscribe = petBridge().onBalanceOpen((open) => {
+      if (open) void refreshBalance();
+    });
+    void refreshBalance();
+    return () => {
+      ++refreshId.current;
+      unsubscribe();
+    };
+  }, []);
+
+  return <BalanceCard
+    visible={true}
+    snapshot={snapshot}
+    loading={loading}
+    error={error}
+    onRefresh={() => { void refreshBalance(); }}
+    onClose={() => { void petBridge().setBalanceOpen(false).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause))); }}
+  />;
+}
+
+const balanceOnly = new URLSearchParams(window.location.search).get('balance') === '1';
+if (balanceOnly) document.body.classList.add('balance-window');
+createRoot(document.getElementById('root')!).render(balanceOnly ? <BalanceOverlay /> : <Avatar />);

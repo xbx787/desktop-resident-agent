@@ -3,12 +3,22 @@ import { defineConfig } from 'electron-vite'
 
 export default defineConfig({
   main: {},
-  preload: {},
+  preload: {
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve(__dirname, 'src/preload/index.ts'),
+          settings: resolve(__dirname, 'src/preload/settings.ts')
+        }
+      }
+    }
+  },
   renderer: {
     build: {
       rollupOptions: {
         input: {
-          avatar: resolve(__dirname, 'src/renderer/avatar.html')
+          avatar: resolve(__dirname, 'src/renderer/avatar.html'),
+          settings: resolve(__dirname, 'src/renderer/settings.html')
         }
       }
     }

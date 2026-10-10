@@ -1,0 +1,78 @@
+import { compactTokens, tokenBreakdownRows } from './token-usage';
+import { toolLabel } from '../shared/tool-labels';
+import { toolArgumentPreview } from './tool-arguments';
+import type { TaskMetrics, TimelineEntry } from '../shared/contracts';
+
+function secondsLabel(seconds: number): string {
+  return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+/** The turn's tool calls by type, most used first: [["编辑", 6], …]. Ties
+ *  keep first-seen order (Map preserves insertion, sort is stable). The
+ *  pieces are phrases, not a sentence — the panel spaces them out instead of
+ *  gluing them with punctuation. */
+export function toolCountGroups(tools: TimelineEntry[]): Array<[string, number]> {
+  const counts = new Map<string, number>();
+  for (const entry of tools) {
+    const label = toolLabel(entry.tool?.name ?? '');
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+/** The only calls worth spelling out: the ones that failed. */
+export function toolFailures(tools: TimelineEntry[]): string[] {
+  return tools
+    .filter((entry) => entry.tool?.status === 'error')
+    .map((entry) => {
+      const label = toolLabel(entry.tool?.name ?? '');
+      const preview = toolArgumentPreview(entry.tool?.input);
+      return preview ? `${label} ${preview}` : label;
+    });
+}
+
+/**
+ * A quiet footer that closes a segment of work, Claude Code style ("Worked
+ * for…"): failures, elapsed time, main-model tokens and the tool count — the
+ * last two each open a hover list on focus. The tools list is one line of
+ * type counts, every type carrying its own count ("编辑 ×6" "执行命令 ×12");
+ * only failed calls get spelled out below it. It never folds the entries
+ * above it — those stay visible on their own.
+ */
+export function TurnStats({ entries, metrics, running }: { entries: TimelineEntry[]; metrics?: TaskMetrics; running: boolean }) {
+  const tools = entries.filter((entry) => entry.kind === 'tool');
+  const toolCount = tools.length;
+  const countGroups = toolCountGroups(tools);
+  const failures = toolFailures(tools);
+  const errorCount = failures.length;
+  const started = metrics?.startedAt ? Date.parse(metrics.startedAt) : NaN;
+  // While the turn runs the waiting row owns the clock (it also says what is
+  // running), so this footer only carries what nothing else shows: the live
+  // token count, and — once the turn settles — the frozen totals.
+  const ended = metrics?.finishedAt ? Date.parse(metrics.finishedAt) : Date.now();
+  const elapsedLabel = !running && Number.isFinite(started) ? secondsLabel(Math.max(0, Math.floor((ended - started) / 1000))) : null;
+  const usage = metrics?.usage ?? (metrics?.usedTokens !== undefined ? { total: metrics.usedTokens } : undefined);
+  const breakdown = usage ? tokenBreakdownRows(usage) : [];
+  if (!toolCount && !elapsedLabel && !usage) return null;
+  return <div className="panel-turn-stats" role="status">
+    {running && <span className="panel-turn-stats-pulse" aria-hidden="true" />}
+    {elapsedLabel && <span>用时 {elapsedLabel}</span>}
+    {usage && <span className="panel-turn-usage" tabIndex={0} title={breakdown.length ? undefined : '本轮主模型消耗；不含子代理和辅助调用'}>
+      {compactTokens(usage.total)} token
+      {breakdown.length > 0 && <span className="panel-turn-usage-tip" role="tooltip">
+        {breakdown.map((row) => <span key={row}>{row}</span>)}
+        <span className="panel-turn-usage-note">不含子代理和辅助调用</span>
+      </span>}
+    </span>}
+    {toolCount > 0 && <span className="panel-turn-usage panel-turn-tools" tabIndex={0}>
+      {toolCount} 次工具
+      {errorCount > 0 && <span className="panel-turn-tools-errors">（{errorCount} 次失败）</span>}
+      <span className="panel-turn-usage-tip panel-turn-tools-tip" role="tooltip">
+        <span className="panel-turn-tools-count">
+          {countGroups.map(([label, count]) => <span key={label}>{label} ×{count}</span>)}
+        </span>
+        {failures.map((line, index) => <span key={`${index}-${line}`} className="panel-turn-tools-line is-error">失败：{line}</span>)}
+      </span>
+    </span>}
+  </div>;
+}

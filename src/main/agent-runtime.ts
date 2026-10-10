@@ -1,8 +1,21 @@
-import type { AppSnapshot, ModelMode, ProposedAction, TimelineEntry } from '../shared/contracts'
-import type { DialogueLine, ModelClient, ModelReply, ToolApprovalRequest } from './deepseek'
+import type { AppSnapshot, AskAnswers, ContextUsageSnapshot, EffortLevel, ModelMode, ModelProfile, ProposedAction, TimelineEntry, UserAttachment } from '../shared/contracts'
+import { isImageAttachmentName } from '../shared/image-preview'
+import { toolLabel } from '../shared/tool-labels'
+import { AgentTurnError } from './agent-errors'
+import type { DialogueLine, ModelClient, ModelReply, ModelToolEvent } from './deepseek'
+import type { ConversationRecord } from './conversation-store'
 import { NoteStore, type NoteDraft } from './note-store'
+import { attachmentContext, expandFileMentions, validAttachmentList } from './local-context'
 
 const DEMO_HINT = '演示模式仅支持「记录：内容」的测试笔记流程。'
+
+/** The pictures among a message's attachments, ready for the timeline. */
+function messageImages(attachments: readonly UserAttachment[]): Array<{ name: string; path: string }> | undefined {
+  const images = attachments
+    .filter((item) => item.path && isImageAttachmentName(item.name))
+    .map(({ name, path }) => ({ name, path: path! }))
+  return images.length ? images : undefined
+}
 
 export class AgentRuntime {
   private readonly state: AppSnapshot
@@ -11,71 +24,246 @@ export class AgentRuntime {
   private readonly claudeCodeModel: ModelClient | undefined
   private model: ModelClient | undefined
   private draft?: NoteDraft
-  private pendingTool?: { id: string; resolve: (allowed: boolean) => void; cleanup: () => void }
   private activeRequest?: AbortController
   private generation = 0
+  private contextGeneration = 0
+  private sdkSessionId: string | null = null
+  private thinkingOpen = false
+  /** Entries changed since the publisher's last take (upsert by id). */
+  private timelineDirty = new Map<string, TimelineEntry>()
+  /** The timeline revision the publisher last reported; -1 = never. */
+  private timelineSentRevision = -1
 
   constructor(
     private readonly store: NoteStore,
     model: ModelClient | undefined,
-    private readonly onChange: (snapshot: AppSnapshot) => void = () => {},
-    claudeCodeModel?: ModelClient
+    private readonly onChange: () => void = () => {},
+    claudeCodeModel?: ModelClient,
+    private readonly workspaceRoot?: string
   ) {
     this.configuredModel = model
     this.claudeCodeModel = claudeCodeModel
     this.model = claudeCodeModel ?? model
+    // The CLI reports its /goal state when it can; the app keeps its own copy too.
+    claudeCodeModel?.setGoalListener?.((goal) => {
+      if (!goal) return;
+      this.state.goal = goal;
+      this.emit();
+    });
+    // A parked AskUserQuestion lives in the snapshot while the panel shows it.
+    claudeCodeModel?.setQuestionListener?.((question) => {
+      this.state.question = question;
+      this.emit();
+    });
+    // A parked ExitPlanMode lives there too until the plan is approved or sent back.
+    claudeCodeModel?.setPlanListener?.((plan) => {
+      this.state.plan = plan;
+      this.emit();
+    });
     this.state = {
       mode: claudeCodeModel ? 'claude_code' : model ? 'live' : 'demo',
       modelReady: Boolean(model),
       claudeCodeReady: Boolean(claudeCodeModel),
       avatarState: 'idle',
       taskStatus: 'idle',
-      timeline: []
+      effort: 'max',
+      timeline: [],
+      timelineRevision: 0
     }
   }
 
   setModelMode(mode: ModelMode): void {
-    if (this.isBusy()) throw new Error('任务进行中时不能切换模型。')
+    if (this.isRunning()) throw new Error('任务进行中时不能切换模型。')
     if (mode === 'live' && !this.configuredModel) throw new Error('尚未配置 DeepSeek API Key。')
     if (mode === 'claude_code' && !this.claudeCodeModel) throw new Error('Claude Code 或 DeepSeek API Key 尚未就绪。')
     if (this.state.mode === mode) return
+    this.contextGeneration += 1
+    if (this.state.mode === 'claude_code') this.disposeClaudeQuery()
+    // A resumed SDK session would otherwise miss turns handled by another model.
+    this.sdkSessionId = null
     this.model = mode === 'claude_code' ? this.claudeCodeModel : mode === 'live' ? this.configuredModel : undefined
     this.state.mode = mode
+    this.state.contextUsage = { status: 'unavailable' }
+    this.state.taskMetrics = undefined
     this.state.modelReady = Boolean(this.configuredModel)
-    this.add('system', mode === 'claude_code' ? '已切换到 Claude Code · DeepSeek。' : mode === 'live' ? '已切换到 DeepSeek Flash。' : '已切换到演示模式。')
+    this.add('system', mode === 'claude_code' ? '已切换到 Claude Code + DeepSeek。' : mode === 'live' ? '已切换到 DeepSeek Flash。' : '已切换到演示模式。')
+  }
+
+  /** Planned-first sessions: research and propose before touching anything. */
+  setPlanMode(on: boolean): void {
+    if (this.state.planMode === on) return
+    this.state.planMode = on
+    this.claudeCodeModel?.setPlanMode?.(on)
+    this.add('system', on ? '已开启计划模式：先研究并给出计划，再动手执行。' : '已关闭计划模式。')
+  }
+
+  /** The CLI's own /goal state, as far as the app tracks it: started by the
+   *  user's /goal message, cleared by /goal clear, gone when the session is. */
+  private trackGoal(text: string): void {
+    const match = /^\/goal(?:\s+([\s\S]+))?$/iu.exec(text.trim())
+    const condition = match?.[1]?.trim() ?? ''
+    if (!match || !condition) return // Bare /goal just asks the CLI for its state.
+    this.state.goal = /^clear$/iu.test(condition) ? null : { condition, iterations: 0 }
+    this.emit()
+  }
+
+  /** Thinking depth is a plain model-layer knob: it goes to every client and
+   *  nothing else changes. Persistence belongs to the conversation store. */
+  setEffort(level: EffortLevel): void {
+    if (this.state.effort === level) return
+    this.state.effort = level
+    this.configuredModel?.setEffort?.(level)
+    this.claudeCodeModel?.setEffort?.(level)
+    this.onChange()
   }
 
   getSnapshot(): AppSnapshot {
-    return structuredClone(this.state)
+    // `timeline` rides along by reference — it is the one big field, the
+    // publisher keeps its payload down to the changed entries
+    // (takeTimelineDelta), and every consumer treats it as read-only. The
+    // rest keeps the old deep-copy semantics (snapshot in time), which is
+    // what lets callers observe intermediate states like a running task's
+    // metrics without them mutating underfoot.
+    const { timeline, ...rest } = this.state
+    return { ...structuredClone(rest), timeline }
   }
 
-  async sendMessage(rawText: string, attachments: Array<{ name: string; content: string }> = []): Promise<void> {
+  async getContextUsage(): Promise<ContextUsageSnapshot> {
+    const model = this.model as (ModelClient & { getContextUsage?: (sessionId?: string | null) => Promise<ContextUsageSnapshot> }) | undefined
+    if (this.state.mode !== 'claude_code' || !model?.getContextUsage) return { status: 'unavailable' }
+    const generation = this.contextGeneration
+    const sessionId = this.sdkSessionId
+    const usage = await model.getContextUsage(sessionId)
+    if (generation !== this.contextGeneration || this.state.mode !== 'claude_code' || sessionId !== this.sdkSessionId) {
+      return { status: 'unavailable' }
+    }
+    this.state.contextUsage = { ...usage, checkedAt: new Date().toISOString() }
+    this.emit()
+    return structuredClone(this.state.contextUsage)
+  }
+
+  async compactConversation(): Promise<void> {
+    if (this.isRunning()) throw new Error('当前任务完成后才能手动压缩上下文。')
+    const model = this.model as (ModelClient & { compact?: (sessionId?: string | null) => Promise<ContextUsageSnapshot> }) | undefined
+    if (this.state.mode !== 'claude_code' || !model?.compact) throw new Error('当前模型不支持手动压缩。')
+    this.state.contextCompacting = true
+    this.emit()
+    const generation = this.contextGeneration
+    const sessionId = this.sdkSessionId
+    try {
+      const usage = await model.compact(sessionId)
+      if (generation !== this.contextGeneration || sessionId !== this.sdkSessionId) return
+      this.state.contextUsage = { ...usage, checkedAt: new Date().toISOString() }
+      this.add('system', usage.compactionOutcome === 'not_needed'
+        ? '当前对话较短，暂不需要压缩。'
+        : '上下文已压缩，可以继续当前对话。')
+    } finally {
+      this.state.contextCompacting = false
+      this.emit()
+    }
+  }
+
+  isRunning(): boolean {
+    return this.isBusy() || Boolean(this.state.contextCompacting)
+  }
+
+  /** Adds guidance to the active SDK turn at its next native execution boundary. */
+  async steerMessage(rawText: string, attachments: UserAttachment[] = []): Promise<boolean> {
+    if (!this.isBusy() || this.state.mode !== 'claude_code') return false
+    if (!validAttachmentList(attachments)) return false
     const text = rawText.trim()
-    if (attachments.length > 5 || attachments.some(({ name, content }) => name.length > 260 || content.length > 32_768)) {
+    const context = attachmentContext(attachments)
+    const prompt = [text, context].filter(Boolean).join('\n\n')
+    if (!prompt || prompt.length > 8_000) return false
+    const model = this.model as (ModelClient & { steer?: (text: string) => Promise<boolean> | boolean }) | undefined
+    if (!model?.steer) return false
+    const expandedText = this.workspaceRoot
+      ? await expandFileMentions(text, this.workspaceRoot, { maxFileBytes: 32 * 1024, maxTotalBytes: 48 * 1024 })
+      : { prompt: text }
+    const expandedPrompt = [expandedText.prompt, context].filter(Boolean).join('\n\n')
+    if (!await model.steer(expandedPrompt)) return false
+    this.history.push({ role: 'user', content: prompt })
+    this.add('user', attachments.length ? `${text || '请阅读附件并帮助我。'}\n附件：${attachments.map(({ name }) => name).join('、')}` : text, messageImages(attachments))
+    return true
+  }
+
+  restoreConversation(record: ConversationRecord): void {
+    if (this.isRunning()) throw new Error('任务进行中时不能切换会话。')
+    this.contextGeneration += 1
+    if (this.state.mode === 'claude_code') this.disposeClaudeQuery()
+    this.generation += 1
+    this.history.splice(0, this.history.length, ...structuredClone(record.history))
+    // A restore replaces the whole history; the next publish sends it in full.
+    this.state.timeline = structuredClone(record.timeline)
+    this.state.timelineRevision += 1
+    this.timelineDirty.clear()
+    this.timelineSentRevision = -1
+    this.state.taskStatus = record.taskStatus
+    this.state.avatarState = 'idle'
+    this.state.currentTask = undefined
+    this.state.proposal = undefined
+    this.state.question = null
+    this.state.plan = null
+    this.state.contextUsage = { status: 'unavailable' }
+    this.state.contextCompacting = false
+    this.state.taskMetrics = undefined
+    // A /goal belongs to the CLI session, and a new conversation means a new one.
+    this.state.goal = null
+    this.draft = undefined
+    this.thinkingOpen = false
+    const mode = record.mode === 'claude_code' && this.claudeCodeModel ? 'claude_code'
+      : record.mode === 'live' && this.configuredModel ? 'live' : 'demo'
+    this.state.mode = mode
+    this.model = mode === 'claude_code' ? this.claudeCodeModel : mode === 'live' ? this.configuredModel : undefined
+    // The CLI keeps the whole transcript on disk, so a saved session is always
+    // the best context source — even when the last stored turn is an unanswered
+    // user message (that turn simply continues inside the resumed session).
+    this.sdkSessionId = mode === 'claude_code' ? record.sdkSessionId : null
+    this.emit()
+  }
+
+  exportConversationState(): Pick<ConversationRecord, 'mode' | 'timeline' | 'history' | 'sdkSessionId'> {
+    return {
+      mode: this.state.mode,
+      timeline: structuredClone(this.state.timeline),
+      history: structuredClone(this.history),
+      sdkSessionId: this.sdkSessionId
+    }
+  }
+
+  async sendMessage(rawText: string, attachments: UserAttachment[] = []): Promise<void> {
+    const text = rawText.trim()
+    if (!validAttachmentList(attachments)) {
       this.add('system', '附件数量或大小超过限制。')
       return
     }
-    const attachmentContext = attachments.map(({ name, content }) => `\n\n[用户附件：${name}]\n${content}`).join('')
-    const prompt = [text, attachmentContext].filter(Boolean).join('\n\n')
+    if (this.state.mode !== 'claude_code' && attachments.some((item) => item.path && !item.content)) {
+      this.add('system', '当前模型没有本地文件读取工具。请切换到 Claude Code 模式后再发送此文件。')
+      return
+    }
+    const context = attachmentContext(attachments)
+    const prompt = [text, context].filter(Boolean).join('\n\n')
     if (!prompt) return
     if (prompt.length > 8_000) {
       this.add('system', '单条消息目前最多 8000 字。')
       return
     }
-    if (this.isBusy()) {
+    if (this.isRunning()) {
       this.add('system', '当前任务尚未结束；请先处理待批准操作，或按“停止”。')
       return
     }
 
+    if (this.state.mode === 'claude_code') this.trackGoal(text)
     this.generation += 1
     const currentGeneration = this.generation
     this.draft = undefined
     this.state.proposal = undefined
     this.state.currentTask = (text || `阅读附件：${attachments.map(({ name }) => name).join('、')}`).slice(0, 140)
+    this.state.taskMetrics = { startedAt: new Date().toISOString() }
     this.state.taskStatus = 'planning'
     this.state.avatarState = 'thinking'
     this.history.push({ role: 'user', content: prompt })
-    this.add('user', attachments.length ? `${text || '请阅读附件并帮助我。'}\n附件：${attachments.map(({ name }) => name).join('、')}` : text)
+    this.add('user', attachments.length ? `${text || '请阅读附件并帮助我。'}\n附件：${attachments.map(({ name }) => name).join('、')}` : text, messageImages(attachments))
 
     if (!this.model) {
       const noteBody = /^(?:记录|记下|测试笔记)\s*[:：]\s*([\s\S]+)$/u.exec(text)?.[1]?.trim()
@@ -91,25 +279,79 @@ export class AgentRuntime {
     const abort = new AbortController()
     this.activeRequest = abort
     let progressEntryId: string | undefined
+    let progressSegment: number | undefined
+    let thinkingEntryId: string | undefined
+    let thinkingSegment: number | undefined
     try {
-      const reply = await this.model.respond([...this.history], abort.signal, (partial) => {
+      const modelHistory = [...this.history]
+      if (this.workspaceRoot) {
+        const expanded = await expandFileMentions(text, this.workspaceRoot, { maxFileBytes: 32 * 1024, maxTotalBytes: 48 * 1024 })
+        modelHistory[modelHistory.length - 1] = { role: 'user', content: [expanded.prompt, context].filter(Boolean).join('\n\n') }
+      }
+      const reply = await this.model.respond(modelHistory, abort.signal, (partial, segment) => {
+        if (segment !== undefined && segment !== progressSegment) {
+          progressSegment = segment
+          progressEntryId = undefined
+        }
         if (currentGeneration !== this.generation || !partial) return
+        this.closeThinkingEntries()
         if (!progressEntryId) {
           progressEntryId = crypto.randomUUID()
-          this.state.timeline.push({ id: progressEntryId, time: new Date().toISOString(), kind: 'assistant', text: partial })
-          if (this.state.timeline.length > 80) this.state.timeline.shift()
+          const entry: TimelineEntry = { id: progressEntryId, time: new Date().toISOString(), kind: 'assistant', text: partial }
+          this.state.timeline.push(entry)
+          this.markTimelineDirty(entry)
         } else {
           const entry = this.state.timeline.find((item) => item.id === progressEntryId)
-          if (entry) entry.text = partial
+          if (entry) {
+            entry.text = partial
+            this.markTimelineDirty(entry)
+          }
         }
         this.emit()
-      }, (request, signal) => this.requestToolApproval(request, signal, currentGeneration))
+      }, this.state.mode === 'claude_code' ? this.sdkSessionId : null,
+      (event) => {
+        if (event.phase === 'start') progressEntryId = undefined
+        this.recordToolEvent(event, currentGeneration)
+      }, (usage) => {
+        if (currentGeneration !== this.generation || !this.state.taskMetrics) return
+        this.state.taskMetrics.usedTokens = usage.total
+        this.state.taskMetrics.usage = usage
+        this.emit()
+      }, (partial, segment) => {
+        if (currentGeneration !== this.generation || !partial) return
+        if (segment !== thinkingSegment) {
+          thinkingSegment = segment
+          thinkingEntryId = undefined
+        }
+        if (!thinkingEntryId) {
+          this.closeThinkingEntries()
+          thinkingEntryId = crypto.randomUUID()
+          const entry: TimelineEntry = { id: thinkingEntryId, time: new Date().toISOString(), kind: 'thinking', text: partial }
+          this.state.timeline.push(entry)
+          this.markTimelineDirty(entry)
+        } else {
+          const entry = this.state.timeline.find((item) => item.id === thinkingEntryId)
+          if (entry) {
+            entry.text = partial
+            this.markTimelineDirty(entry)
+          }
+        }
+        this.thinkingOpen = true
+        this.emit()
+      })
       if (currentGeneration !== this.generation) return
       this.handleModelReply(reply, progressEntryId)
+      if (this.state.mode === 'claude_code') await this.getContextUsage().catch(() => undefined)
     } catch (error) {
       if (currentGeneration !== this.generation) return
+      // A failure that invalidates the resume id must not be remembered for
+      // the next turn; the local history replays it into a fresh session.
+      const failure = error instanceof AgentTurnError ? error.failure : undefined
+      if (failure?.invalidatesSession) this.sdkSessionId = null
       this.state.taskStatus = 'failed'
       this.state.avatarState = 'error'
+      this.closeThinkingEntries()
+      this.finishRunningTools('未完成')
       this.add('system', error instanceof Error ? error.message : '模型请求失败。')
     } finally {
       if (currentGeneration === this.generation) this.activeRequest = undefined
@@ -117,17 +359,6 @@ export class AgentRuntime {
   }
 
   async approveAction(id: string): Promise<void> {
-    if (this.pendingTool?.id === id && this.state.taskStatus === 'awaiting_approval') {
-      const pending = this.pendingTool
-      this.pendingTool = undefined
-      pending.cleanup()
-      this.state.proposal = undefined
-      this.state.taskStatus = 'executing'
-      this.state.avatarState = 'acting'
-      this.add('system', '已允许这一步操作，正在等待 Claude Code 执行结果。')
-      pending.resolve(true)
-      return
-    }
     if (this.state.taskStatus !== 'awaiting_approval' || !this.draft || this.draft.id !== id) {
       this.add('system', '这项操作已经失效，未执行写入。')
       return
@@ -156,23 +387,47 @@ export class AgentRuntime {
   }
 
   rejectAction(id: string): void {
-    if (this.pendingTool?.id === id && this.state.taskStatus === 'awaiting_approval') {
-      const pending = this.pendingTool
-      this.pendingTool = undefined
-      pending.cleanup()
-      this.state.proposal = undefined
-      this.state.taskStatus = 'planning'
-      this.state.avatarState = 'thinking'
-      this.add('system', '已拒绝这一步操作，Claude Code 将继续寻找其他办法。')
-      pending.resolve(false)
-      return
-    }
     if (this.state.taskStatus !== 'awaiting_approval' || this.draft?.id !== id) return
     this.draft = undefined
     this.state.proposal = undefined
     this.state.taskStatus = 'cancelled'
     this.state.avatarState = 'idle'
     this.add('system', '已拒绝，本次没有写入文件。')
+  }
+
+  /** Forwards the panel's answer (or skip) to the model that parked the question. */
+  async answerQuestion(id: string, answers: AskAnswers | null): Promise<void> {
+    const model = this.model as (ModelClient & { answerQuestion?: (id: string, answers: AskAnswers | null) => boolean }) | undefined
+    if (!model?.answerQuestion) throw new Error('当前没有等待回答的问题。')
+    if (!model.answerQuestion(id, answers)) throw new Error('这个问题已经失效。')
+  }
+
+  /** Forwards the panel's verdict on a parked plan to the model that asked. */
+  async answerPlan(id: string, approved: boolean): Promise<void> {
+    const model = this.model as (ModelClient & { answerPlan?: (id: string, approved: boolean) => boolean }) | undefined
+    if (!model?.answerPlan) throw new Error('当前没有等待批准的计划。')
+    if (!model.answerPlan(id, approved)) throw new Error('这个计划已经失效。')
+  }
+
+  /** Ask the current model to abort what this turn is doing — the panel's
+   *  kill switch for a runaway command. Only the SDK client has such an
+   *  operation; every other model has no local tool to stop. */
+  async interruptTurn(): Promise<void> {
+    if (this.model !== this.claudeCodeModel) return
+    await this.claudeCodeModel?.interrupt?.()
+  }
+
+  /** Points the SDK client at a saved model profile (null = launch
+   *  environment). A cloud session from the old endpoint resolves itself
+   *  through the session-missing path on the next send. */
+  setModelProfile(profile: ModelProfile | null): void {
+    this.claudeCodeModel?.setProvider?.(profile ?? undefined)
+  }
+
+  /** The names the persona addresses, applied to every client. */
+  setIdentity(identity: { userName: string; assistantName: string }): void {
+    this.claudeCodeModel?.setIdentity?.(identity)
+    this.configuredModel?.setIdentity?.(identity)
   }
 
   stop(): void {
@@ -182,73 +437,106 @@ export class AgentRuntime {
     }
     if (!this.isBusy()) return
     this.generation += 1
-    const pending = this.pendingTool
-    this.pendingTool = undefined
-    pending?.cleanup()
-    pending?.resolve(false)
     this.activeRequest?.abort()
     this.activeRequest = undefined
+    // Stop interrupts the running turn only; the CLI session stays resumable
+    // so the next message still remembers the conversation so far.
     this.draft = undefined
     this.state.proposal = undefined
+    this.state.question = null
+    this.state.plan = null
     this.state.taskStatus = 'cancelled'
     this.state.avatarState = 'idle'
+    this.closeThinkingEntries()
+    this.finishRunningTools('已停止')
     this.add('system', this.state.mode === 'claude_code' ? '已请求停止 Claude Code；正在执行的外部动作可能仍会完成。' : '任务已停止，待批准的操作已取消。')
-  }
-
-  private requestToolApproval(request: ToolApprovalRequest, signal: AbortSignal, generation: number): Promise<boolean> {
-    if (generation !== this.generation || signal.aborted || this.state.mode !== 'claude_code') return Promise.resolve(false)
-    if (!['Read', 'Glob', 'Grep', 'Bash', 'Edit', 'Write'].includes(request.toolName) || this.pendingTool) return Promise.resolve(false)
-    const content = JSON.stringify(request.input, null, 2)
-    if (!content || content.length > 30_000) {
-      this.add('system', '工具输入过大，已拒绝这一步操作。')
-      return Promise.resolve(false)
-    }
-    const target = [request.input.file_path, request.input.command, request.input.path, request.input.pattern]
-      .find((value): value is string => typeof value === 'string' && value.length > 0) ?? request.toolName
-    const risk = request.toolName === 'Bash' ? 'execute' : request.toolName === 'Edit' || request.toolName === 'Write' ? 'write' : 'read'
-    const id = crypto.randomUUID()
-    this.state.proposal = {
-      id,
-      tool: 'claude_tool',
-      description: `Claude Code 请求使用 ${request.toolName}。请查看完整参数后决定是否允许。`,
-      target,
-      content,
-      risk
-    }
-    this.state.taskStatus = 'awaiting_approval'
-    this.state.avatarState = 'thinking'
-    this.add('system', `Claude Code 请求 ${request.toolName}，等待你决定。`)
-    return new Promise<boolean>((resolve) => {
-      const onAbort = (): void => {
-        if (this.pendingTool?.id !== id) return
-        this.pendingTool = undefined
-        this.state.proposal = undefined
-        resolve(false)
-      }
-      this.pendingTool = { id, resolve, cleanup: () => signal.removeEventListener('abort', onAbort) }
-      signal.addEventListener('abort', onAbort, { once: true })
-    })
   }
 
   private isBusy(): boolean {
     return ['planning', 'awaiting_approval', 'executing', 'verifying'].includes(this.state.taskStatus)
   }
 
+  private disposeClaudeQuery(): void {
+    const client = this.claudeCodeModel as (ModelClient & { dispose?: () => Promise<void> | void }) | undefined
+    if (!client?.dispose) return
+    try {
+      void Promise.resolve(client.dispose()).catch(() => undefined)
+    } catch { /* The next SDK request will open a fresh query. */ }
+  }
+
   private handleModelReply(reply: ModelReply, progressEntryId?: string): void {
+    this.closeThinkingEntries()
+    if (this.state.mode === 'claude_code' && reply.sdkSessionId) this.sdkSessionId = reply.sdkSessionId
+    if (reply.compacted) this.add('system', '上下文已自动压缩，可继续当前会话。')
     if (reply.text) {
       this.history.push({ role: 'assistant', content: reply.text })
-      const progressEntry = this.state.timeline.find((entry) => entry.id === progressEntryId)
-      if (progressEntry) {
-        progressEntry.text = reply.text
-        this.emit()
-      } else this.add('assistant', reply.text)
+      if (!reply.timelineHandled) {
+        const progressEntry = this.state.timeline.find((entry) => entry.id === progressEntryId)
+        if (progressEntry) {
+          progressEntry.text = reply.text
+          this.markTimelineDirty(progressEntry)
+          this.emit()
+        } else this.add('assistant', reply.text)
+      }
     }
     if (reply.note) {
       this.offerNote(reply.note.title, reply.note.content)
     } else {
       this.state.taskStatus = 'done'
       this.state.avatarState = 'idle'
+      // The CLI's stop hook keeps a goal going; its own counter may arrive later.
+      if (this.state.goal) this.state.goal = { ...this.state.goal, iterations: this.state.goal.iterations + 1 }
       this.emit()
+    }
+  }
+
+  private recordToolEvent(event: ModelToolEvent, generation: number): void {
+    if (generation !== this.generation || !event.toolUseId || !event.toolName) return
+    if (event.phase === 'start') this.closeThinkingEntries()
+    const existing = this.state.timeline.find((entry) => entry.tool?.toolUseId === event.toolUseId)
+    const status = event.phase === 'start' ? 'running' : event.isError ? 'error' : 'done'
+    const text = `${toolLabel(event.toolName)}${status === 'running' ? '（执行中）' : status === 'error' ? '（失败）' : '（已完成）'}`
+    if (existing) {
+      existing.text = text
+      existing.tool = { ...existing.tool!, status, input: event.input ?? existing.tool?.input, output: event.output ?? existing.tool?.output }
+      this.markTimelineDirty(existing)
+    } else {
+      const entry: TimelineEntry = {
+        id: crypto.randomUUID(), time: new Date().toISOString(), kind: 'tool', text,
+        tool: { toolUseId: event.toolUseId, name: event.toolName, status, input: event.input, output: event.output }
+      }
+      this.state.timeline.push(entry)
+      this.markTimelineDirty(entry)
+    }
+    if (event.phase === 'start') {
+      this.state.taskStatus = 'executing'
+      this.state.avatarState = 'acting'
+    } else if (!this.state.timeline.some((entry) => entry.kind === 'tool' && entry.tool?.status === 'running')) {
+      this.state.taskStatus = 'planning'
+      this.state.avatarState = 'thinking'
+    }
+    this.emit()
+  }
+
+  private closeThinkingEntries(): void {
+    if (!this.thinkingOpen) return
+    this.thinkingOpen = false
+    const now = new Date().toISOString()
+    for (const entry of this.state.timeline) {
+      if (entry.kind === 'thinking' && !entry.endedAt) {
+        entry.endedAt = now
+        this.markTimelineDirty(entry)
+      }
+    }
+  }
+
+  private finishRunningTools(reason: string): void {
+    for (const entry of this.state.timeline) {
+      if (entry.kind !== 'tool' || entry.tool?.status !== 'running') continue
+      entry.tool.status = 'error'
+      entry.tool.output ??= reason
+      entry.text = `${toolLabel(entry.tool.name)}（${reason}）`
+      this.markTimelineDirty(entry)
     }
   }
 
@@ -282,18 +570,49 @@ export class AgentRuntime {
     this.add('assistant', text)
   }
 
-  private add(kind: TimelineEntry['kind'], text: string): void {
-    this.state.timeline.push({
+  private add(kind: TimelineEntry['kind'], text: string, images?: TimelineEntry['images']): void {
+    const entry: TimelineEntry = {
       id: crypto.randomUUID(),
       time: new Date().toISOString(),
       kind,
-      text
-    })
-    if (this.state.timeline.length > 80) this.state.timeline.shift()
+      text,
+      ...(images?.length ? { images } : {})
+    }
+    this.state.timeline.push(entry)
+    this.markTimelineDirty(entry)
     this.emit()
   }
 
+  /** Records that an entry changed since the last publisher take; the id-keyed
+   *  map keeps one (latest) copy per entry. */
+  private markTimelineDirty(entry: TimelineEntry): void {
+    this.state.timelineRevision += 1
+    this.timelineDirty.set(entry.id, entry)
+  }
+
+  /**
+   * The timeline changes since the publisher last took them. `reset` asks for
+   * one full send (first publish of the process, or right after a restore);
+   * afterwards only changed entries travel and the renderer upserts them by
+   * id. Entries that never changed keep their identity across publishes, which
+   * is what lets every memoized row in the panel skip re-rendering.
+   */
+  takeTimelineDelta(): { reset: boolean; baseRevision: number; revision: number; entries: TimelineEntry[] } {
+    const reset = this.timelineSentRevision < 0
+    const baseRevision = this.timelineSentRevision
+    const entries = reset ? [] : [...this.timelineDirty.values()]
+    this.timelineDirty.clear()
+    this.timelineSentRevision = this.state.timelineRevision
+    return { reset, baseRevision, revision: this.state.timelineRevision, entries }
+  }
+
   private emit(): void {
-    this.onChange(this.getSnapshot())
+    if (this.state.taskMetrics && !this.state.taskMetrics.finishedAt &&
+      ['done', 'failed', 'cancelled'].includes(this.state.taskStatus)) {
+      this.state.taskMetrics.finishedAt = new Date().toISOString()
+    }
+    // The consumer pulls a snapshot when it is ready to publish one; building one here
+    // would clone the whole timeline on every streaming delta for nothing.
+    this.onChange()
   }
 }

@@ -1,0 +1,43 @@
+.tab-context-menu {
+  position: absolute;
+  z-index: 30;
+  display: grid;
+  width: min(182px, calc(100% - 16px));
+  padding: 5px;
+  border: 1px solid rgba(187, 211, 255, .32);
+  border-radius: 11px;
+  color: #edf3ff;
+  background: linear-gradient(155deg, rgba(43, 67, 120, .98), rgba(17, 34, 72, .98));
+  box-shadow: 0 12px 28px rgba(5, 14, 38, .34);
+  font-size: 11px;
+}
+
+.tab-context-menu-title {
+  overflow: hidden;
+  padding: 5px 8px 7px;
+  border-bottom: 1px solid rgba(188, 212, 255, .14);
+  color: #adc3eb;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-context-menu button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 7px;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  font-size: 11px !important;
+}
+
+.tab-context-menu button:hover:not(:disabled), .tab-context-menu button:focus-visible { background: rgba(181, 205, 255, .16); }
+.tab-context-menu button.is-danger:hover:not(:disabled) { color: #ffccd2; background: rgba(240, 126, 144, .16); }
+.tab-context-menu button:disabled { opacity: .45; }
+.tab-context-menu button svg { flex: none; width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }

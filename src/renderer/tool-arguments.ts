@@ -1,0 +1,51 @@
+/** Keys that answer "what is this call acting on?", most specific first. */
+const argumentKeys = ['command', 'file_path', 'pattern', 'path', 'query', 'url', 'plan', 'description', 'prompt', 'notebook_path', 'glob'];
+
+function flatten(value: string): string {
+  return value.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * One readable line describing the object of a tool call — the command, the file,
+ * the pattern — for the tool row's header. The full JSON stays available through
+ * the row's tooltip; the body of the row shows only what came back.
+ */
+/** The plan text of an ExitPlanMode call. It lives in the call's input, not in
+ *  its output ("User approved…"), so the row body reads it from here. */
+export function toolPlanText(name: string, input: string | undefined): string {
+  if (name.trim().toLowerCase() !== 'exitplanmode') return '';
+  const trimmed = input?.trim() ?? '';
+  if (!trimmed) return '';
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const plan = (parsed as Record<string, unknown>).plan;
+      if (typeof plan === 'string') return plan.trim();
+    }
+  } catch { /* fall through to nothing */ }
+  return '';
+}
+
+export function toolArgumentPreview(input: string | undefined): string {
+  const trimmed = input?.trim() ?? '';
+  if (!trimmed) return '';
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const record = parsed as Record<string, unknown>;
+      for (const key of argumentKeys) {
+        const value = record[key];
+        if (typeof value === 'string' && value.trim()) return flatten(value);
+      }
+      const first = Object.values(record).find((value) => typeof value === 'string' && value.trim());
+      if (typeof first === 'string') return flatten(first);
+      // Nothing but blank strings means there is nothing worth showing.
+      const hasContent = Object.values(record).some((value) => typeof value !== 'string' || value.trim().length > 0);
+      return hasContent ? flatten(JSON.stringify(record)) : '';
+    }
+    return flatten(typeof parsed === 'string' ? parsed : JSON.stringify(parsed));
+  } catch {
+    // Not JSON: the raw text is already the best description there is.
+    return flatten(trimmed);
+  }
+}

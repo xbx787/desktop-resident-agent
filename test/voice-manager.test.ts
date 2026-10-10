@@ -31,7 +31,7 @@ function emitResult(target: MockSpeechRecognition, text: string, isFinal: boolea
 
 function createBridge(): PetAPI {
   return {
-    getSnapshot: vi.fn(async () => ({ mode: 'demo', modelReady: false, claudeCodeReady: false, avatarState: 'idle', taskStatus: 'idle', timeline: [] }) as AppSnapshot),
+    getSnapshot: vi.fn(async () => ({ mode: 'demo', modelReady: false, claudeCodeReady: false, avatarState: 'idle', taskStatus: 'idle', timeline: [], timelineRevision: 0 }) as AppSnapshot),
     sendMessage: vi.fn(async () => undefined),
     approveAction: vi.fn(async () => undefined),
     rejectAction: vi.fn(async () => undefined),
@@ -143,6 +143,7 @@ describe('VoiceManager', () => {
       mode: 'demo',
       modelReady: false,
       claudeCodeReady: false,
+      timelineRevision: 0,
       avatarState: 'idle',
       taskStatus: 'done',
       timeline: [{ id: '1', time: new Date().toISOString(), kind: 'assistant', text: '这是回复' }],

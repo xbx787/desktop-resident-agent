@@ -7,6 +7,7 @@ html, body, #root {
   margin: 0;
   overflow: hidden;
   background: transparent;
+  font-size: 11px;
 }
 
 body.avatar-window { -webkit-user-select: none; user-select: none; }
@@ -34,27 +35,5 @@ body.avatar-window { -webkit-user-select: none; user-select: none; }
 .avatar-stage.is-speaking .avatar-artwork { filter: drop-shadow(0 0 10px rgba(120, 200, 255, .55)); transform: scale(1.02); }
 .avatar-stage.is-listening .avatar-artwork { filter: drop-shadow(0 0 10px rgba(255, 120, 140, .55)); transform: scale(1.02); }
 
-.avatar-context-menu {
-  position: absolute;
-  z-index: 20;
-  left: 10px;
-  bottom: 20px;
-  width: 174px;
-  height: 50px;
-  padding: 7px;
-  border: 1px solid rgba(190, 212, 255, .30);
-  border-radius: 13px;
-  color: #edf3ff;
-  background: linear-gradient(155deg, rgba(42, 65, 117, .96), rgba(17, 33, 72, .96));
-  backdrop-filter: blur(20px) saturate(1.15);
-  -webkit-backdrop-filter: blur(20px) saturate(1.15);
-  font-family: "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif;
-  animation: avatar-menu-appear .16s cubic-bezier(.22, .75, .25, 1) both;
-}
-.avatar-context-menu button { font: inherit; cursor: pointer; }
-.avatar-context-menu button:focus-visible { outline: 2px solid #c6dcff; outline-offset: -2px; }
-.avatar-menu-action { display: flex; align-items: center; width: 100%; min-height: 34px; padding: 0 10px; border: 0; border-radius: 7px; color: #edf3ff; background: transparent; font-size: 12px !important; text-align: left; }
-.avatar-menu-action:hover { background: rgba(181, 205, 255, .16); }
-.avatar-menu-exit { width: 100%; color: #d9e5ff; }
-@keyframes avatar-menu-appear { from { opacity: 0; transform: translateX(7px) scale(.985); } to { opacity: 1; transform: translateX(0) scale(1); } }
-@media (prefers-reduced-motion: reduce) { .avatar-context-menu { animation: none; } }
+body.balance-window .balance-peek { top: 0; left: 0; bottom: auto; }
+body.balance-window .balance-peek::after { top: calc(50% - 6.5px); right: -5px; bottom: auto; border-right: 1px solid rgba(184, 209, 255, .28); border-top: 1px solid rgba(184, 209, 255, .28); border-bottom: 0; }

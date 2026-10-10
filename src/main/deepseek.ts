@@ -1,3 +1,6 @@
+import { buildXiaojingPersona } from './persona'
+import type { AgentGoal, AskAnswers, AskQuestionRequest, EffortLevel, PlanApprovalRequest, TaskUsage } from '../shared/contracts'
+
 export interface DialogueLine {
   role: 'user' | 'assistant'
   content: string
@@ -6,21 +9,55 @@ export interface DialogueLine {
 export interface ModelReply {
   text: string
   note?: { title: string; content: string }
+  sdkSessionId?: string | null
+  compacted?: boolean
+  /** The model already emitted its final text through onProgress in timeline order. */
+  timelineHandled?: boolean
 }
 
-export interface ToolApprovalRequest {
+export interface ModelToolEvent {
+  toolUseId: string
   toolName: string
-  input: Record<string, unknown>
-  toolUseId?: string
+  phase: 'start' | 'result'
+  input?: string
+  output?: string
+  isError?: boolean
 }
 
 export interface ModelClient {
   respond(
     history: DialogueLine[],
     signal: AbortSignal,
-    onProgress?: (text: string) => void,
-    onToolApproval?: (request: ToolApprovalRequest, signal: AbortSignal) => Promise<boolean>
+    onProgress?: (text: string, segment?: number) => void,
+    sdkSessionId?: string | null,
+    onToolEvent?: (event: ModelToolEvent) => void,
+    onTaskUsage?: (usage: TaskUsage) => void,
+    onThinking?: (text: string, segment?: number) => void
   ): Promise<ModelReply>
+  /** Clients that can control thinking depth implement this. */
+  setEffort?(level: EffortLevel): void
+  /** Clients that can plan-first implement this. */
+  setPlanMode?(on: boolean): void
+  /** Clients that can abort what the current turn is doing implement this
+   *  (the SDK client maps it to the CLI's own Esc). */
+  interrupt?(): Promise<void>
+  /** Clients that can point at a different model endpoint implement this;
+   *  undefined returns to the launch environment. */
+  setProvider?(provider?: { baseUrl: string; apiKey: string; model: string; smallModel?: string; extraEnv?: string }): void
+  /** Clients whose persona greets by name implement this. */
+  setIdentity?(identity?: { userName?: string; assistantName?: string }): void
+  /** Clients that surface the /goal state implement this. */
+  setGoalListener?(listener: (goal: AgentGoal | null) => void): void
+  /** Clients that relay interactive questions implement this. The listener
+   *  receives the parked question, then null once it is settled. */
+  setQuestionListener?(listener: (question: AskQuestionRequest | null) => void): void
+  /** Resolves a parked question; returns false when the id is stale. */
+  answerQuestion?(id: string, answers: AskAnswers | null): boolean
+  /** Clients that relay plan approvals implement this. The listener receives
+   *  the parked plan, then null once it is settled. */
+  setPlanListener?(listener: (plan: PlanApprovalRequest | null) => void): void
+  /** Resolves a parked plan; returns false when the id is stale. */
+  answerPlan?(id: string, approved: boolean): boolean
 }
 
 interface ApiContent {
@@ -38,10 +75,10 @@ interface ApiOutput {
 interface ApiResponse {
   status?: string
   output?: ApiOutput[]
+  usage?: { total_tokens?: number }
 }
 
-const INSTRUCTIONS = [
-  '你是住在 Windows 电脑中的中文鲸鱼娘助手，语气自然、简洁。',
+const INSTRUCTIONS_TAIL = [
   '当前阶段你只有一个工具：在应用自己的 sandbox/notes 目录创建一份新的测试笔记。',
   '工具调用只会提出草稿，必须由用户在界面上批准后才会执行。',
   '不要声称已经执行、读取或验证任何尚未由工具返回结果的操作。',
@@ -52,7 +89,26 @@ const INSTRUCTIONS = [
 export class DeepSeekClient implements ModelClient {
   constructor(private readonly apiKey: string) {}
 
-  async respond(history: DialogueLine[], signal: AbortSignal): Promise<ModelReply> {
+  private effort: EffortLevel = 'max'
+  private identity?: { userName?: string; assistantName?: string }
+
+  /** The names the persona addresses. */
+  setIdentity(identity?: { userName?: string; assistantName?: string }): void {
+    this.identity = identity
+  }
+
+  /** Responses-API field: DeepSeek documents none/low/high/max here, and `none`
+   *  is the real off switch — same four stops as the Anthropic-format slider. */
+  setEffort(level: EffortLevel): void {
+    this.effort = level
+  }
+
+  async respond(history: DialogueLine[], signal: AbortSignal,
+    _onProgress?: (text: string, segment?: number) => void,
+    _sdkSessionId?: string | null,
+    _onToolEvent?: (event: ModelToolEvent) => void,
+    onTaskUsage?: (usage: TaskUsage) => void,
+    _onThinking?: (text: string, segment?: number) => void): Promise<ModelReply> {
     const response = await fetch('https://api.deepseek.com/responses', {
       method: 'POST',
       headers: {
@@ -61,7 +117,8 @@ export class DeepSeekClient implements ModelClient {
       },
       body: JSON.stringify({
         model: 'deepseek-flash',
-        instructions: INSTRUCTIONS,
+        instructions: [buildXiaojingPersona({ userAddress: this.identity?.userName, assistantName: this.identity?.assistantName }), INSTRUCTIONS_TAIL].join('\n'),
+        reasoning: { effort: this.effort === 'off' ? 'none' : this.effort },
         input: history.slice(-20).map((line) => ({ role: line.role, content: line.content })),
         max_output_tokens: 1200,
         tool_choice: 'auto',
@@ -89,6 +146,10 @@ export class DeepSeekClient implements ModelClient {
     const data = (await response.json()) as ApiResponse
     if (data.status && data.status !== 'completed') {
       throw new Error(`DeepSeek 响应未完成：${data.status}。`)
+    }
+    const totalTokens = data.usage?.total_tokens
+    if (typeof totalTokens === 'number' && Number.isSafeInteger(totalTokens) && totalTokens >= 0) {
+      onTaskUsage?.({ total: totalTokens })
     }
     const output = data.output ?? []
     const calls = output.filter((item) => item.type === 'function_call')

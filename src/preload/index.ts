@@ -1,12 +1,48 @@
-import { contextBridge, ipcRenderer } from 'electron'
-import type { AppSnapshot, PetAPI } from '../shared/contracts'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import type { AppSnapshot, PetAPI, SlashUiAction } from '../shared/contracts'
 
 const api: PetAPI = {
   getSnapshot: () => ipcRenderer.invoke('pet:get-snapshot'),
-  sendMessage: (text, attachments) => ipcRenderer.invoke('pet:send-message', text, attachments),
+  sendMessage: (text, attachments, strategy) => ipcRenderer.invoke('pet:send-message', text, attachments, strategy),
+  getPathForFile: (file) => webUtils.getPathForFile(file),
+  prepareDroppedFile: (filePath) => ipcRenderer.invoke('pet:prepare-dropped-file', filePath),
+  preparePastedFile: (request) => ipcRenderer.invoke('pet:prepare-pasted-file', request),
+  readImagePreview: (filePath) => ipcRenderer.invoke('pet:read-image-preview', filePath),
+  createConversation: (title) => ipcRenderer.invoke('pet:create-conversation', title),
+  selectConversation: (id) => ipcRenderer.invoke('pet:select-conversation', id),
+  renameConversation: (id, title) => ipcRenderer.invoke('pet:rename-conversation', id, title),
+  setConversationPinned: (id, pinned) => ipcRenderer.invoke('pet:set-conversation-pinned', id, pinned),
+  archiveConversation: (id) => ipcRenderer.invoke('pet:archive-conversation', id),
+  restoreConversation: (id) => ipcRenderer.invoke('pet:restore-conversation', id),
+  deleteConversation: (id) => ipcRenderer.invoke('pet:delete-conversation', id),
+  getContextUsage: () => ipcRenderer.invoke('pet:get-context-usage'),
+  compactConversation: () => ipcRenderer.invoke('pet:compact-conversation'),
+  listClaudeWorkflows: () => ipcRenderer.invoke('pet:list-claude-workflows'),
+  onSlashUiAction: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, action: SlashUiAction): void => callback(action)
+    ipcRenderer.on('pet:slash-ui', listener)
+    return () => ipcRenderer.removeListener('pet:slash-ui', listener)
+  },
+  searchWorkspaceFiles: (query) => ipcRenderer.invoke('pet:search-workspace-files', query),
+  searchConversations: (query, archived) => ipcRenderer.invoke('pet:search-conversations', query, archived),
+  removeQueuedMessage: (id) => ipcRenderer.invoke('pet:remove-queued-message', id),
+  steerQueuedMessage: (id) => ipcRenderer.invoke('pet:steer-queued-message', id),
   approveAction: (id) => ipcRenderer.invoke('pet:approve-action', id),
   rejectAction: (id) => ipcRenderer.invoke('pet:reject-action', id),
+  answerQuestion: (id, answers) => ipcRenderer.invoke('pet:answer-question', id, answers),
+  answerPlan: (id, approved) => ipcRenderer.invoke('pet:answer-plan', id, approved),
   stop: () => ipcRenderer.invoke('pet:stop'),
+  saveModelProfile: (profile) => ipcRenderer.invoke('pet:save-model-profile', profile),
+  deleteModelProfile: (id) => ipcRenderer.invoke('pet:delete-model-profile', id),
+  setModelProfile: (id) => ipcRenderer.invoke('pet:set-model-profile', id),
+  testModelProfile: (profile) => ipcRenderer.invoke('pet:test-model-profile', profile),
+  setEnableAutoTitleGeneration: (on) => ipcRenderer.invoke('pet:set-auto-title', on),
+  setShowMessageTimestamps: (on) => ipcRenderer.invoke('pet:set-timestamps', on),
+  setUserNames: (userName, assistantName) => ipcRenderer.invoke('pet:set-user-names', userName, assistantName),
+  setAvatar: (kind, bytes) => ipcRenderer.invoke('pet:set-avatar', kind, bytes),
+  readAvatar: (kind) => ipcRenderer.invoke('pet:read-avatar', kind),
+  openSettings: () => ipcRenderer.invoke('pet:open-settings'),
+  interruptTurn: () => ipcRenderer.invoke('pet:interrupt-turn'),
   showPanel: () => ipcRenderer.invoke('pet:show-panel'),
   hidePanel: () => ipcRenderer.invoke('pet:hide-panel'),
   getPanelOpen: () => ipcRenderer.invoke('pet:get-panel-open'),
@@ -15,7 +51,7 @@ const api: PetAPI = {
     ipcRenderer.on('pet:panel-open', listener)
     return () => ipcRenderer.removeListener('pet:panel-open', listener)
   },
-  setMenuOpen: (open) => ipcRenderer.invoke('pet:set-menu-open', open),
+  showContextMenu: () => ipcRenderer.invoke('pet:show-context-menu'),
   setBalanceOpen: (open) => ipcRenderer.invoke('pet:set-balance-open', open),
   onBalanceOpen: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, open: boolean): void => callback(open)
@@ -23,8 +59,12 @@ const api: PetAPI = {
     return () => ipcRenderer.removeListener('pet:balance-open', listener)
   },
   getBalance: () => ipcRenderer.invoke('pet:get-balance'),
-  setBubbleLayout: (layout) => ipcRenderer.invoke('pet:set-bubble-layout', layout),
+  openExternal: (url) => ipcRenderer.invoke('pet:open-external', url),
+  setBubbleLayout: (layout, height) => ipcRenderer.invoke('pet:set-bubble-layout', layout, height),
+  setBubbleExpanded: (expanded) => ipcRenderer.invoke('pet:set-bubble-expanded', expanded),
   setModelMode: (mode) => ipcRenderer.invoke('pet:set-model-mode', mode),
+  setEffort: (level) => ipcRenderer.invoke('pet:set-effort', level),
+  setPlanMode: (on) => ipcRenderer.invoke('pet:set-plan-mode', on),
   setAvatarState: (state) => ipcRenderer.invoke('pet:set-avatar-state', state),
   getVoiceConfig: () => ipcRenderer.invoke('pet:get-voice-config'),
   transcribeAudio: (request) => ipcRenderer.invoke('pet:transcribe-audio', request),

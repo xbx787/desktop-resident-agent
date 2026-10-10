@@ -1,6 +1,6 @@
 {
   "name": "desktop-resident-agent",
-  "version": "0.1.0",
+  "version": "0.0.34",
   "private": true,
   "license": "UNLICENSED",
   "author": "DesktopPetProject",
@@ -12,12 +12,19 @@
     "preview": "electron-vite preview",
     "check": "tsc --noEmit",
     "test": "vitest run",
-    "pack:dir": "npm run build && electron-builder --win --dir"
+    "pack:dir": "npm run build && electron-builder --win --dir -c.electronDist=node_modules/electron/dist",
+    "verify:asar": "node scripts/check-asar.cjs",
+    "pack:release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-release.ps1"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.292",
+    "katex": "^0.19.0",
     "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "react-dom": "^19.3.0",
+    "react-markdown": "^10.1.0",
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0"
   },
   "devDependencies": {
     "@swc/core": "^1.13.5",
@@ -44,8 +51,23 @@
       "node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/**/*",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "src/renderer/assets/whale-tray-icon-pixel.png",
+        "to": "whale-tray-icon-pixel.png"
+      },
+      {
+        "from": "src/renderer/assets/whale-tray-icon-pixel-24.png",
+        "to": "whale-tray-icon-pixel-24.png"
+      },
+      {
+        "from": "src/renderer/assets/whale-tray-icon-pixel.ico",
+        "to": "whale-tray-icon-pixel.ico"
+      }
+    ],
     "asar": true,
     "win": {
+      "icon": "src/renderer/assets/whale-tray-icon-pixel.ico",
       "target": "dir"
     }
   }

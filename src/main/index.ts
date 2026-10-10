@@ -1,82 +1,201 @@
-import { app, BrowserWindow, ipcMain, screen } from 'electron'
-import { mkdirSync } from 'node:fs'
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, screen, shell, Tray } from 'electron'
+import { mkdirSync, promises as fsp } from 'node:fs'
+import { homedir } from 'node:os'
 import path from 'node:path'
 import { AgentRuntime } from './agent-runtime'
+import { isAskAnswers } from './ask-questions'
+import { ConversationController } from './conversation-controller'
+import { ConversationStore, isModelProfile } from './conversation-store'
 import { ClaudeAgentClient } from './claude-agent'
-import { findClaudeExecutable } from './claude-code'
+import { linkClaudeUserResources } from './claude-resource-links'
+import { CLAUDE_BASE_URL, DEFAULT_CLAUDE_MODEL, findClaudeExecutable, probeAnthropicEndpoint } from './claude-code'
+import { seedClaudeMemory } from './claude-memory'
 import { DeepSeekClient } from './deepseek'
 import { fetchDeepSeekBalance } from './deepseek-balance'
 import { transcribeAudio } from './asr-server'
 import { voiceLog, voiceLogError } from './voice-log'
 import { NoteStore } from './note-store'
+import { createSnapshotScheduler } from './snapshot-scheduler'
 import { getEnabledDeepSeekKey } from './model-config'
-import type { BubbleLayout } from '../shared/contracts'
+import { loadWindowsMcpConfig } from './mcp-config'
+import { generateConversationTitle } from './title-generation'
+import { APP_SLASH_COMMANDS, listClaudeWorkflows, parseAppSlashCommand } from './claude-workflows'
+import { attachmentPreviewPath, prepareDroppedFile, readImagePreview, searchWorkspaceFiles, stagePastedAttachment, validAttachmentList, verifyDroppedFilePath } from './local-context'
+import { findSourceProjectRoot, resolveAgentWorkspace } from './workspace-root'
+import { isEffortLevel } from '../shared/effort'
+import type { BubbleLayout, ClaudeWorkflowOption, ConversationSettings, UserAttachment } from '../shared/contracts'
 
 const projectRoot = app.isPackaged ? path.dirname(process.execPath) : path.resolve(__dirname, '../..')
-const userDataDirectory = path.join(projectRoot, 'data', 'electron')
+const dataProjectRoot = findSourceProjectRoot(projectRoot) ?? projectRoot
+const dataRoot = path.join(dataProjectRoot, 'data')
+const userHome = homedir()
+const agentWorkspace = resolveAgentWorkspace(projectRoot, app.isPackaged, process.env, userHome)
+const userDataDirectory = path.join(dataRoot, 'electron')
 mkdirSync(userDataDirectory, { recursive: true })
+mkdirSync(path.join(dataRoot, 'claude'), { recursive: true })
+// A fresh install ships with an editable personal-settings file for the
+// engine; existing files are the user's and never touched (see claude-memory).
+seedClaudeMemory(path.join(dataRoot, 'claude'))
 app.setPath('userData', userDataDirectory)
+if (process.platform === 'win32') app.setAppUserModelId('local.desktop.resident.agent')
 
 let avatarWindow: BrowserWindow | undefined
+let balanceWindow: BrowserWindow | undefined
+let settingsWindow: BrowserWindow | undefined
+let balanceWindowReady = false
+let tray: Tray | undefined
+let contextMenu: Menu | undefined
 let panelOpen = false
-let menuOpen = false
 let balanceOpen = false
 let bubbleLayout: BubbleLayout = 'empty'
+let compactBubbleHeight: number | undefined
+let bubbleExpanded = false
 let dragOrigin: { cursor: Electron.Point; bounds: Electron.Rectangle } | undefined
 let shapeShrinkTimer: NodeJS.Timeout | undefined
 let rendererAvatarState: import('../shared/contracts').AvatarState | undefined
 
-const stageSize = { width: 376, height: 560 }
-const avatarRegion = { x: 208, y: 374, width: 160, height: 180 }
-const menuRegion = { x: 10, y: 490, width: 174, height: 50 }
-const balanceRegion = { x: 10, y: 208, width: 276, height: 167 }
+// Keep the avatar's window origin and width stable while its cards open/close.
+// The unused area stays transparent and outside the shaped hit regions.
+const stageSize = { width: 554, height: 560 }
 
-function bubbleRegion(layout: BubbleLayout): Electron.Rectangle {
+function avatarRegion(size: { width: number; height: number }): Electron.Rectangle {
+  return { x: size.width - 168, y: size.height - 186, width: 160, height: 180 }
+}
+
+function bubbleRegion(layout: BubbleLayout, size: { width: number; height: number }, compactHeight = compactBubbleHeight): Electron.Rectangle {
+  if (bubbleExpanded) return { x: 10, y: 0, width: size.width - 20, height: size.height - 185 }
   switch (layout) {
-    case 'empty': return { x: 256, y: 312, width: 64, height: 63 }
-    case 'composer': return { x: 34, y: 220, width: 332, height: 155 }
-    case 'composer_attachments': return { x: 34, y: 194, width: 332, height: 181 }
-    case 'composer_models': return { x: 34, y: 130, width: 332, height: 245 }
-    case 'full': return { x: 10, y: 10, width: 356, height: 365 }
+    case 'empty': return { x: size.width - 120, y: size.height - 248, width: 64, height: 63 }
+    case 'composer':
+    case 'composer_attachments': {
+      const height = compactHeight ?? (layout === 'composer' ? 206 : 232)
+      return { x: size.width - 342, y: size.height - 192 - height, width: 332, height: height + 7 }
+    }
+    case 'composer_models': return { x: size.width - 342, y: size.height - 430, width: 332, height: 245 }
+    case 'full': return { x: size.width - 366, y: size.height - 550, width: 356, height: 365 }
   }
 }
 
 function applyPointerShape(): void {
   const win = avatarWindow
   if (!win || win.isDestroyed() || process.platform !== 'win32') return
-  const regions = [avatarRegion]
-  if (panelOpen) regions.push(bubbleRegion(bubbleLayout))
-  if (menuOpen) regions.push(menuRegion)
-  if (balanceOpen) regions.push(balanceRegion)
+  const size = win.getBounds()
+  const regions = [avatarRegion(size)]
+  if (panelOpen) regions.push(bubbleRegion(bubbleLayout, size))
   win.setShape(regions)
+}
+
+function syncBalancePosition(): void {
+  const avatar = avatarWindow
+  const balance = balanceWindow
+  if (!avatar || avatar.isDestroyed() || !balance || balance.isDestroyed()) return
+  const bounds = avatar.getBounds()
+  // Match the former in-window card: 176 px from the right and 16 px from the bottom.
+  const x = bounds.x + bounds.width - 452
+  const y = bounds.y + bounds.height - 176
+  const current = balance.getBounds()
+  if (current.x !== x || current.y !== y) balance.setPosition(x, y, false)
+}
+
+function syncStageBounds(): void {
+  const win = avatarWindow
+  if (!win || win.isDestroyed()) return
+  const previous = win.getBounds()
+  const right = previous.x + previous.width
+  const bottom = previous.y + previous.height
+  const work = screen.getDisplayNearestPoint({ x: right - 88, y: bottom - 96 }).workArea
+  const width = Math.min(work.width, stageSize.width)
+  const height = bubbleExpanded ? Math.min(work.height, Math.max(193, bottom - work.y)) : stageSize.height
+  if (previous.width === width && previous.height === height) return
+  if (shapeShrinkTimer) clearTimeout(shapeShrinkTimer)
+  shapeShrinkTimer = undefined
+  const x = Math.max(work.x, Math.min(right - width, work.x + work.width - width))
+  win.setBounds({ x, y: bottom - height, width, height }, false)
+  syncBalancePosition()
+  applyPointerShape()
+}
+
+function setBubbleExpanded(expanded: boolean): void {
+  if (bubbleExpanded === expanded) return
+  bubbleExpanded = expanded
+  syncStageBounds()
 }
 
 const apiKey = getEnabledDeepSeekKey(process.env)
 const claudeKey = process.env.DEEPSEEK_API_KEY?.trim()
 const claudeExecutable = findClaudeExecutable(process.env)
-function publishSnapshot(): void {
+const windowsMcpServers = loadWindowsMcpConfig(path.join(userHome, '.claude.json'))
+let controller: ConversationController | undefined
+/** Every Nth publish re-sends the whole history, so a renderer that somehow
+ *  missed a delta cannot stay desynced; between those only changed entries
+ *  travel (see AgentRuntime.takeTimelineDelta). */
+const FULL_TIMELINE_EVERY = 64
+let publishesSinceFullTimeline = FULL_TIMELINE_EVERY
+
+function flushSnapshot(): void {
   if (!avatarWindow || avatarWindow.isDestroyed()) return
-  const snapshot = runtime.getSnapshot()
+  const snapshot = controller?.getSnapshot() ?? runtime.getSnapshot()
   if (rendererAvatarState) snapshot.avatarState = rendererAvatarState
+  const delta = runtime.takeTimelineDelta()
+  const full = delta.reset || publishesSinceFullTimeline <= 0
+  if (!full) {
+    snapshot.timeline = delta.entries
+    snapshot.timelinePartial = true
+  }
+  publishesSinceFullTimeline = full ? FULL_TIMELINE_EVERY : publishesSinceFullTimeline - 1
   avatarWindow.webContents.send('pet:snapshot', snapshot)
 }
 
+// A streaming turn changes state once per model delta. Forwarding every delta makes the
+// renderer re-render the whole panel (including its Markdown) per token and the window
+// stops reacting to clicks until the turn ends. Publish at a fixed cadence instead; the
+// scheduler always keeps the trailing send, so the final state still reaches the renderer.
+const snapshotScheduler = createSnapshotScheduler(flushSnapshot, 50)
+function publishSnapshot(): void {
+  snapshotScheduler.publish()
+}
+
+// The CLI alone decides whether the SDK path exists; the key may arrive later
+// from a saved model profile instead of the launch environment.
+const claudeAgent = claudeExecutable
+  ? new ClaudeAgentClient(claudeExecutable, claudeKey ?? '', agentWorkspace, path.join(dataRoot, 'claude'), windowsMcpServers)
+  : undefined
 const runtime = new AgentRuntime(
   new NoteStore(projectRoot),
   apiKey ? new DeepSeekClient(apiKey) : undefined,
-  () => publishSnapshot(),
-  claudeKey && claudeExecutable ? new ClaudeAgentClient(claudeExecutable, claudeKey, projectRoot) : undefined
+  () => controller?.handleRuntimeChange(),
+  claudeAgent,
+  agentWorkspace
 )
+controller = new ConversationController(
+  new ConversationStore(dataRoot),
+  runtime,
+  () => publishSnapshot(),
+  (error) => { console.error('Conversation background task failed:', error) },
+  claudeKey || apiKey
+    ? (source) => generateConversationTitle((claudeKey || apiKey)!, source, AbortSignal.timeout(20_000))
+    : undefined,
+  // The launch environment, materialized as the first editable profile.
+  claudeKey
+    ? { id: 'default', name: 'DeepSeek', baseUrl: CLAUDE_BASE_URL, apiKey: claudeKey,
+        model: DEFAULT_CLAUDE_MODEL, smallModel: 'deepseek-flash' }
+    : undefined
+)
+
+function activeController(): ConversationController {
+  if (!controller) throw new Error('会话库尚未就绪。')
+  return controller
+}
 
 function rendererUrl(): string | undefined {
   const base = process.env.ELECTRON_RENDERER_URL
   return base ? `${base}/avatar.html` : undefined
 }
 
-function loadPage(win: BrowserWindow): void {
+function loadPage(win: BrowserWindow, balance = false): void {
   const url = rendererUrl()
-  if (url) void win.loadURL(url)
-  else void win.loadFile(path.join(__dirname, '../renderer/avatar.html'))
+  if (url) void win.loadURL(balance ? `${url}?balance=1` : url)
+  else void win.loadFile(path.join(__dirname, '../renderer/avatar.html'), balance ? { query: { balance: '1' } } : undefined)
   win.webContents.on('will-navigate', (event) => event.preventDefault())
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
 }
@@ -91,10 +210,6 @@ function createAvatarWindow(): BrowserWindow {
     y,
     width,
     height,
-    minWidth: stageSize.width,
-    minHeight: stageSize.height,
-    maxWidth: stageSize.width,
-    maxHeight: stageSize.height,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -104,6 +219,9 @@ function createAvatarWindow(): BrowserWindow {
     autoHideMenuBar: true,
     resizable: false,
     show: false,
+    icon: app.isPackaged
+      ? path.join(process.resourcesPath, 'whale-tray-icon-pixel.ico')
+      : path.join(projectRoot, 'src', 'renderer', 'assets', 'whale-tray-icon-pixel.ico'),
     webPreferences: {
       preload: path.join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -111,8 +229,10 @@ function createAvatarWindow(): BrowserWindow {
       sandbox: false
     }
   })
-  if (process.platform === 'win32') win.setShape([avatarRegion])
+  if (process.platform === 'win32') win.setShape([avatarRegion(stageSize)])
   win.once('ready-to-show', () => win.show())
+  win.on('move', syncBalancePosition)
+  win.on('resize', syncBalancePosition)
   win.on('closed', () => {
     if (shapeShrinkTimer) clearTimeout(shapeShrinkTimer)
     shapeShrinkTimer = undefined
@@ -123,17 +243,137 @@ function createAvatarWindow(): BrowserWindow {
   return win
 }
 
-function showPanel(): void {
-  if (balanceOpen) {
+function createBalanceWindow(): BrowserWindow {
+  const avatar = avatarWindow
+  if (!avatar || avatar.isDestroyed()) throw new Error('桌面角色尚未就绪。')
+  const bounds = avatar.getBounds()
+  const win = new BrowserWindow({
+    parent: avatar,
+    x: bounds.x + bounds.width - 452,
+    y: bounds.y + bounds.height - 176,
+    width: 284,
+    height: 160,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    focusable: false,
+    autoHideMenuBar: true,
+    resizable: false,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  })
+  // Wait for the card's first painted frame before showing the transparent window.
+  win.once('ready-to-show', () => {
+    balanceWindowReady = true
+    if (balanceOpen && !win.isDestroyed()) {
+      syncBalancePosition()
+      win.showInactive()
+    }
+  })
+  win.on('closed', () => {
+    if (balanceWindow !== win) return
+    balanceWindow = undefined
+    balanceWindowReady = false
     balanceOpen = false
-    avatarWindow?.webContents.send('pet:balance-open', false)
+    if (avatarWindow && !avatarWindow.isDestroyed()) avatarWindow.webContents.send('pet:balance-open', false)
+  })
+  loadPage(win, true)
+  return win
+}
+
+function createSettingsWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    title: '小鲸 设置',
+    width: 520,
+    height: 400,
+    minWidth: 440,
+    minHeight: 340,
+    show: false,
+    backgroundColor: '#172d58',
+    autoHideMenuBar: true,
+    icon: app.isPackaged
+      ? path.join(process.resourcesPath, 'whale-tray-icon-pixel.ico')
+      : path.join(projectRoot, 'src', 'renderer', 'assets', 'whale-tray-icon-pixel.ico'),
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/settings.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  })
+  win.once('ready-to-show', () => { if (!win.isDestroyed()) win.show() })
+  win.on('closed', () => { if (settingsWindow === win) settingsWindow = undefined })
+  const base = process.env.ELECTRON_RENDERER_URL
+  if (base) void win.loadURL(`${base}/settings.html`)
+  else void win.loadFile(path.join(__dirname, '../renderer/settings.html'))
+  win.webContents.on('will-navigate', (event) => event.preventDefault())
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  return win
+}
+
+function setBalanceOpen(open: boolean): void {
+  if (balanceOpen === open) return
+  balanceOpen = open
+  if (open) {
+    if (!balanceWindow || balanceWindow.isDestroyed()) balanceWindow = createBalanceWindow()
+    if (balanceWindowReady) {
+      syncBalancePosition()
+      balanceWindow.showInactive()
+    }
+  } else if (balanceWindow && !balanceWindow.isDestroyed()) {
+    balanceWindow.hide()
   }
+  avatarWindow?.webContents.send('pet:balance-open', open)
+  if (balanceWindowReady && balanceWindow && !balanceWindow.isDestroyed()) {
+    balanceWindow.webContents.send('pet:balance-open', open)
+  }
+}
+
+function showPanel(): void {
+  if (balanceOpen) setBalanceOpen(false)
   if (!panelOpen) {
     panelOpen = true
     applyPointerShape()
     avatarWindow?.webContents.send('pet:panel-open', true)
   }
   avatarWindow?.focus()
+}
+
+function openSettings(): void {
+  if (!settingsWindow || settingsWindow.isDestroyed()) settingsWindow = createSettingsWindow()
+  else {
+    if (settingsWindow.isMinimized()) settingsWindow.restore()
+    settingsWindow.show()
+    settingsWindow.focus()
+  }
+}
+
+function createTray(): void {
+  const asset = app.isPackaged
+    ? path.join(process.resourcesPath, 'whale-tray-icon-pixel-24.png')
+    : path.join(projectRoot, 'src', 'renderer', 'assets', 'whale-tray-icon-pixel-24.png')
+  const icon = nativeImage.createFromPath(asset)
+  if (icon.isEmpty()) throw new Error(`通知区域图标资源不可用：${asset}`)
+  contextMenu = Menu.buildFromTemplate([
+    { label: '选项', click: openSettings },
+    { type: 'separator' },
+    { label: '退出', click: () => app.quit() }
+  ])
+  tray = new Tray(icon)
+  tray.setToolTip('小鲸')
+  tray.setContextMenu(contextMenu)
+  tray.on('click', () => {
+    avatarWindow?.show()
+    showPanel()
+  })
 }
 
 function hidePanel(): void {
@@ -149,66 +389,321 @@ function isScreenPoint(value: unknown): value is Electron.Point {
   return Boolean(value && typeof value === 'object' && Number.isFinite((value as Electron.Point).x) && Number.isFinite((value as Electron.Point).y))
 }
 
+function conversationSettingsPatch(value: unknown): Partial<ConversationSettings> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('会话设置无效。')
+  const input = value as Record<string, unknown>
+  if (Object.keys(input).some((key) => key !== 'visibleConversationTabs' && key !== 'autoArchiveAfterDays' && key !== 'effort')) throw new Error('会话设置无效。')
+  const patch: Partial<ConversationSettings> = {}
+  if (input.visibleConversationTabs !== undefined) {
+    const tabs = input.visibleConversationTabs
+    if (typeof tabs !== 'number' || !Number.isInteger(tabs) || tabs < 1 || tabs > 12) throw new Error('快捷切换数应为 1–12。')
+    patch.visibleConversationTabs = tabs
+  }
+  if (input.autoArchiveAfterDays !== undefined) {
+    const days = input.autoArchiveAfterDays
+    if (days !== 0 && days !== 7 && days !== 14 && days !== 30) throw new Error('自动归档设置无效。')
+    patch.autoArchiveAfterDays = days
+  }
+  if (input.effort !== undefined) {
+    if (!isEffortLevel(input.effort)) throw new Error('思考强度设置无效。')
+    patch.effort = input.effort
+  }
+  return patch
+}
+
+const AVATARS_DIR = path.join(dataRoot, 'avatars')
+const AVATAR_MAX_BYTES = 2 * 1024 * 1024
+
+/** Stores an avatar image (PNG/JPEG, by magic bytes) and swaps the settings
+ *  reference, removing the previous file. */
+async function storeAvatar(kind: 'user' | 'assistant', bytes: number[]): Promise<void> {
+  const buffer = Buffer.from(bytes)
+  if (buffer.length === 0 || buffer.length > AVATAR_MAX_BYTES) throw new Error('头像图片需小于 2 MB。')
+  const isPng = buffer.length > 8 && buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e && buffer[3] === 0x47
+  const isJpeg = buffer.length > 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff
+  if (!isPng && !isJpeg) throw new Error('头像仅支持 PNG 或 JPEG 图片。')
+  const name = `${kind}-${Date.now()}.${isPng ? 'png' : 'jpg'}`
+  mkdirSync(AVATARS_DIR, { recursive: true })
+  await fsp.writeFile(path.join(AVATARS_DIR, name), buffer)
+  const settings = activeController().getSnapshot().conversationLibrary.settings
+  const previous = kind === 'user' ? settings.userAvatar : settings.assistantAvatar
+  await activeController().updateSettings(kind === 'user' ? { userAvatar: name } : { assistantAvatar: name })
+  if (previous && previous !== name) await fsp.rm(path.join(AVATARS_DIR, previous), { force: true })
+}
+
+async function readAvatarDataUrl(kind: 'user' | 'assistant'): Promise<string | null> {
+  const settings = activeController().getSnapshot().conversationLibrary.settings
+  const name = kind === 'user' ? settings.userAvatar : settings.assistantAvatar
+  if (!name) return null
+  try {
+    const buffer = await fsp.readFile(path.join(AVATARS_DIR, name))
+    const mime = name.endsWith('.png') ? 'image/png' : name.endsWith('.webp') ? 'image/webp' : 'image/jpeg'
+    return `data:${mime};base64,${buffer.toString('base64')}`
+  } catch {
+    return null
+  }
+}
+
 function registerIpc(): void {
   const trusted = (event: Electron.IpcMainInvokeEvent): boolean => event.sender.id === avatarWindow?.webContents.id
+  const balanceTrusted = (event: Electron.IpcMainInvokeEvent): boolean => event.sender.id === balanceWindow?.webContents.id
+  const settingsTrusted = (event: Electron.IpcMainInvokeEvent): boolean => event.sender.id === settingsWindow?.webContents.id
+  ipcMain.handle('pet:settings:get', async (event) => {
+    if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
+    return (await activeController().getLibraryState()).settings
+  })
+  ipcMain.handle('pet:settings:update', (event, patch: unknown) => {
+    if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
+    return activeController().updateSettings(conversationSettingsPatch(patch))
+  })
+  ipcMain.handle('pet:settings:version', (event) => {
+    if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
+    return app.getVersion()
+  })
+  ipcMain.handle('pet:prepare-dropped-file', async (event, filePath: unknown) => {
+    if (!trusted(event) || typeof filePath !== 'string') throw new Error('拖入文件无效。')
+    return prepareDroppedFile(filePath)
+  })
+  ipcMain.handle('pet:prepare-pasted-file', async (event, request: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (!request || typeof request !== 'object') throw new Error('粘贴内容无效。')
+    const { name, data } = request as { name?: unknown; data?: unknown }
+    if (typeof name !== 'string' || !name.trim() || name.length > 260 || typeof data !== 'string') throw new Error('粘贴内容无效。')
+    return stagePastedAttachment(path.join(dataRoot, 'attachments'), name.trim(), data)
+  })
+  ipcMain.handle('pet:read-image-preview', async (event, filePath: unknown) => {
+    if (!trusted(event) || typeof filePath !== 'string' || filePath.length > 32_000) throw new Error('预览请求无效。')
+    const target = attachmentPreviewPath(path.join(dataRoot, 'attachments'), filePath)
+    return target ? readImagePreview(target) : null
+  })
   ipcMain.handle('pet:get-snapshot', (event) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
-    return runtime.getSnapshot()
+    return activeController().getSnapshot()
   })
-  ipcMain.handle('pet:send-message', (event, text: unknown, attachments: unknown) => {
+  ipcMain.handle('pet:send-message', async (event, text: unknown, attachments: unknown, strategy: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     if (typeof text !== 'string') throw new Error('消息必须是文本。')
-    if (attachments !== undefined && (!Array.isArray(attachments) || attachments.some((item) => !item || typeof item !== 'object' || typeof item.name !== 'string' || typeof item.content !== 'string'))) {
+    if (!validAttachmentList(attachments ?? [])) {
       throw new Error('附件数据无效。')
     }
-    return runtime.sendMessage(text, (attachments ?? []) as Array<{ name: string; content: string }>)
+    if (strategy !== undefined && strategy !== 'queue' && strategy !== 'steer') throw new Error('发送方式无效。')
+    const slash = parseAppSlashCommand(text)
+    if (slash) {
+      if ((attachments as Array<unknown> | undefined)?.length) throw new Error('应用命令不能附带文件。')
+      if (slash.name !== 'new' && slash.args) throw new Error(`/${slash.name} 不接受额外参数。`)
+      if (slash.name === 'new') {
+        if (slash.args.length > 60 || /[\r\n]/u.test(slash.args)) throw new Error('新对话标题最多 60 字，且不能换行。')
+        await activeController().createConversation(slash.args || undefined)
+      } else if (slash.name === 'compact') {
+        await activeController().compactConversation()
+      } else {
+        avatarWindow?.webContents.send('pet:slash-ui', slash.name)
+      }
+      return
+    }
+    const resolved = await Promise.all(((attachments ?? []) as UserAttachment[]).map(async (item) => {
+      if (!item.path) return item
+      const file = await verifyDroppedFilePath(item.path)
+      return { ...item, path: file.path, name: file.name }
+    }))
+    await activeController().sendMessage(text, resolved, strategy as 'queue' | 'steer' | undefined)
+  })
+  ipcMain.handle('pet:create-conversation', async (event, title: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (title !== undefined && typeof title !== 'string') throw new Error('标题无效。')
+    await activeController().createConversation(title as string | undefined)
+  })
+  ipcMain.handle('pet:select-conversation', async (event, id: unknown) => {
+    if (!trusted(event) || typeof id !== 'string') throw new Error('会话编号无效。')
+    await activeController().selectConversation(id)
+  })
+  ipcMain.handle('pet:rename-conversation', async (event, id: unknown, title: unknown) => {
+    if (!trusted(event) || typeof id !== 'string' || typeof title !== 'string') throw new Error('会话标题无效。')
+    await activeController().renameConversation(id, title)
+  })
+  ipcMain.handle('pet:set-conversation-pinned', async (event, id: unknown, pinned: unknown) => {
+    if (!trusted(event) || typeof id !== 'string' || typeof pinned !== 'boolean') throw new Error('置顶请求无效。')
+    await activeController().setConversationPinned(id, pinned)
+  })
+  ipcMain.handle('pet:archive-conversation', async (event, id: unknown) => {
+    if (!trusted(event) || typeof id !== 'string') throw new Error('会话编号无效。')
+    await activeController().archiveConversation(id)
+  })
+  ipcMain.handle('pet:restore-conversation', async (event, id: unknown) => {
+    if (!trusted(event) || typeof id !== 'string') throw new Error('会话编号无效。')
+    await activeController().restoreConversation(id)
+  })
+  ipcMain.handle('pet:delete-conversation', async (event, id: unknown) => {
+    if (!trusted(event) || typeof id !== 'string') throw new Error('会话编号无效。')
+    await activeController().deleteConversation(id)
+  })
+  ipcMain.handle('pet:get-context-usage', (event) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    return activeController().getContextUsage()
+  })
+  ipcMain.handle('pet:compact-conversation', (event) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    return activeController().compactConversation()
+  })
+  ipcMain.handle('pet:list-claude-workflows', async (event) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    await activeController().initialize()
+    const claudeMode = activeController().getSnapshot().mode === 'claude_code' && Boolean(claudeAgent)
+    const workflows = claudeMode
+      ? await listClaudeWorkflows({ projectRoot: agentWorkspace, userConfigRoot: path.join(userHome, '.claude') })
+      : []
+    const options = new Map<string, ClaudeWorkflowOption>(workflows.map(({ name, description, kind, source }) => [
+      name.toLowerCase(), { name, description, kind, source }
+    ]))
+    const catalog = claudeMode ? claudeAgent?.getCommandCatalog() : undefined
+    for (const [kind, names] of [['command', catalog?.commands ?? []], ['skill', catalog?.skills ?? []]] as const) {
+      for (const rawName of names) {
+        const name = rawName.replace(/^[/\$]/u, '').trim()
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9_:-]*$/u.test(name) || options.has(name.toLowerCase())) continue
+        options.set(name.toLowerCase(), { name, description: kind === 'skill' ? 'Claude Code 技能' : 'Claude Code 命令', kind, source: 'builtin' })
+      }
+    }
+    const appCommands = APP_SLASH_COMMANDS.filter((command) => claudeMode || command.name !== 'compact')
+    for (const command of appCommands) options.set(command.name, command)
+    return [
+      ...appCommands,
+      ...[...options.values()].filter((option) => !appCommands.some((command) => command.name === option.name.toLowerCase()))
+        .sort((a, b) => a.name.localeCompare(b.name))
+    ]
+  })
+  ipcMain.handle('pet:search-workspace-files', (event, query: unknown) => {
+    if (!trusted(event) || typeof query !== 'string' || query.length > 120) throw new Error('文件搜索条件无效。')
+    return searchWorkspaceFiles(agentWorkspace, query)
+  })
+  ipcMain.handle('pet:search-conversations', (event, query: unknown, archived: unknown) => {
+    if (!trusted(event) || typeof query !== 'string' || query.length > 200 ||
+        (archived !== undefined && typeof archived !== 'boolean')) throw new Error('搜索条件无效。')
+    return activeController().listConversations({ query, archived: archived as boolean | undefined })
+  })
+  ipcMain.handle('pet:remove-queued-message', async (event, id: unknown) => {
+    if (!trusted(event) || typeof id !== 'string') throw new Error('队列编号无效。')
+    await activeController().removeQueued(id)
+  })
+  ipcMain.handle('pet:steer-queued-message', async (event, id: unknown) => {
+    if (!trusted(event) || typeof id !== 'string') throw new Error('队列编号无效。')
+    await activeController().steerQueued(id)
   })
   ipcMain.handle('pet:approve-action', (event, id: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     if (typeof id !== 'string') throw new Error('操作编号无效。')
-    return runtime.approveAction(id)
+    return activeController().approveAction(id)
   })
   ipcMain.handle('pet:reject-action', (event, id: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     if (typeof id !== 'string') throw new Error('操作编号无效。')
-    runtime.rejectAction(id)
+    return activeController().rejectAction(id)
+  })
+  ipcMain.handle('pet:answer-question', (event, id: unknown, answers: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (typeof id !== 'string') throw new Error('问答编号无效。')
+    if (!isAskAnswers(answers)) throw new Error('答案格式无效。')
+    return activeController().answerQuestion(id, answers)
+  })
+  ipcMain.handle('pet:answer-plan', (event, id: unknown, approved: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (typeof id !== 'string') throw new Error('计划编号无效。')
+    if (typeof approved !== 'boolean') throw new Error('批准结果无效。')
+    return activeController().answerPlan(id, approved)
   })
   ipcMain.handle('pet:stop', (event) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
-    runtime.stop()
+    return activeController().stop()
   })
+  ipcMain.handle('pet:interrupt-turn', (event) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    return activeController().interruptTurn()
+  })
+  ipcMain.handle('pet:save-model-profile', (event, profile: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (!isModelProfile(profile)) throw new Error('模型配置格式无效。')
+    return activeController().saveModelProfile(profile)
+  })
+  ipcMain.handle('pet:delete-model-profile', (event, id: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (typeof id !== 'string') throw new Error('模型配置编号无效。')
+    return activeController().deleteModelProfile(id)
+  })
+  ipcMain.handle('pet:set-model-profile', (event, id: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (id !== null && typeof id !== 'string') throw new Error('模型配置编号无效。')
+    return activeController().setModelProfile(id)
+  })
+  ipcMain.handle('pet:test-model-profile', (event, profile: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (!isModelProfile(profile)) throw new Error('模型配置格式无效。')
+    return probeAnthropicEndpoint(profile)
+  })
+  ipcMain.handle('pet:set-auto-title', (event, on: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (typeof on !== 'boolean') throw new Error('设置无效。')
+    return activeController().updateSettings({ enableAutoTitleGeneration: on })
+  })
+  ipcMain.handle('pet:set-timestamps', (event, on: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (typeof on !== 'boolean') throw new Error('设置无效。')
+    return activeController().updateSettings({ showMessageTimestamps: on })
+  })
+  ipcMain.handle('pet:set-user-names', (event, userName: unknown, assistantName: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (typeof userName !== 'string' || typeof assistantName !== 'string') throw new Error('称呼无效。')
+    return activeController().updateSettings({ userName, assistantName })
+  })
+  ipcMain.handle('pet:set-avatar', async (event, kind: unknown, bytes: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (kind !== 'user' && kind !== 'assistant') throw new Error('头像类型无效。')
+    if (!Array.isArray(bytes) || !bytes.every((item) => Number.isInteger(item) && item >= 0 && item <= 255)) {
+      throw new Error('头像数据无效。')
+    }
+    await storeAvatar(kind, bytes as number[])
+  })
+  ipcMain.handle('pet:read-avatar', (event, kind: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (kind !== 'user' && kind !== 'assistant') throw new Error('头像类型无效。')
+    return readAvatarDataUrl(kind)
+  })
+  ipcMain.handle('pet:open-settings', (event) => { if (trusted(event)) openSettings() })
   ipcMain.handle('pet:show-panel', (event) => { if (trusted(event)) showPanel() })
   ipcMain.handle('pet:hide-panel', (event) => { if (trusted(event)) hidePanel() })
   ipcMain.handle('pet:get-panel-open', (event) => { if (!trusted(event)) throw new Error('无效的界面请求。'); return panelOpen })
-  ipcMain.handle('pet:set-menu-open', (event, open: unknown) => {
-    if (event.sender.id !== avatarWindow?.webContents.id) return
-    if (typeof open !== 'boolean') throw new Error('菜单状态无效。')
-    if (menuOpen === open) return
-    menuOpen = open
-    applyPointerShape()
+  ipcMain.handle('pet:show-context-menu', (event) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (avatarWindow && contextMenu) contextMenu.popup({ window: avatarWindow })
   })
   ipcMain.handle('pet:set-balance-open', (event, open: unknown) => {
-    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (!trusted(event) && !balanceTrusted(event)) throw new Error('无效的界面请求。')
     if (typeof open !== 'boolean') throw new Error('余额卡片状态无效。')
-    if (open && panelOpen) hidePanel()
-    balanceOpen = open
-    applyPointerShape()
-    avatarWindow?.webContents.send('pet:balance-open', open)
+    setBalanceOpen(open)
   })
   ipcMain.handle('pet:get-balance', (event) => {
-    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (!trusted(event) && !balanceTrusted(event)) throw new Error('无效的界面请求。')
     if (!claudeKey) throw new Error('本机尚未配置 DeepSeek API Key。')
     return fetchDeepSeekBalance(claudeKey)
   })
-  ipcMain.handle('pet:set-bubble-layout', (event, layout: unknown) => {
+  ipcMain.handle('pet:open-external', async (event, value: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (typeof value !== 'string' || value.length > 2_000) throw new Error('无效的链接。')
+    const url = new URL(value)
+    if (!['http:', 'https:', 'mailto:'].includes(url.protocol)) throw new Error('不支持的链接。')
+    await shell.openExternal(url.href)
+  })
+  ipcMain.handle('pet:set-bubble-layout', (event, layout: unknown, height: unknown) => {
     if (event.sender.id !== avatarWindow?.webContents.id) return
     if (layout !== 'empty' && layout !== 'composer' && layout !== 'composer_attachments' && layout !== 'composer_models' && layout !== 'full') throw new Error('气泡布局无效。')
-    if (bubbleLayout === layout) return
-    const previous = bubbleRegion(bubbleLayout)
+    if (height !== undefined && (typeof height !== 'number' || !Number.isFinite(height) || height < 100 || height > 260)) throw new Error('气泡高度无效。')
+    const nextHeight = (layout === 'composer' || layout === 'composer_attachments') && typeof height === 'number' ? Math.round(height) : undefined
+    if (bubbleLayout === layout && compactBubbleHeight === nextHeight) return
+    const size = avatarWindow?.getBounds() ?? stageSize
+    const previous = bubbleRegion(bubbleLayout, size)
     bubbleLayout = layout
+    compactBubbleHeight = nextHeight
     if (shapeShrinkTimer) clearTimeout(shapeShrinkTimer)
     shapeShrinkTimer = undefined
-    const next = bubbleRegion(layout)
+    const next = bubbleRegion(layout, size)
     if (panelOpen && next.width * next.height < previous.width * previous.height) {
       shapeShrinkTimer = setTimeout(() => {
         shapeShrinkTimer = undefined
@@ -218,10 +713,25 @@ function registerIpc(): void {
       applyPointerShape()
     }
   })
+  ipcMain.handle('pet:set-bubble-expanded', (event, expanded: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (typeof expanded !== 'boolean') throw new Error('气泡尺寸无效。')
+    setBubbleExpanded(expanded)
+  })
+  ipcMain.handle('pet:set-plan-mode', async (event, on: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (typeof on !== 'boolean') throw new Error('计划模式设置无效。')
+    await activeController().setPlanMode(on)
+  })
+  ipcMain.handle('pet:set-effort', async (event, level: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (!isEffortLevel(level)) throw new Error('思考强度无效。')
+    await activeController().updateSettings({ effort: level })
+  })
   ipcMain.handle('pet:set-model-mode', (event, mode: unknown) => {
     if (event.sender.id !== avatarWindow?.webContents.id) return
     if (mode !== 'demo' && mode !== 'live' && mode !== 'claude_code') throw new Error('模型选项无效。')
-    runtime.setModelMode(mode)
+    return activeController().setModelMode(mode)
   })
   ipcMain.handle('pet:set-avatar-state', (event, state: unknown) => {
     if (event.sender.id !== avatarWindow?.webContents.id) return
@@ -283,18 +793,31 @@ function registerIpc(): void {
     avatarWindow.setBounds({
       x,
       y,
-      width: stageSize.width,
-      height: stageSize.height
+      width: dragOrigin.bounds.width,
+      height: dragOrigin.bounds.height
     })
+    syncBalancePosition()
   })
   ipcMain.handle('pet:end-drag', (event) => {
     if (trusted(event)) dragOrigin = undefined
   })
 }
 
-app.whenReady().then(async () => {
+const ownsSingleInstance = app.requestSingleInstanceLock()
+if (!ownsSingleInstance) app.quit()
+else app.on('second-instance', () => {
+  avatarWindow?.show()
+  showPanel()
+})
+
+if (ownsSingleInstance) void app.whenReady().then(async () => {
+  await linkClaudeUserResources(path.join(dataRoot, 'claude'), userHome).catch((error: unknown) => {
+    console.warn('Claude user resource links unavailable:', error instanceof Error ? error.message : String(error))
+  })
+  await activeController().initialize()
   registerIpc()
   avatarWindow = createAvatarWindow()
+  createTray()
 
   // 自检模式：node/electron --self-test-asr 用测试音频调用 transcribeAudio
   if (process.argv.includes('--self-test-asr')) {
@@ -329,10 +852,17 @@ app.whenReady().then(async () => {
       setTimeout(() => app.quit(), 500)
     }
   }
+}).catch((error: unknown) => {
+  console.error('Desktop companion failed to start:', error)
+  app.quit()
 })
 
 app.on('before-quit', () => {
   runtime.stop()
+  if (balanceWindow && !balanceWindow.isDestroyed()) balanceWindow.destroy()
+  balanceWindow = undefined
+  tray?.destroy()
+  tray = undefined
 })
 
 app.on('window-all-closed', () => app.quit())
