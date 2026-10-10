@@ -275,8 +275,10 @@
    below it (thoughts, tools, further paragraphs) hang off the avatar column
    instead of floating loose. Absolute rather than a flex child: as a child
    the thread's gaps and margins added 11px of real height to the column, and
-   every one-line message — the user bubble included — was stretched to match. */
-.panel-event-avatar::after { content: ''; position: absolute; top: 27px; bottom: 2px; left: calc(50% - 0.8px); width: 1.6px; border-radius: 1px; background: linear-gradient(180deg, rgba(150, 178, 226, .32), rgba(150, 178, 226, .08)); }
+   every one-line message — the user bubble included — was stretched to match.
+   It runs to the block's own bottom edge so the stats row's bridge can pick
+   it up without a seam. */
+.panel-event-avatar::after { content: ''; position: absolute; top: 27px; bottom: 0; left: calc(50% - 0.8px); width: 1.6px; border-radius: 1px; background: linear-gradient(180deg, rgba(150, 178, 226, .32), rgba(150, 178, 226, .08)); }
 /* With a clock between glyph and thread, the thread starts under it:
    26 glyph + 8 gap + 10 clock + the 1px breather. */
 .panel-event-avatar:has(.panel-event-time)::after { top: 45px; }
@@ -284,9 +286,8 @@
    every further piece is a list-like paragraph. Its dot is a pseudo-element
    of the paragraph itself — alignment by construction, it cannot drift. */
 .panel-event.is-run .panel-event-body { display: grid; gap: 10px; }
-.panel-run-item { position: relative; padding-left: 14px; }
-/* top = markdown's 4px margin + half of 13px*1.58, minus half the dot. */
-.panel-run-item::before { content: ''; position: absolute; left: 0; top: 11px; width: 6.4px; height: 6.4px; border-radius: 50%; background: rgba(150, 178, 226, .45); }
+/* The reply pieces carry no bullet: a dot per paragraph read as a list of
+   unrelated items — the final answer most of all. The pieces just flow. */
 .panel-avatar-img { width: 26px; height: 26px; border-radius: 9px; object-fit: cover; }
 .panel-event-glyph {
   display: grid;
@@ -342,7 +343,19 @@
 .panel-turn-tools-errors { color: #f6aeb5; }
 /* On the cluster spine's axis (which itself lines up with the collapse chevron
    in the summary row), so the chain, the dot and the arrow read as one column. */
-.panel-turn-stats-pulse { position: absolute; left: 9px; top: calc(50% - 3.5px); width: 7px; height: 7px; border-radius: 50%; background: #f3c36f; animation: voice-pulse 1.2s ease-in-out infinite; }
+/* The dot sits on the avatar column's axis (centre 17px), so the glyph, the
+   thread line and this dot all share one plumb line. Amber and pulsing while
+   the turn runs; a quiet blue once it settles — the spot never reads empty,
+   and the thread always has something to land on. */
+.panel-turn-stats-dot { position: absolute; left: 13.5px; top: calc(50% - 3.5px); width: 7px; height: 7px; border-radius: 50%; }
+.panel-turn-stats-dot.is-running { background: #f3c36f; animation: voice-pulse 1.2s ease-in-out infinite; }
+.panel-turn-stats-dot.is-done { background: #9db9e9; }
+/* The thread's continuation across the gap between the message block and this
+   row: the block's 15px margin and the stats' 3px margin collapse to 15px, so
+   while the dot shows, a faint line bridges from the block's bottom edge down
+   onto the dot's top edge on the same axis; a finished turn has no dot, so no
+   bridge is drawn. */
+.panel-turn-stats:has(.panel-turn-stats-dot)::before { content: ''; position: absolute; left: 16.2px; top: -15px; width: 1.6px; height: calc(50% + 11.5px); border-radius: 1px; background: linear-gradient(180deg, rgba(150, 178, 226, .08), rgba(150, 178, 226, .3)); }
 /* Hover the token count to see how the endpoint billed it: fresh input, cache
    hits, cache writes and output cost very different amounts. */
 .panel-turn-usage { position: relative; cursor: default; }
@@ -767,7 +780,7 @@
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes voice-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .55; transform: scale(.85); } }
 @media (prefers-reduced-motion: reduce) {
-  .panel-bubble:not([hidden]), .panel-composer, .panel-send-spinner, .panel-scroll-bottom, .panel-scroll-ring, .panel-thought-state.is-running, .panel-turn-stats-pulse, .panel-working-dots i, .panel-cluster-state.is-running, .panel-attachment-preview { animation: none; }
+  .panel-bubble:not([hidden]), .panel-composer, .panel-send-spinner, .panel-scroll-bottom, .panel-scroll-ring, .panel-thought-state.is-running, .panel-turn-stats-dot.is-running, .panel-working-dots i, .panel-cluster-state.is-running, .panel-attachment-preview { animation: none; }
   .panel-bubble, .panel-model-menu, .panel-context-tooltip, .panel-cluster-chevron, .panel-tasks-chevron, .panel-mode-switch, .panel-mode-switch::after { transition: none; }
   .panel-compose-trigger:hover { transform: none; }
   .panel-live-label { animation: none; text-shadow: none; background-image: none; -webkit-text-fill-color: var(--panel-live-base); }

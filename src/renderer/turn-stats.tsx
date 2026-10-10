@@ -55,7 +55,7 @@ export function TurnStats({ entries, metrics, running }: { entries: TimelineEntr
   const breakdown = usage ? tokenBreakdownRows(usage) : [];
   if (!toolCount && !elapsedLabel && !usage) return null;
   return <div className="panel-turn-stats" role="status">
-    {running && <span className="panel-turn-stats-pulse" aria-hidden="true" />}
+    <span className={`panel-turn-stats-dot${running ? ' is-running' : ' is-done'}`} aria-hidden="true" />
     {elapsedLabel && <span>用时 {elapsedLabel}</span>}
     {usage && <span className="panel-turn-usage" tabIndex={0} title={breakdown.length ? undefined : '本轮主模型消耗；不含子代理和辅助调用'}>
       {compactTokens(usage.total)} token
