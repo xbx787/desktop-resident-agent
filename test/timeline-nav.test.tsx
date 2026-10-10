@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { NAV_RESTING, NAV_STEP, navBoost, navMarks, navPreview, navWindow, TimelineNav } from '../src/renderer/timeline-nav'
+import { NAV_RESTING, NAV_STEP, navBoost, navCardOffset, navMarks, navPreview, navRowAt, navTrackHeight, navWheelStep, navWindow, TimelineNav } from '../src/renderer/timeline-nav'
 import { groupTimeline } from '../src/renderer/timeline-groups'
 import type { TimelineEntry } from '../src/shared/contracts'
 
@@ -47,6 +47,42 @@ describe('navPreview', () => {
 describe('NAV_STEP', () => {
   it('lands on a whole physical pixel row under 125% display scaling', () => {
     expect(NAV_STEP * 1.25).toBe(7)
+  })
+})
+
+describe('navTrackHeight', () => {
+  it('keeps the 5.6 px pitch at any count — the full window is the old 345.6 px, a short rail shrinks instead of stretching', () => {
+    expect(navTrackHeight(60)).toBeCloseTo(345.6, 4)
+    expect(navTrackHeight(3)).toBeCloseTo(26.4, 4)
+    expect(navTrackHeight(11)).toBeCloseTo(71.2, 4)
+  })
+})
+
+describe('navCardOffset', () => {
+  it('anchors the card to the hovered row instead of a fixed 60-row offset', () => {
+    // A full window reproduces the historical placement exactly.
+    expect(navCardOffset(60, 0)).toBeCloseTo(-165.2, 4)
+    expect(navCardOffset(60, 59)).toBeCloseTo(165.2, 4)
+    // A short rail keeps the card beside the mark: the middle row sits at the centre.
+    expect(navCardOffset(11, 5)).toBeCloseTo(0, 4)
+    expect(navCardOffset(11, 0)).toBeCloseTo(-28, 4)
+  })
+})
+
+describe('navWheelStep', () => {
+  it('scales with the wheel delta so an accelerated flick still rolls the rail', () => {
+    expect(navWheelStep(3)).toBe(3) // line-mode notch
+    expect(navWheelStep(120)).toBe(3) // one pixel-mode notch moves three marks, as before
+    expect(navWheelStep(480)).toBe(12)
+    expect(navWheelStep(2000)).toBe(24) // bounded
+  })
+})
+
+describe('navRowAt', () => {
+  it('maps the pointer to a row and leaves the padding and the end unclaimed', () => {
+    expect(navRowAt(6 + 2 * NAV_STEP + 1, 0, 10)).toBe(2)
+    expect(navRowAt(2, 0, 10)).toBe(null)
+    expect(navRowAt(6 + 10 * NAV_STEP, 0, 10)).toBe(null)
   })
 })
 

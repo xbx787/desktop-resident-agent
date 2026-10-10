@@ -136,8 +136,11 @@
    message says (the card scrolls when the text is long). Marks are evenly
    spaced, so a shorter window simply packs them tighter; the expanded bubble
    gets a slightly longer resting mark. */
-.panel-nav { position: absolute; z-index: 5; left: 0; top: 50%; transform: translateY(-50%); display: grid; gap: 2.4px; width: 26px; height: 26.4px; padding: 6px 0; border-radius: 0 10px 10px 0; background: rgba(10, 22, 50, 0); cursor: pointer; transition: height .18s ease, background-color .16s ease; -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 6.4px, #000 calc(100% - 6.4px), transparent 100%); mask-image: linear-gradient(180deg, transparent 0, #000 6.4px, #000 calc(100% - 6.4px), transparent 100%); }
-.panel-nav.is-expanded { height: 345.6px; background: rgba(10, 22, 50, .32); }
+.panel-nav { position: absolute; z-index: 5; left: 0; top: 50%; transform: translateY(-50%); display: grid; align-content: start; gap: 2.4px; width: 26px; height: 26.4px; padding: 6px 0; border-radius: 0 10px 10px 0; background: rgba(10, 22, 50, 0); cursor: pointer; transition: height .18s ease, background-color .16s ease; -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 6.4px, #000 calc(100% - 6.4px), transparent 100%); mask-image: linear-gradient(180deg, transparent 0, #000 6.4px, #000 calc(100% - 6.4px), transparent 100%); }
+/* The expanded height is inline (navTrackHeight): a full 60-row window is
+   345.6 px and a short rail shrinks with its marks instead of stretching
+   them. align-content: start above keeps rows at their own 3.2 px height. */
+.panel-nav.is-expanded { background: rgba(10, 22, 50, .32); }
 .panel-nav-mark { display: block; width: calc(var(--nav-base, 8.8px) + var(--nav-boost, 0px)); height: 3.2px; margin-left: 4px; border-radius: 1.6px; background: rgba(150, 178, 226, .28); transition: width .12s ease, background-color .12s ease; }
 /* Two tones, one per speaker: the user's lines bright, the model's dim. The
    bright/dim alternation is what makes the wheel's sliding visible — a column

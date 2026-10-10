@@ -5,13 +5,20 @@ button, input, select { font: inherit; }
 button { cursor: pointer; }
 button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55; }
 .settings-window { min-height: 100vh; padding: 28px 30px 20px; background: linear-gradient(155deg, #27427e 0%, #162854 45%, #0c1b3e 100%); }
-.settings-header { display: flex; align-items: center; gap: 13px; margin-bottom: 28px; }
+.settings-header { display: flex; align-items: center; gap: 13px; margin-bottom: 16px; }
+/* The four groups as a top tab row: one group shows at a time, so the small
+   window never scrolls through the whole list. The chip style follows the
+   panel's pick buttons. */
+.settings-tabs { display: flex; gap: 4px; margin: 0 0 14px; }
+.settings-tab { height: 26px; padding: 0 12px; border: 0; border-radius: 999px; color: #a9bee4; background: transparent; font-size: 11px; font-weight: 600; }
+.settings-tab:hover { color: #dbe8ff; background: rgba(181, 205, 255, .12); }
+.settings-tab.is-active { color: #dbe8ff; background: rgba(111, 211, 255, .14); }
+.settings-tab:focus-visible { outline: 2px solid #b4d1ff; outline-offset: 2px; }
 .settings-mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 13px; background: #496cae; color: #fff; font-size: 16px; font-weight: 700; }
 .settings-header p { margin: 0 0 1px; color: #aec2e8; font-size: 11px; }
 .settings-header h1 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: .02em; }
 .settings-version { margin-left: auto; color: #aec2e8; font-family: Bahnschrift, "Segoe UI", sans-serif; font-size: 11px; font-variant-numeric: tabular-nums; }
 .settings-section { border: 1px solid rgba(184, 209, 255, .28); border-radius: 13px; background: rgba(9, 21, 53, .5); overflow: hidden; }
-.settings-section h2 { margin: 0; padding: 15px 18px 9px; font-size: 13px; font-weight: 600; color: #a8bee6; }
 .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 82px; padding: 12px 18px; }
 .settings-row + .settings-row { border-top: 1px solid rgba(194, 215, 255, .16); }
 .settings-copy { min-width: 0; }

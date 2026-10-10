@@ -29,7 +29,15 @@ interface ModelFormState {
   advanced: boolean
 }
 
-function SettingsPage() {
+const SETTINGS_TABS = [
+  { id: 'conversation', label: '对话' },
+  { id: 'models', label: '模型' },
+  { id: 'identity', label: '称呼' },
+  { id: 'avatar', label: '头像' }
+] as const
+type SettingsTab = typeof SETTINGS_TABS[number]['id']
+
+export function SettingsPage() {
   const [settings, setSettings] = useState<ConversationSettings | null>(null)
   const [tabsDraft, setTabsDraft] = useState('5')
   const [busy, setBusy] = useState(false)
@@ -42,6 +50,7 @@ function SettingsPage() {
   const [modelTest, setModelTest] = useState<{ ok: boolean; message: string } | null>(null)
   const [modelTesting, setModelTesting] = useState(false)
   const [profileDeleteId, setProfileDeleteId] = useState<string | null>(null)
+  const [tab, setTab] = useState<SettingsTab>('conversation')
 
   useEffect(() => {
     let active = true
@@ -215,9 +224,22 @@ function SettingsPage() {
       <div><p>{settings?.assistantName ?? '小鲸'}</p><h1>设置</h1></div>
       {version && <span className="settings-version">v{version}</span>}
     </header>
+    <nav className="settings-tabs" role="tablist" aria-label="设置栏目" onKeyDown={(event) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+      event.preventDefault()
+      const index = SETTINGS_TABS.findIndex((item) => item.id === tab)
+      const next = SETTINGS_TABS[(index + (event.key === 'ArrowRight' ? 1 : SETTINGS_TABS.length - 1)) % SETTINGS_TABS.length]
+      setTab(next.id)
+      document.getElementById(`settings-tab-${next.id}`)?.focus()
+    }}>
+      {SETTINGS_TABS.map((item) => <button key={item.id} type="button" role="tab" id={`settings-tab-${item.id}`}
+        aria-selected={tab === item.id} aria-controls={`settings-panel-${item.id}`}
+        tabIndex={tab === item.id ? 0 : -1}
+        className={`settings-tab${tab === item.id ? ' is-active' : ''}`}
+        onClick={() => setTab(item.id)}>{item.label}</button>)}
+    </nav>
     <main>
-      <section className="settings-section" aria-labelledby="conversation-settings-title">
-        <h2 id="conversation-settings-title">对话</h2>
+      {tab === 'conversation' && <section className="settings-section" role="tabpanel" id="settings-panel-conversation" aria-labelledby="settings-tab-conversation">
         <div className="settings-row">
           <div className="settings-copy"><label htmlFor="visible-tabs">顶部快捷标签</label><p>放大聊天窗口时显示最近的会话。会话总数不受限制。</p></div>
           <form onSubmit={(event) => { event.preventDefault(); saveTabs() }}>
@@ -243,9 +265,8 @@ function SettingsPage() {
             className={`settings-switch${settings?.showMessageTimestamps ?? true ? ' is-on' : ''}`} disabled={!settings || busy}
             onClick={() => { void update({ showMessageTimestamps: !(settings?.showMessageTimestamps ?? true) }) }} />
         </div>
-      </section>
-      <section className="settings-section" aria-labelledby="models-title">
-        <h2 id="models-title">模型</h2>
+      </section>}
+      {tab === 'models' && <section className="settings-section" role="tabpanel" id="settings-panel-models" aria-labelledby="settings-tab-models">
         {(settings?.modelProfiles ?? []).map((profile) => (
           <div className="settings-row" key={profile.id}>
             <div className="settings-copy">
@@ -295,9 +316,8 @@ function SettingsPage() {
             <button type="button" className="settings-model-save" disabled={busy || !draftModel()} onClick={() => { void saveModel() }}>保存</button>
           </div>
         </div>}
-      </section>
-      <section className="settings-section" aria-labelledby="identity-title">
-        <h2 id="identity-title">称呼</h2>
+      </section>}
+      {tab === 'identity' && <section className="settings-section" role="tabpanel" id="settings-panel-identity" aria-labelledby="settings-tab-identity">
         <div className="settings-row">
           <div className="settings-copy"><label htmlFor="user-name">你的称呼</label><p>它在对话里这样称呼你。</p></div>
           <form onSubmit={(event) => { event.preventDefault(); saveNames() }}>
@@ -314,9 +334,8 @@ function SettingsPage() {
             <button type="submit" disabled={!settings || busy || assistantNameDraft.trim() === settings.assistantName}>保存</button>
           </form>
         </div>
-      </section>
-      <section className="settings-section" aria-labelledby="avatar-title">
-        <h2 id="avatar-title">头像</h2>
+      </section>}
+      {tab === 'avatar' && <section className="settings-section" role="tabpanel" id="settings-panel-avatar" aria-labelledby="settings-tab-avatar">
         <div className="settings-row">
           <div className="settings-copy"><label htmlFor="user-avatar">你的头像</label><p>消息左侧的小头像。PNG 或 JPEG，小于 2 MB。</p></div>
           <label className="settings-avatar">
@@ -333,10 +352,13 @@ function SettingsPage() {
               onChange={(event) => { void pickAvatar('assistant', event.target.files?.[0]); event.target.value = '' }} />
           </label>
         </div>
-      </section>
+      </section>}
     </main>
     <div className={`settings-notice${notice?.error ? ' is-error' : ''}`} role={notice?.error ? 'alert' : 'status'}>{notice?.text}</div>
   </div>
 }
 
-createRoot(document.getElementById('root')!).render(<SettingsPage />)
+if (typeof document !== 'undefined') {
+  const mount = document.getElementById('root')
+  if (mount) createRoot(mount).render(<SettingsPage />)
+}
