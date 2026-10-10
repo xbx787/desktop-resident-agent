@@ -38,7 +38,11 @@ function setSlider(input: HTMLInputElement, index: number): void {
 describe('EffortSlider', () => {
   it('draws stop dots for the middle stops only, never the two ends', () => {
     const html = renderToStaticMarkup(<EffortSlider value="max" onCommit={() => {}} />)
-    expect(html.match(/panel-effort-tick/g)).toHaveLength(2)
+    expect(html.match(/panel-effort-tick/g)).toHaveLength(4)
+    // Both edge stops carry a tick too, inset from the rounded ends so the
+    // knob at a stop never sits exactly on its own tick's spot.
+    expect(html).toContain('calc(18px + (100% - 36px) * 0.0000)')
+    expect(html).toContain('calc(18px + (100% - 36px) * 1.0000)')
   })
 
   it('only commits on release: dragging moves a draft, the change event reaches the host', async () => {

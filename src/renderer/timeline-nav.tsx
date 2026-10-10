@@ -24,9 +24,11 @@ export function navMarks(groups: readonly TimelineGroup[]): NavMark[] {
   return marks;
 }
 
-/** How many marks the expanded rail shows at once — the wheel slides this
- *  window across the whole conversation instead of stacking every mark. */
-export const NAV_WINDOW = 60;
+/** How many marks the rail shows at once — the wheel slides this window
+ *  across the whole conversation instead of stacking every mark. The
+ *  expanded bubble has room for sixty; the compact one keeps twenty. */
+export const NAV_WINDOW_WIDE = 60;
+export const NAV_WINDOW_COMPACT = 20;
 /** Row pitch of the rail: a 3.2 px mark plus a 2.4 px gap. Both are multiples
  *  of 0.8, so under 125% display scaling every row lands on a whole physical
  *  pixel — mixed rounding used to make the rows look unevenly spaced. */
@@ -55,10 +57,10 @@ export function navCardOffset(count: number, active: number): number {
   return active * NAV_STEP + NAV_MARK / 2 + NAV_PAD - navTrackHeight(count) / 2;
 }
 
-/** The slice of marks the expanded rail shows for a given window start. */
-export function navWindow(count: number, start: number): { from: number; to: number } {
-  const from = Math.max(0, Math.min(Math.max(0, count - NAV_WINDOW), start));
-  return { from, to: Math.min(count, from + NAV_WINDOW) };
+/** The slice of marks the rail shows for a given window start and size. */
+export function navWindow(count: number, start: number, size: number): { from: number; to: number } {
+  const from = Math.max(0, Math.min(Math.max(0, count - size), start));
+  return { from, to: Math.min(count, from + size) };
 }
 
 /** The hover card shows three lines' worth at most — anything longer is
@@ -98,10 +100,16 @@ export function navRowAt(clientY: number, trackTop: number, count: number): numb
  * the whole conversation, and clicking a mark jumps to that message. The wheel
  * is captured while hovering so the feed behind never scrolls instead.
  */
-export function TimelineNav({ marks, onJump }: { marks: NavMark[]; onJump: (id: string) => void }) {
+export function TimelineNav({ marks, onJump, windowSize = NAV_WINDOW_WIDE }: { marks: NavMark[]; onJump: (id: string) => void; windowSize?: number }) {
   const [expanded, setExpanded] = useState(false);
   const [active, setActive] = useState<number | null>(null);
-  const [start, setStart] = useState(() => Math.max(0, marks.length - NAV_WINDOW));
+  const [start, setStart] = useState(() => Math.max(0, marks.length - windowSize));
+  // A window-size change re-anchors the rail to the newest marks: a start
+  // that was legal for the old size can point far away for the new one.
+  useEffect(() => {
+    setStart(Math.max(0, marks.length - windowSize));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [windowSize]);
   const trackRef = useRef<HTMLDivElement>(null);
   const rollRef = useRef<Animation | null>(null);
 
@@ -118,12 +126,12 @@ export function TimelineNav({ marks, onJump }: { marks: NavMark[]; onJump: (id: 
       event.preventDefault();
       const direction = event.deltaY > 0 ? 1 : -1;
       const step = navWheelStep(event.deltaY);
-      setStart((current) => Math.max(0, Math.min(Math.max(0, marks.length - NAV_WINDOW), current + direction * step)));
+      setStart((current) => Math.max(0, Math.min(Math.max(0, marks.length - windowSize), current + direction * step)));
       // Re-anchor the hover to the row under the pointer: the browser does not
       // reliably re-run its own hit-testing when React swaps the window's
       // marks, so the card used to vanish mid-scroll exactly when it was being
       // asked to read out the mark being scrolled past.
-      const row = navRowAt(event.clientY, node.getBoundingClientRect().top, Math.min(NAV_WINDOW, marks.length));
+      const row = navRowAt(event.clientY, node.getBoundingClientRect().top, Math.min(windowSize, marks.length));
       if (row !== null) setActive(row);
       // A short push-in so the wheel visibly rolls the rail. Compositor-only —
       // one transform pass, no layout or paint — and skipped entirely when the
@@ -139,10 +147,10 @@ export function TimelineNav({ marks, onJump }: { marks: NavMark[]; onJump: (id: 
     };
     node.addEventListener('wheel', onWheel, { passive: false });
     return () => node.removeEventListener('wheel', onWheel);
-  }, [expanded, marks.length]);
+  }, [expanded, marks.length, windowSize]);
 
   if (marks.length < 5) return null;
-  const frame = navWindow(marks.length, start);
+  const frame = navWindow(marks.length, start, windowSize);
   const shown = expanded ? marks.slice(frame.from, frame.to) : marks.slice(-Math.min(NAV_RESTING, marks.length));
   const current = expanded && active !== null && frame.from + active < marks.length ? marks[frame.from + active] : null;
   return <>
@@ -160,7 +168,7 @@ export function TimelineNav({ marks, onJump }: { marks: NavMark[]; onJump: (id: 
         return <i
           key={mark.id}
           aria-hidden="true"
-          className={`panel-nav-mark${expanded && index === active ? ' is-active' : ''}`}
+          className={`panel-nav-mark${mark.role === 'user' ? ' is-user' : ''}${expanded && index === active ? ' is-active' : ''}`}
           style={boost ? ({ '--nav-boost': `${boost}px` } as CSSProperties) : undefined}
           onMouseEnter={expanded ? () => setActive(index) : undefined}
         />;

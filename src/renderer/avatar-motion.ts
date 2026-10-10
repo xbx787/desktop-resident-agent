@@ -8,9 +8,9 @@
 /** One press-and-rebound pass, in order. */
 export function clickBounceFrames(): Keyframe[] {
   return [
-    { offset: 0, transform: 'translateY(3px) scaleY(0.97)' },
-    { offset: 0.38, transform: 'translateY(-2px) scaleY(1.012)' },
-    { offset: 0.68, transform: 'translateY(1px) scaleY(0.997)' },
+    { offset: 0, transform: 'translateY(4.5px) scaleY(0.96)' },
+    { offset: 0.38, transform: 'translateY(-3.5px) scaleY(1.02)' },
+    { offset: 0.68, transform: 'translateY(1.5px) scaleY(0.996)' },
     { offset: 1, transform: 'translateY(0px) scaleY(1)' }
   ]
 }

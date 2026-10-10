@@ -44,5 +44,20 @@ body.avatar-window { -webkit-user-select: none; user-select: none; }
   .avatar-hit-target:active { transform: translateY(2px) scale(1, .985); }
 }
 
+/* Idle life: a slow breath on the portrait layer, and the occasional fidget
+   from avatar-idle.ts. The layers keep independent transforms — the hit
+   target plays the click bounce, the portrait breathes, the artwork keeps
+   its own transform for speaking/listening — so nothing fights over one
+   property. Amplitudes stay well inside the window's 10 px vertical slack,
+   even when two layers move the same way at once (2 + 3.5 + growth ≈ 7 px
+   of the 8 px budget). */
+@keyframes whale-breath {
+  0%, 100% { transform: translateY(0) scaleY(1); }
+  50% { transform: translateY(-2px) scaleY(1.008); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .avatar-portrait { transform-origin: 50% 100%; animation: whale-breath 3.6s ease-in-out infinite; }
+}
+
 body.balance-window .balance-peek { top: 0; left: 0; bottom: auto; }
 body.balance-window .balance-peek::after { top: calc(50% - 6.5px); right: -5px; bottom: auto; border-right: 1px solid rgba(184, 209, 255, .28); border-top: 1px solid rgba(184, 209, 255, .28); border-bottom: 0; }

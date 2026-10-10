@@ -19,7 +19,7 @@ import { AskQuestionPanel } from './ask-question';
 import { PlanApprovalPanel } from './plan-approval';
 import { ThinkingItem } from './thinking-item';
 import { groupTimeline, sameTimelineEntry, segmentTurn, splitTurnTail, tailWindow } from './timeline-groups';
-import { navMarks, TimelineNav } from './timeline-nav';
+import { navMarks, NAV_WINDOW_COMPACT, NAV_WINDOW_WIDE, TimelineNav } from './timeline-nav';
 import { ToolDiffBody } from './tool-diff-body';
 import { ToolIcon } from './tool-icons';
 import { toolArgumentPreview, toolPlanText } from './tool-arguments';
@@ -1274,7 +1274,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
         )}
 
         <div className="panel-feed-wrap" ref={feedWrapRef}>
-          <TimelineNav marks={navMarkList} onJump={jumpToEntry} />
+          <TimelineNav marks={navMarkList} onJump={jumpToEntry} windowSize={expanded ? NAV_WINDOW_WIDE : NAV_WINDOW_COMPACT} />
           <div className="panel-feed" ref={feedRef} aria-label="对话与任务时间线" onScroll={(event) => {
             const feed = event.currentTarget;
             const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 48;

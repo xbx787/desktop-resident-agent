@@ -36,7 +36,7 @@ describe('click bounce frames', () => {
 
   it('starts at rest and ends at rest so the button returns exactly to layout', () => {
     const frames = clickBounceFrames()
-    expect(parseFrame(String(frames[0].transform))).toEqual({ ty: 3, sy: 0.97 })
+    expect(parseFrame(String(frames[0].transform))).toEqual({ ty: 4.5, sy: 0.96 })
     const last = parseFrame(String(frames[frames.length - 1].transform))
     expect(last).toEqual({ ty: 0, sy: 1 })
   })

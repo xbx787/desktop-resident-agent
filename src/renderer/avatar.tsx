@@ -6,6 +6,9 @@ import { BalanceCard } from './balance';
 import { PanelBubble } from './panel';
 import { petBridge, usePetState } from './pet-state';
 import { playClickBounce } from './avatar-motion';
+import { startIdleFidgets } from './avatar-idle';
+import { playPoseSwap, poseSrc, preloadPoses, startPoseClock } from './avatar-poses';
+import { CLICK_CLIP, CLIPS, nextFrame, type ClipSpec } from './avatar-clips';
 import './avatar.css';
 
 interface PointerSession {
@@ -34,6 +37,39 @@ function Avatar() {
   const moveFrame = useRef<number | null>(null);
   const moveQueued = useRef(false);
   const moveDirty = useRef(false);
+  const portraitRef = useRef<HTMLDivElement | null>(null);
+  const [poseId, setPoseId] = useState<string | null>(null);
+  const [clip, setClip] = useState<{ spec: ClipSpec; index: number } | null>(null);
+  // A playing clip owns the artwork; the pose clock sits the round out.
+  const clipActive = useRef(false);
+
+  useEffect(() => startIdleFidgets(portraitRef.current), []);
+  useEffect(() => {
+    preloadPoses();
+    return startPoseClock((pose) => {
+      if (clipActive.current) return;
+      playPoseSwap(portraitRef.current, () => setPoseId(pose ? pose.id : null));
+    });
+  }, []);
+  const clipSpec = clip?.spec ?? null;
+  useEffect(() => {
+    if (!clipSpec) return;
+    const timer = window.setInterval(() => {
+      setClip((current) => {
+        if (!current) return null;
+        const next = nextFrame(current.index, current.spec.frames.length, current.spec.loop);
+        if (next === null) { clipActive.current = false; return null; }
+        return { spec: current.spec, index: next };
+      });
+    }, 1000 / clipSpec.fps);
+    return () => window.clearInterval(timer);
+  }, [clipSpec]);
+  function playClip(id: string): void {
+    const spec = CLIPS[id];
+    if (!spec) return;
+    clipActive.current = true;
+    setClip({ spec, index: 0 });
+  }
 
   useEffect(() => {
     let active = true;
@@ -157,6 +193,7 @@ function Avatar() {
       // The poke plays straight from the pointer turn — queued IPC would make
       // the feedback wait behind the drag chain.
       playClickBounce(event.currentTarget);
+      playClip(CLICK_CLIP);
       queueDrag((bridge) => panelOpen ? bridge.hidePanel() : bridge.showPanel());
     }
   }
@@ -187,11 +224,12 @@ function Avatar() {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
             playClickBounce(event.currentTarget);
+            playClip(CLICK_CLIP);
             void run((bridge) => panelOpen ? bridge.hidePanel() : bridge.showPanel());
           }
         }}
       >
-        <WhalePortrait />
+        <WhalePortrait containerRef={portraitRef} artworkUrl={clip ? clip.spec.frames[clip.index] : poseId ? poseSrc(poseId) : null} />
       </button>
     </main>
   );

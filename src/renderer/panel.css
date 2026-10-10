@@ -4,7 +4,12 @@
   right: 10px;
   bottom: 192px;
   display: flex;
+  /* One inline-size source for the bubble and for popovers that must not
+     spill past it: the tool-list tip used to stay 420 px wide inside the
+     356 px bubble (invisible but still in layout) and drag a permanent
+     horizontal scrollbar onto the feed whenever a turn had tool counts. */
   width: min(356px, calc(100vw - 20px));
+  --panel-inline: min(356px, calc(100vw - 20px));
   height: min(358px, calc(100vh - 202px));
   min-height: 0;
   overflow: visible;
@@ -27,7 +32,7 @@
 .panel-bubble[hidden] { display: none; }
 .panel-bubble.is-empty { right: 56px; width: 64px; height: 56px; border-radius: 21px; }
 .panel-bubble.is-empty.is-composing { right: 10px; width: min(332px, calc(100vw - 20px)); border-radius: 16px; }
-.panel-bubble.is-expanded { width: min(534px, calc(100vw - 20px)); height: calc(100vh - 192px); }
+.panel-bubble.is-expanded { width: min(534px, calc(100vw - 20px)); height: calc(100vh - 192px); --panel-inline: min(534px, calc(100vw - 20px)); }
 .panel-window-action { position: absolute; z-index: 8; top: 7px; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 9px; color: #d2e0fc; background: transparent; }
 .panel-expand-toggle { right: 43px; }
 .panel-window-close { right: 7px; }
@@ -367,7 +372,7 @@
 /* max-content keeps the absolutely-positioned tip as wide as its content —
    without it the wrapping rules below collapse it to a one-character column,
    and without the cap a long failure line could run off the screen. */
-.panel-turn-tools-tip { width: max-content; max-width: min(420px, calc(100vw - 40px)); max-height: 216px; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
+.panel-turn-tools-tip { width: max-content; max-width: min(420px, calc(var(--panel-inline) - 50px)); max-height: 216px; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; }
 .panel-turn-tools-count { display: flex; flex-wrap: wrap; gap: 2px 8px; }
 .panel-turn-tools-line { max-width: 100%; white-space: normal; overflow-wrap: break-word; }
 .panel-turn-tools-line.is-error { color: #f6aeb5; }
@@ -718,19 +723,19 @@
 .panel-effort-menu .panel-effort-row { padding: 2px 4px 3px; }
 /* The slider rides inside that popover: ordered stops, and only the values
    DeepSeek's wire actually reads (low / high / max, plus a real off). */
-.panel-effort-row { display: flex; align-items: center; gap: 8px; padding: 2px 8px 4px; }
-.panel-effort-slider-wrap { position: relative; display: flex; align-items: center; flex: 1; min-width: 0; height: 22px; }
+.panel-effort-row { display: flex; align-items: center; gap: 12px; padding: 2px 8px 4px; }
+.panel-effort-slider-wrap { position: relative; display: flex; align-items: center; flex: 1; min-width: 0; height: 24px; }
 /* The rail is drawn here, not by the native track: a fat capsule with one stop
    dot per level, the fill ending exactly under the thumb's centre. */
-.panel-effort-track { position: absolute; left: 0; right: 0; top: 50%; height: 14px; transform: translateY(-50%); border-radius: 999px; background: rgba(190, 212, 255, .16); overflow: hidden; pointer-events: none; }
+.panel-effort-track { position: absolute; left: 0; right: 0; top: 50%; height: 18px; transform: translateY(-50%); border-radius: 999px; background: rgba(190, 212, 255, .16); overflow: hidden; pointer-events: none; }
 .panel-effort-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; background: #6fb4ff; }
-.panel-effort-tick { position: absolute; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px; border-radius: 50%; background: rgba(196, 214, 244, .45); }
+.panel-effort-tick { position: absolute; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: rgba(196, 214, 244, .45); }
 .panel-effort-tick.is-past { background: rgba(255, 255, 255, .92); }
 /* The slider rides on top with an invisible native track; the negative margin
    lets the white thumb's centre reach both capsule ends exactly. */
-.panel-effort-slider { position: relative; z-index: 1; flex: none; width: calc(100% + 22px); height: 22px; margin: 0 -11px; -webkit-appearance: none; appearance: none; background: transparent; }
-.panel-effort-slider::-webkit-slider-runnable-track { height: 14px; border: 0; background: transparent; }
-.panel-effort-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 22px; height: 22px; margin-top: -4px; border: 1px solid rgba(255, 255, 255, .92); border-radius: 50%; background: #fff; box-shadow: 0 2px 8px rgba(4, 12, 33, .55); }
+.panel-effort-slider { position: relative; z-index: 1; flex: none; width: calc(100% + 24px); height: 24px; margin: 0 -12px; -webkit-appearance: none; appearance: none; background: transparent; }
+.panel-effort-slider::-webkit-slider-runnable-track { height: 18px; border: 0; background: transparent; }
+.panel-effort-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 24px; height: 24px; margin-top: -3px; border: 1px solid rgba(255, 255, 255, .92); border-radius: 50%; background: #fff; box-shadow: 0 2px 8px rgba(4, 12, 33, .55); }
 .panel-effort-slider:focus-visible { outline: none; }
 .panel-effort-slider:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px rgba(120, 180, 255, .5), 0 2px 8px rgba(4, 12, 33, .55); }
 .panel-effort-slider:disabled { opacity: .45; }

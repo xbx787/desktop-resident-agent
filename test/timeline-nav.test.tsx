@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { NAV_RESTING, NAV_STEP, navBoost, navCardOffset, navMarks, navPreview, navRowAt, navTrackHeight, navWheelStep, navWindow, TimelineNav } from '../src/renderer/timeline-nav'
+import { NAV_RESTING, NAV_STEP, NAV_WINDOW_COMPACT, NAV_WINDOW_WIDE, navBoost, navCardOffset, navMarks, navPreview, navRowAt, navTrackHeight, navWheelStep, navWindow, TimelineNav } from '../src/renderer/timeline-nav'
 import { groupTimeline } from '../src/renderer/timeline-groups'
 import type { TimelineEntry } from '../src/shared/contracts'
 
@@ -28,10 +28,17 @@ describe('navMarks', () => {
 
 describe('navWindow', () => {
   it('slides a fixed-size window clamped to the ends', () => {
-    expect(navWindow(10, 0)).toEqual({ from: 0, to: 10 })
-    expect(navWindow(80, 0)).toEqual({ from: 0, to: 60 })
-    expect(navWindow(80, 5)).toEqual({ from: 5, to: 65 })
-    expect(navWindow(80, 99)).toEqual({ from: 20, to: 80 })
+    expect(navWindow(10, 0, NAV_WINDOW_WIDE)).toEqual({ from: 0, to: 10 })
+    expect(navWindow(80, 0, NAV_WINDOW_WIDE)).toEqual({ from: 0, to: 60 })
+    expect(navWindow(80, 5, NAV_WINDOW_WIDE)).toEqual({ from: 5, to: 65 })
+    expect(navWindow(80, 99, NAV_WINDOW_WIDE)).toEqual({ from: 20, to: 80 })
+  })
+
+  it('shows the compact twenty in the small bubble', () => {
+    expect(NAV_WINDOW_COMPACT).toBe(20)
+    expect(navWindow(40, 0, NAV_WINDOW_COMPACT)).toEqual({ from: 0, to: 20 })
+    expect(navWindow(40, 99, NAV_WINDOW_COMPACT)).toEqual({ from: 20, to: 40 })
+    expect(navWindow(12, 0, NAV_WINDOW_COMPACT)).toEqual({ from: 0, to: 12 })
   })
 })
 
@@ -101,6 +108,13 @@ describe('TimelineNav', () => {
 
   it('stays hidden below five messages', () => {
     expect(renderToStaticMarkup(<TimelineNav marks={marks(4)} onJump={() => {}} />)).toBe('')
+  })
+
+  it('paints the user\'s marks with the brighter tone', () => {
+    const html = renderToStaticMarkup(<TimelineNav marks={marks(40)} onJump={() => {}} />)
+    // The CSS rule always existed; the class used to be missing from the
+    // render, so the tone split never showed up in the app.
+    expect((html.match(/panel-nav-mark is-user/g) ?? []).length).toBe(NAV_RESTING)
   })
 
   it('rests as a short handle of the newest marks, with no card until hovered', () => {

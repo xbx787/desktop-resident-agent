@@ -10,6 +10,11 @@ import type { EffortLevel } from '../shared/contracts'
  * so a slow round trip can never yank the thumb mid-drag, and an unsaved
  * draft just dies with the menu it lives in.
  */
+/** How far the end stops' ticks sit from the track's rounded ends: clear of
+ *  the knob at a stop (so both edge ticks stay visible even when the knob
+ *  rests on them), yet close enough to read as "the edge stop". */
+const TICK_INSET = 18
+
 export function EffortSlider({ value, disabled = false, onCommit }: {
   value: EffortLevel
   disabled?: boolean
@@ -40,8 +45,9 @@ export function EffortSlider({ value, disabled = false, onCommit }: {
     <div className="panel-effort-slider-wrap">
       <span className="panel-effort-track" aria-hidden="true">
         <span className="panel-effort-fill" style={{ width: `${percent}%` }} />
-        {EFFORT_LEVELS.map((level, tick) => tick === 0 || tick === EFFORT_LEVELS.length - 1 ? null
-          : <i key={level} className={`panel-effort-tick${tick <= index ? ' is-past' : ''}`} style={{ left: `${(tick / (EFFORT_LEVELS.length - 1)) * 100}%` }} />)}
+        {EFFORT_LEVELS.map((level, tick) => <i key={level}
+          className={`panel-effort-tick${tick <= index ? ' is-past' : ''}`}
+          style={{ left: `calc(${TICK_INSET}px + (100% - ${2 * TICK_INSET}px) * ${(tick / (EFFORT_LEVELS.length - 1)).toFixed(4)})` }} />)}
       </span>
       <input ref={inputRef} type="range" className="panel-effort-slider" min={0} max={EFFORT_LEVELS.length - 1} step={1}
         value={index} disabled={disabled}
