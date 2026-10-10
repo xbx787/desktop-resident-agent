@@ -1,8 +1,8 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { TimelineEntry } from '../src/shared/contracts'
-import { segmentTurn } from '../src/renderer/timeline-groups'
-import { WorkCluster, workFacts, workFactsText } from '../src/renderer/work-cluster'
+import { segmentTurn, splitTurnTail } from '../src/renderer/timeline-groups'
+import { TurnProcess, WorkCluster, workFacts, workFactsText } from '../src/renderer/work-cluster'
 
 const start = Date.parse('2026-10-09T00:00:00.000Z')
 const at = (offsetSeconds: number) => new Date(start + offsetSeconds * 1000).toISOString()
@@ -72,5 +72,47 @@ describe('WorkCluster', () => {
     const html = render(<WorkCluster items={items} running renderEntry={entry} />)
     expect(html).toMatch(/<details[^>]*\sopen/)
     expect(html).toContain('is-running')
+  })
+})
+
+describe('splitTurnTail', () => {
+  it('keeps the final sentence out and folds everything before it', () => {
+    const items = [thought('t1', 0, 12), tool('x1', 'Bash', 12), note, tool('x3', 'Task', 40)]
+    const { head, tail } = splitTurnTail(segmentTurn(items), false)
+    expect(head.map((segment) => segment.kind)).toEqual(['work'])
+    expect(tail.map((segment) => segment.kind)).toEqual(['note', 'work'])
+  })
+
+  it('folds nothing while the turn is live, or when no sentence could end it', () => {
+    const live = segmentTurn([thought('t1', 0, 12), note])
+    expect(splitTurnTail(live, true).tail).toBe(live)
+
+    const noNote = segmentTurn([thought('t1', 0, 12), tool('x1', 'Bash', 12)])
+    expect(splitTurnTail(noNote, false).tail).toBe(noNote)
+
+    const onlyNote = segmentTurn([note])
+    expect(splitTurnTail(onlyNote, false).tail).toBe(onlyNote)
+  })
+})
+
+describe('TurnProcess', () => {
+  const render = (node: React.ReactElement) => renderToStaticMarkup(node)
+  const entry = (_entry: TimelineEntry) => <span />
+  const midNote: TimelineEntry = { id: 'a2', kind: 'assistant', text: '先改这里。', time: at(30) }
+
+  it('folds clusters and mid-turn sentences into one closed row that still holds the process', () => {
+    const segments = segmentTurn([thought('t1', 0, 12), tool('x1', 'Bash', 12), midNote, thought('t2', 40, 52)])
+    const html = render(<TurnProcess segments={segments} renderEntry={entry}
+      renderNote={(item) => <p className="note-row">{item.text}</p>} />)
+    expect(html).toContain('is-turn-process')
+    // Closed by default — the reader sees the outcome, not the process.
+    expect(html).not.toMatch(/<details[^>]*\sopen/)
+    // The row states the whole stretch, alive and visible.
+    expect(html).toContain('<span>用时 00:52</span>')
+    expect(html).toContain('title="思考 24 秒，1 项操作，执行命令 ×1，用时 00:52"')
+    // Opening it lays the same pieces back out: the work cluster and the note.
+    expect(html).toContain('panel-cluster-summary')
+    expect(html).toContain('note-row')
+    expect(html).toContain('先改这里。')
   })
 })

@@ -2,7 +2,7 @@ import { Fragment, memo, useEffect, useState, type ReactNode } from 'react'
 import type { TimelineEntry } from '../shared/contracts'
 import { toolLabel } from '../shared/tool-labels'
 import { thinkingDurationText, thinkingElapsedSeconds } from './thinking-item'
-import { sameTimelineEntry } from './timeline-groups'
+import { sameTimelineEntry, type TurnSegment } from './timeline-groups'
 
 export interface WorkFacts {
   steps: number
@@ -102,3 +102,44 @@ export const WorkCluster = memo(function WorkCluster({ items, running, renderEnt
   </details>
 }, (prev, next) => prev.running === next.running && prev.renderEntry === next.renderEntry &&
   prev.items.length === next.items.length && prev.items.every((entry, index) => sameTimelineEntry(entry, next.items[index])))
+
+function sameSegment(a: TurnSegment, b: TurnSegment): boolean {
+  if (a.kind !== b.kind) return false
+  if (a.kind === 'note' && b.kind === 'note') return sameTimelineEntry(a.entry, b.entry)
+  if (a.kind === 'work' && b.kind === 'work') {
+    return a.items.length === b.items.length && a.items.every((entry, index) => sameTimelineEntry(entry, b.items[index]))
+  }
+  return false
+}
+
+/**
+ * A finished turn folded whole: every work cluster and progress sentence
+ * before the turn's final answer collapses into one row, so what stays in
+ * sight is the outcome. Clicking the header lays the process back out — the
+ * same clusters and sentences, not a different view of them.
+ */
+export const TurnProcess = memo(function TurnProcess({ segments, renderEntry, renderNote }: {
+  segments: TurnSegment[]
+  renderEntry: (entry: TimelineEntry, running: boolean) => ReactNode
+  renderNote: (entry: TimelineEntry) => ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  const items = segments.flatMap((segment) => segment.kind === 'work' ? segment.items : [segment.entry])
+  // A finished stretch: every span is closed, so the clock never reads nowMs.
+  const facts = workFacts(items, 0, false)
+  const parts = workFactsParts(facts)
+  const fullText = workFactsText(facts)
+  return <details className="panel-cluster is-turn-process" open={open}
+    onToggle={(event) => setOpen(event.currentTarget.open)}>
+    <summary className="panel-cluster-summary" title={fullText} aria-label={`过程：${fullText || '工作记录'}，单击${open ? '收起' : '展开'}`}>
+      <Chevron />
+      {parts.length > 0 && <span className="panel-cluster-facts">{parts.map((part) => <span key={part}>{part}</span>)}</span>}
+      <span className="panel-cluster-state" aria-hidden="true">✓</span>
+    </summary>
+    <div className="panel-cluster-body">{segments.map((segment) => segment.kind === 'note'
+      ? <Fragment key={segment.entry.id}>{renderNote(segment.entry)}</Fragment>
+      : <WorkCluster key={segment.id} items={segment.items} running={false} renderEntry={renderEntry} />)}
+    </div>
+  </details>
+}, (prev, next) => prev.renderEntry === next.renderEntry && prev.renderNote === next.renderNote &&
+  prev.segments.length === next.segments.length && prev.segments.every((segment, index) => sameSegment(segment, next.segments[index])))

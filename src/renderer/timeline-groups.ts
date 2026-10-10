@@ -92,3 +92,18 @@ export function segmentTurn(items: TimelineEntry[]): TurnSegment[] {
   flush()
   return segments
 }
+
+/**
+ * A finished turn shows only its final answer: everything before the last
+ * model sentence — work clusters and progress sentences alike — folds into
+ * one row. A live turn folds nothing, its process is the view. A turn with
+ * no sentence after its work keeps its clusters as they are.
+ */
+export function splitTurnTail(segments: TurnSegment[], live: boolean): { head: TurnSegment[]; tail: TurnSegment[] } {
+  if (live) return { head: [], tail: segments }
+  let lastNote = -1
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    if (segments[index].kind === 'note') { lastNote = index; break }
+  }
+  return lastNote > 0 ? { head: segments.slice(0, lastNote), tail: segments.slice(lastNote) } : { head: [], tail: segments }
+}

@@ -18,7 +18,7 @@ import { TaskStrip } from './task-strip';
 import { AskQuestionPanel } from './ask-question';
 import { PlanApprovalPanel } from './plan-approval';
 import { ThinkingItem } from './thinking-item';
-import { groupTimeline, sameTimelineEntry, segmentTurn, tailWindow } from './timeline-groups';
+import { groupTimeline, sameTimelineEntry, segmentTurn, splitTurnTail, tailWindow } from './timeline-groups';
 import { navMarks, TimelineNav } from './timeline-nav';
 import { ToolDiffBody } from './tool-diff-body';
 import { ToolIcon } from './tool-icons';
@@ -26,7 +26,7 @@ import { toolArgumentPreview, toolPlanText } from './tool-arguments';
 import { toolDiffPreview } from './tool-diff';
 import { TurnStats } from './turn-stats';
 import { WorkingIndicator } from './working-indicator';
-import { WorkCluster } from './work-cluster';
+import { TurnProcess, WorkCluster } from './work-cluster';
 import { petBridge } from './pet-state';
 import { VoiceManager } from './voice-manager';
 import './panel.css';
@@ -405,6 +405,12 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [rowDisplay.showTimestamps, rowDisplay.avatars.user, rowDisplay.avatars.assistant]
+  );
+  // The progress sentences inside a folded turn render the same way they do
+  // outside one — the same RunParagraph rows, from a ref-stable callback.
+  const renderNote = useCallback(
+    (entry: TimelineEntry) => <RunParagraph entry={entry} onOpenImage={openImageViewerRef.current} />,
+    []
   );
   const libraryRevision = library?.conversations.map((item) => `${item.id}:${item.title}:${item.archivedAt ?? ''}`).join('|') ?? '';
   const contextUsage = snapshot?.contextUsage;
@@ -1281,6 +1287,11 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
             {visibleGroups.map((group, index) => {
               if (group.kind === 'single') return <EntryItem key={group.entry.id} entry={group.entry} running={false} onOpenImage={openImageViewer} display={rowDisplay} />;
               const segments = segmentTurn(group.items);
+              const isLiveTurn = index === latestTurnIndex && active;
+              // A finished turn folds everything before its final sentence into
+              // one process row, so the outcome is what stays in sight; while
+              // the turn runs, nothing folds — its process is the view.
+              const { head, tail } = splitTurnTail(segments, isLiveTurn);
               // One reply is one box — avatar and clock once at its top, the
               // pieces listed beneath like an unordered list — so alignment is
               // structural, and none of the pieces become rail marks.
@@ -1295,12 +1306,13 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
                     {rowDisplay.showTimestamps && <time className="panel-event-time" dateTime={runAnchor.time}>{timeText(runAnchor.time)}</time>}
                   </div>
                   <div className="panel-event-body">
-                    {segments.map((segment, segmentIndex, all) => segment.kind === 'note'
+                    {head.length > 0 && <TurnProcess segments={head} renderEntry={renderEntry} renderNote={renderNote} />}
+                    {tail.map((segment, segmentIndex) => segment.kind === 'note'
                       ? <RunParagraph key={segment.entry.id} entry={segment.entry} onOpenImage={openImageViewer} />
                       : <WorkCluster
                           key={segment.id}
                           items={segment.items}
-                          running={index === latestTurnIndex && active && segmentIndex === all.length - 1}
+                          running={isLiveTurn && segmentIndex === tail.length - 1}
                           renderEntry={renderEntry}
                         />)}
                   </div>

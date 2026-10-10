@@ -53,7 +53,7 @@ npm.cmd run pack:release
 
 `pack:release` 依次执行类型检查、测试、构建、asar 校验，产出 `release/whale-companion-v<版本>` 并切换双快捷方式；目标目录已存在会停止（不能覆盖正在运行的版本）。
 
-**每版发布后**：更新 [CHANGELOG.md](./CHANGELOG.md)、`git tag v<版本>`、推送并在 GitHub 建 Release。**本地只保留「最新 + 正在运行」两个版本目录**——历史版本随时可由源码重建（`git checkout` 旧提交 + 打包）。`release/`、`data/`、`node_modules/` 均不入版本控制。
+**每版发布后**：更新 [CHANGELOG.md](./CHANGELOG.md)、`git tag v<版本>`、推送并在 GitHub 建 Release。**0.0.x 阶段，本地 release/ 只保留最新版本目录**（打包后顺手清理旧的；正在运行的版本因文件占用自然豁免）；**升到 v0.1.x 阶段后再议「全部保留」**。`release/`、`data/`、`node_modules/` 均不入版本控制。
 
 ## 当前边界
 
