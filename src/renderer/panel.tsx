@@ -1460,7 +1460,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
                     <div className="panel-popover-heading">模型</div>
                     <div className="panel-model-list" role="radiogroup" aria-label="选择模型配置">
                       {(library?.settings.modelProfiles ?? []).length === 0 &&
-                        <div className="panel-model-empty">还没有模型配置——到设置里添加</div>}
+                        <div className="panel-model-empty">还没有模型配置——<button type="button" className="panel-model-empty-link" onClick={() => { void run((bridge) => bridge.openOnboarding()); }}>打开配置向导</button></div>}
                       {(library?.settings.modelProfiles ?? []).map((profile) => (
                         <button key={profile.id} type="button" role="radio" aria-checked={profile.id === library?.settings.activeModelProfileId}
                           className={`panel-model-pick${profile.id === library?.settings.activeModelProfileId ? ' is-active' : ''}`}

@@ -166,6 +166,7 @@ export async function probeAnthropicEndpoint(profile: { baseUrl: string; apiKey:
       } catch { return raw ? raw.slice(0, 160) : '无返回内容' }
     })()
     if (response.status === 401 || response.status === 403) return { ok: false, message: `鉴权失败（${response.status}）：API Key 可能不正确。` }
+    if (response.status === 402) return { ok: false, message: '余额不足（402）：请到服务商平台充值后重试。' }
     if (response.status === 404) return { ok: false, message: `端点或模型不存在（404）：${detail}` }
     return { ok: false, message: `请求失败（${response.status}）：${detail}` }
   } catch (error) {

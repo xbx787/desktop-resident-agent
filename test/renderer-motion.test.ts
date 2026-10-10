@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest'
 const rendererDir = join(__dirname, '..', 'src', 'renderer')
 const read = (name: string): string => readFileSync(join(rendererDir, name), 'utf8')
 
-const CSS_FILES = ['panel.css', 'balance.css', 'avatar.css', 'settings.css', 'tab-context-menu.css']
+const CSS_FILES = ['panel.css', 'balance.css', 'avatar.css', 'settings.css', 'tab-context-menu.css', 'onboarding.css']
 
 /** name -> the property names declared inside that @keyframes block. */
 function keyframeProperties(css: string): Map<string, string[]> {

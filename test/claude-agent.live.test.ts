@@ -296,4 +296,38 @@ describe('Claude Agent SDK live tool access', () => {
       await fs.rm(probeDir, { recursive: true, force: true })
     }
   }, 100_000)
+
+  it.skipIf(!runLive)('keeps the TaskCreate tool available after a session resume', async () => {
+    const executable = findClaudeExecutable(process.env)
+    const apiKey = process.env.DEEPSEEK_API_KEY?.trim()
+    if (!executable || !apiKey) throw new Error('本机 Claude Code 或 DeepSeek Key 未就绪。')
+    const probeDir = path.join(process.cwd(), '.cache', 'tests', randomUUID())
+    const abort = new AbortController()
+    const timeout = setTimeout(() => abort.abort(), 120_000)
+    let client: ClaudeAgentClient | undefined
+    try {
+      await fs.mkdir(probeDir, { recursive: true })
+      client = new ClaudeAgentClient(executable, apiKey, process.cwd(), path.join(probeDir, 'claude'))
+      const first = await client.respond([{ role: 'user', content: '只回答 OK。' }], abort.signal)
+      expect(first.sdkSessionId).toBeTruthy()
+      // The app's everyday path: a saved session comes back through --resume.
+      // The todo/task tools must survive that trip, not just a fresh start.
+      const tools: string[] = []
+      await client.respond(
+        [
+          { role: 'user', content: '只回答 OK。' },
+          { role: 'assistant', content: first.text },
+          { role: 'user', content: '请调用 TaskCreate 工具创建一个主题为「续潮测试」的新任务，然后只回答 OK。' }
+        ],
+        abort.signal, undefined, first.sdkSessionId,
+        (event) => { if (event.phase === 'start') tools.push(event.toolName) }
+      )
+      console.log(`[task-tools-resume] called=${tools.join(',') || '（无）'}`)
+      expect(tools).toContain('TaskCreate')
+    } finally {
+      clearTimeout(timeout)
+      await client?.dispose()
+      await fs.rm(probeDir, { recursive: true, force: true })
+    }
+  }, 140_000)
 })

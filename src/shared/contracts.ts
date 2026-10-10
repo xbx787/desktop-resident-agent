@@ -318,6 +318,8 @@ export interface PetAPI {
   readAvatar(kind: 'user' | 'assistant'): Promise<string | null>
   /** Brings the settings window to the front (model management lives there). */
   openSettings(): Promise<void>
+  /** Opens the first-run configuration wizard (DeepSeek setup). */
+  openOnboarding(): Promise<void>
   setAvatarState(state: AvatarState): Promise<void>
   getVoiceConfig(): Promise<VoiceConfig>
   transcribeAudio(request: { bytes: number[]; mimeType: string; apiKey: string; model?: string; baseUrl?: string }): Promise<{ text: string }>

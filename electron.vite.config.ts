@@ -8,7 +8,8 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/preload/index.ts'),
-          settings: resolve(__dirname, 'src/preload/settings.ts')
+          settings: resolve(__dirname, 'src/preload/settings.ts'),
+          onboarding: resolve(__dirname, 'src/preload/onboarding.ts')
         }
       }
     }
@@ -18,7 +19,8 @@ export default defineConfig({
       rollupOptions: {
         input: {
           avatar: resolve(__dirname, 'src/renderer/avatar.html'),
-          settings: resolve(__dirname, 'src/renderer/settings.html')
+          settings: resolve(__dirname, 'src/renderer/settings.html'),
+          onboarding: resolve(__dirname, 'src/renderer/onboarding.html')
         }
       }
     }

@@ -11,6 +11,8 @@ import { linkClaudeUserResources } from './claude-resource-links'
 import { CLAUDE_BASE_URL, DEFAULT_CLAUDE_MODEL, findClaudeExecutable, probeAnthropicEndpoint } from './claude-code'
 import { seedClaudeMemory } from './claude-memory'
 import { computeStageBounds, STAGE_HEIGHT, STAGE_WIDTH } from './stage-bounds'
+import { deepSeekBaseUrl, deepSeekModel, deepSeekProfile, ONBOARDING_PAGES, readOnboardingMarker, shouldOfferOnboarding, writeOnboardingMarker, type OnboardingPage } from './onboarding'
+import { normalizeApiKey } from '../shared/onboarding'
 import { DeepSeekClient } from './deepseek'
 import { fetchDeepSeekBalance } from './deepseek-balance'
 import { transcribeAudio } from './asr-server'
@@ -43,6 +45,7 @@ if (process.platform === 'win32') app.setAppUserModelId('local.desktop.resident.
 let avatarWindow: BrowserWindow | undefined
 let balanceWindow: BrowserWindow | undefined
 let settingsWindow: BrowserWindow | undefined
+let onboardingWindow: BrowserWindow | undefined
 let balanceWindowReady = false
 let tray: Tray | undefined
 let contextMenu: Menu | undefined
@@ -354,6 +357,50 @@ function openSettings(): void {
   }
 }
 
+function createOnboardingWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    title: '小鲸 首次配置',
+    width: 560,
+    height: 620,
+    minWidth: 520,
+    minHeight: 560,
+    show: false,
+    backgroundColor: '#172d58',
+    autoHideMenuBar: true,
+    icon: app.isPackaged
+      ? path.join(process.resourcesPath, 'whale-tray-icon-pixel.ico')
+      : path.join(projectRoot, 'src', 'renderer', 'assets', 'whale-tray-icon-pixel.ico'),
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/onboarding.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  })
+  win.once('ready-to-show', () => { if (!win.isDestroyed()) win.show() })
+  win.on('closed', () => {
+    // Closing without finishing is an explicit "later": remember it so the
+    // wizard is not pushed again on every launch.
+    if (!readOnboardingMarker(dataRoot)) writeOnboardingMarker(dataRoot, 'skipped')
+    if (onboardingWindow === win) onboardingWindow = undefined
+  })
+  const base = process.env.ELECTRON_RENDERER_URL
+  if (base) void win.loadURL(`${base}/onboarding.html`)
+  else void win.loadFile(path.join(__dirname, '../renderer/onboarding.html'))
+  win.webContents.on('will-navigate', (event) => event.preventDefault())
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  return win
+}
+
+function openOnboarding(): void {
+  if (!onboardingWindow || onboardingWindow.isDestroyed()) onboardingWindow = createOnboardingWindow()
+  else {
+    if (onboardingWindow.isMinimized()) onboardingWindow.restore()
+    onboardingWindow.show()
+    onboardingWindow.focus()
+  }
+}
+
 function createTray(): void {
   const asset = app.isPackaged
     ? path.join(process.resourcesPath, 'whale-tray-icon-pixel-24.png')
@@ -361,6 +408,7 @@ function createTray(): void {
   const icon = nativeImage.createFromPath(asset)
   if (icon.isEmpty()) throw new Error(`通知区域图标资源不可用：${asset}`)
   contextMenu = Menu.buildFromTemplate([
+    { label: '配置向导', click: openOnboarding },
     { label: '选项', click: openSettings },
     { type: 'separator' },
     { label: '退出', click: () => app.quit() }
@@ -444,8 +492,13 @@ async function readAvatarDataUrl(kind: 'user' | 'assistant'): Promise<string | n
 
 function registerIpc(): void {
   const trusted = (event: Electron.IpcMainInvokeEvent): boolean => event.sender.id === avatarWindow?.webContents.id
+  // The settings window manages model profiles and avatars too — the data
+  // lives beside its own settings — so those channels accept either window.
+  // Everything else stays avatar-only on purpose.
+  const modelTrusted = (event: Electron.IpcMainInvokeEvent): boolean => trusted(event) || settingsTrusted(event)
   const balanceTrusted = (event: Electron.IpcMainInvokeEvent): boolean => event.sender.id === balanceWindow?.webContents.id
   const settingsTrusted = (event: Electron.IpcMainInvokeEvent): boolean => event.sender.id === settingsWindow?.webContents.id
+  const onboardingTrusted = (event: Electron.IpcMainInvokeEvent): boolean => event.sender.id === onboardingWindow?.webContents.id
   ipcMain.handle('pet:settings:get', async (event) => {
     if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
     return (await activeController().getLibraryState()).settings
@@ -617,12 +670,12 @@ function registerIpc(): void {
     return activeController().interruptTurn()
   })
   ipcMain.handle('pet:save-model-profile', (event, profile: unknown) => {
-    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (!modelTrusted(event)) throw new Error('无效的界面请求。')
     if (!isModelProfile(profile)) throw new Error('模型配置格式无效。')
     return activeController().saveModelProfile(profile)
   })
   ipcMain.handle('pet:delete-model-profile', (event, id: unknown) => {
-    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (!modelTrusted(event)) throw new Error('无效的界面请求。')
     if (typeof id !== 'string') throw new Error('模型配置编号无效。')
     return activeController().deleteModelProfile(id)
   })
@@ -632,7 +685,7 @@ function registerIpc(): void {
     return activeController().setModelProfile(id)
   })
   ipcMain.handle('pet:test-model-profile', (event, profile: unknown) => {
-    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (!modelTrusted(event)) throw new Error('无效的界面请求。')
     if (!isModelProfile(profile)) throw new Error('模型配置格式无效。')
     return probeAnthropicEndpoint(profile)
   })
@@ -652,7 +705,7 @@ function registerIpc(): void {
     return activeController().updateSettings({ userName, assistantName })
   })
   ipcMain.handle('pet:set-avatar', async (event, kind: unknown, bytes: unknown) => {
-    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (!modelTrusted(event)) throw new Error('无效的界面请求。')
     if (kind !== 'user' && kind !== 'assistant') throw new Error('头像类型无效。')
     if (!Array.isArray(bytes) || !bytes.every((item) => Number.isInteger(item) && item >= 0 && item <= 255)) {
       throw new Error('头像数据无效。')
@@ -660,11 +713,46 @@ function registerIpc(): void {
     await storeAvatar(kind, bytes as number[])
   })
   ipcMain.handle('pet:read-avatar', (event, kind: unknown) => {
-    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (!modelTrusted(event)) throw new Error('无效的界面请求。')
     if (kind !== 'user' && kind !== 'assistant') throw new Error('头像类型无效。')
     return readAvatarDataUrl(kind)
   })
   ipcMain.handle('pet:open-settings', (event) => { if (trusted(event)) openSettings() })
+  ipcMain.handle('pet:open-onboarding', (event) => { if (trusted(event)) openOnboarding() })
+  // The onboarding wizard's narrow channels: one DeepSeek key, one save, the
+  // fixed guide pages, and the outcome marker. Keys travel one way only.
+  ipcMain.handle('pet:onboarding:test', async (event, apiKey: unknown, model: unknown) => {
+    if (!onboardingTrusted(event)) throw new Error('无效的界面请求。')
+    const key = typeof apiKey === 'string' ? normalizeApiKey(apiKey) : ''
+    const chosen = deepSeekModel(model)
+    if (!key || key.length > 512 || !chosen) throw new Error('API Key 无效。')
+    return probeAnthropicEndpoint(deepSeekProfile(key, chosen))
+  })
+  ipcMain.handle('pet:onboarding:save', async (event, apiKey: unknown, model: unknown) => {
+    if (!onboardingTrusted(event)) throw new Error('无效的界面请求。')
+    const key = typeof apiKey === 'string' ? normalizeApiKey(apiKey) : ''
+    const chosen = deepSeekModel(model)
+    if (!key || key.length > 512 || !chosen) throw new Error('API Key 无效。')
+    const controller = activeController()
+    const settings = (await controller.getLibraryState()).settings
+    // Re-running the wizard updates the existing DeepSeek profile instead of
+    // stacking a duplicate: match on the shared base URL.
+    const existing = settings.modelProfiles.find((profile) => profile.baseUrl === deepSeekBaseUrl())
+    const profile = deepSeekProfile(key, chosen, existing?.id)
+    await controller.saveModelProfile(profile)
+    if (settings.activeModelProfileId !== profile.id) await controller.setModelProfile(profile.id)
+    writeOnboardingMarker(dataRoot, 'completed')
+  })
+  ipcMain.handle('pet:onboarding:open', (event, page: unknown) => {
+    if (!onboardingTrusted(event)) throw new Error('无效的界面请求。')
+    if (typeof page !== 'string' || !(page in ONBOARDING_PAGES)) throw new Error('页面无效。')
+    void shell.openExternal(ONBOARDING_PAGES[page as OnboardingPage])
+  })
+  ipcMain.handle('pet:onboarding:finish', (event, outcome: unknown) => {
+    if (!onboardingTrusted(event)) throw new Error('无效的界面请求。')
+    if (outcome !== 'completed' && outcome !== 'skipped') throw new Error('状态无效。')
+    writeOnboardingMarker(dataRoot, outcome)
+  })
   ipcMain.handle('pet:show-panel', (event) => { if (trusted(event)) showPanel() })
   ipcMain.handle('pet:hide-panel', (event) => { if (trusted(event)) hidePanel() })
   ipcMain.handle('pet:get-panel-open', (event) => { if (!trusted(event)) throw new Error('无效的界面请求。'); return panelOpen })
@@ -816,6 +904,13 @@ if (ownsSingleInstance) void app.whenReady().then(async () => {
   registerIpc()
   avatarWindow = createAvatarWindow()
   createTray()
+
+  // First run with no model configured: let the pet appear first, then offer
+  // the DeepSeek wizard. The marker file makes "later" a decision we remember.
+  const onboardProfiles = (await activeController().getLibraryState()).settings.modelProfiles
+  if (shouldOfferOnboarding(readOnboardingMarker(dataRoot), onboardProfiles.length)) {
+    setTimeout(openOnboarding, 1000)
+  }
 
   // 自检模式：node/electron --self-test-asr 用测试音频调用 transcribeAudio
   if (process.argv.includes('--self-test-asr')) {

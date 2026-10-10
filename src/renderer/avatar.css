@@ -35,5 +35,14 @@ body.avatar-window { -webkit-user-select: none; user-select: none; }
 .avatar-stage.is-speaking .avatar-artwork { filter: drop-shadow(0 0 10px rgba(120, 200, 255, .55)); transform: scale(1.02); }
 .avatar-stage.is-listening .avatar-artwork { filter: drop-shadow(0 0 10px rgba(255, 120, 140, .55)); transform: scale(1.02); }
 
+/* Press feedback: while held, the button sinks a couple of pixels and springs
+   back on release (the click bounce in avatar-motion.ts picks it up there).
+   Transform only — the window shape clips anything wider — and skipped
+   entirely when the system asks for reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .avatar-hit-target { transition: transform .1s ease-out; }
+  .avatar-hit-target:active { transform: translateY(2px) scale(1, .985); }
+}
+
 body.balance-window .balance-peek { top: 0; left: 0; bottom: auto; }
 body.balance-window .balance-peek::after { top: calc(50% - 6.5px); right: -5px; bottom: auto; border-right: 1px solid rgba(184, 209, 255, .28); border-top: 1px solid rgba(184, 209, 255, .28); border-bottom: 0; }

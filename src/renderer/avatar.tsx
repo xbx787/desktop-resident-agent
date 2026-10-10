@@ -5,6 +5,7 @@ import { WhalePortrait } from './WhalePortrait';
 import { BalanceCard } from './balance';
 import { PanelBubble } from './panel';
 import { petBridge, usePetState } from './pet-state';
+import { playClickBounce } from './avatar-motion';
 import './avatar.css';
 
 interface PointerSession {
@@ -153,6 +154,9 @@ function Avatar() {
     }
     queueDrag((bridge) => bridge.endDrag());
     if (!moved && !cancelled) {
+      // The poke plays straight from the pointer turn — queued IPC would make
+      // the feedback wait behind the drag chain.
+      playClickBounce(event.currentTarget);
       queueDrag((bridge) => panelOpen ? bridge.hidePanel() : bridge.showPanel());
     }
   }
@@ -182,6 +186,7 @@ function Avatar() {
         onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
+            playClickBounce(event.currentTarget);
             void run((bridge) => panelOpen ? bridge.hidePanel() : bridge.showPanel());
           }
         }}

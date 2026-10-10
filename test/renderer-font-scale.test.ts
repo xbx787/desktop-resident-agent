@@ -17,7 +17,8 @@ const WINDOWS: Array<{ css: string; allowed: string[]; root: RegExp }> = [
   { css: 'settings.css', allowed: ['10px', '11px', '13px', '16px'], root: /:root \{([^}]*)\}/ },
   { css: 'balance.css', allowed: ['10px', '11px', '13px', '16px', '27px'], root: /\.balance-peek \{([^}]*)\}/ },
   { css: 'tab-context-menu.css', allowed: ['11px'], root: /\.tab-context-menu \{([^}]*)\}/ },
-  { css: 'avatar.css', allowed: ['11px'], root: /html, body, #root \{([^}]*)\}/ }
+  { css: 'avatar.css', allowed: ['11px'], root: /html, body, #root \{([^}]*)\}/ },
+  { css: 'onboarding.css', allowed: ['10px', '11px', '13px', '16px'], root: /\.onboarding-window \{([^}]*)\}/ }
 ]
 
 /** Buttons whose size a plain class declaration cannot win: `.panel-bubble

@@ -42,6 +42,7 @@ const api: PetAPI = {
   setAvatar: (kind, bytes) => ipcRenderer.invoke('pet:set-avatar', kind, bytes),
   readAvatar: (kind) => ipcRenderer.invoke('pet:read-avatar', kind),
   openSettings: () => ipcRenderer.invoke('pet:open-settings'),
+  openOnboarding: () => ipcRenderer.invoke('pet:open-onboarding'),
   interruptTurn: () => ipcRenderer.invoke('pet:interrupt-turn'),
   showPanel: () => ipcRenderer.invoke('pet:show-panel'),
   hidePanel: () => ipcRenderer.invoke('pet:hide-panel'),

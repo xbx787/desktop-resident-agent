@@ -77,7 +77,17 @@ export function TimelineNav({ marks, onJump }: { marks: NavMark[]; onJump: (id: 
       // The wheel moves the rail's window, never the feed behind it.
       event.preventDefault();
       setActive(null);
-      setStart((current) => Math.max(0, Math.min(Math.max(0, marks.length - NAV_WINDOW), current + (event.deltaY > 0 ? 3 : -3))));
+      const direction = event.deltaY > 0 ? 1 : -1;
+      setStart((current) => Math.max(0, Math.min(Math.max(0, marks.length - NAV_WINDOW), current + direction * 3)));
+      // A short push-in so the wheel visibly rolls the rail. Compositor-only —
+      // one transform pass, no layout or paint — and skipped entirely when the
+      // system asks for reduced motion.
+      if (typeof node.animate === 'function' && !window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
+        node.animate(
+          [{ transform: `translateY(calc(-50% + ${direction * NAV_STEP}px))` }, { transform: 'translateY(-50%)' }],
+          { duration: 150, easing: 'ease-out' }
+        );
+      }
     };
     node.addEventListener('wheel', onWheel, { passive: false });
     return () => node.removeEventListener('wheel', onWheel);
