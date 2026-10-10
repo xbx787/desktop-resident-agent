@@ -266,4 +266,34 @@ describe('Claude Agent SDK live tool access', () => {
       await fs.rm(probeDir, { recursive: true, force: true })
     }
   }, 260_000)
+
+  it.skipIf(!runLive)('keeps the TaskCreate tool available on this provider', async () => {
+    const executable = findClaudeExecutable(process.env)
+    const apiKey = process.env.DEEPSEEK_API_KEY?.trim()
+    if (!executable || !apiKey) throw new Error('本机 Claude Code 或 DeepSeek Key 未就绪。')
+    const probeDir = path.join(process.cwd(), '.cache', 'tests', randomUUID())
+    const abort = new AbortController()
+    const timeout = setTimeout(() => abort.abort(), 90_000)
+    let client: ClaudeAgentClient | undefined
+    try {
+      await fs.mkdir(probeDir, { recursive: true })
+      client = new ClaudeAgentClient(executable, apiKey, process.cwd(), path.join(probeDir, 'claude'))
+      // Engine builds since 2.1.233 hide the todo/task tools on models they do
+      // not recognise; the client environment sets CLAUDE_CODE_ENABLE_TODO_TOOLS
+      // to keep them. A real call is the proof — without the tool, the model
+      // cannot make one.
+      const tools: string[] = []
+      await client.respond(
+        [{ role: 'user', content: '请调用 TaskCreate 工具创建一个主题为「潮汐测试」的新任务，然后只回答 OK。' }],
+        abort.signal, undefined, undefined,
+        (event) => { if (event.phase === 'start') tools.push(event.toolName) }
+      )
+      console.log(`[task-tools] called=${tools.join(',') || '（无）'}`)
+      expect(tools).toContain('TaskCreate')
+    } finally {
+      clearTimeout(timeout)
+      await client?.dispose()
+      await fs.rm(probeDir, { recursive: true, force: true })
+    }
+  }, 100_000)
 })

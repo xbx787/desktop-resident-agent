@@ -125,20 +125,25 @@
 .panel-voice-dot { width: 7px; height: 7px; border-radius: 50%; background: #9fbfff; }
 .panel-voice-dot.is-active { animation: voice-pulse 1s ease-in-out infinite; background: #ff6b6b; }
 
+/* Flex/grid boxes between the bubble and a message's text: none may take its
+   width from its content's min-content. One unbreakable run (a long code line,
+   a URL, a formula) would otherwise widen the whole message past the bubble,
+   and with the bubble's overflow visible the text paints outside it. */
+.panel-feed-wrap, .panel-feed, .panel-event-body, .panel-run-item, .panel-thought, .panel-cluster { min-width: 0; }
 .panel-feed-wrap { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 /* The message rail on the feed's left edge: at rest a column of short equal
    marks, one per message; hovering grows the nearest one and shows what that
    message says (the card scrolls when the text is long). Marks are evenly
-   spaced, so a shorter window simply packs them tighter, and an expanded
-   bubble gets a longer mark — the rail grows with the room it has. */
-.panel-nav { position: absolute; z-index: 5; left: 0; top: 50%; transform: translateY(-50%); display: grid; gap: 3px; width: 26px; height: 27px; padding: 6px 0; border-radius: 0 10px 10px 0; background: rgba(10, 22, 50, 0); cursor: pointer; transition: height .18s ease, background-color .16s ease; -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 6px, #000 calc(100% - 6px), transparent 100%); mask-image: linear-gradient(180deg, transparent 0, #000 6px, #000 calc(100% - 6px), transparent 100%); }
-.panel-nav.is-expanded { height: 279px; background: rgba(10, 22, 50, .32); }
-.panel-nav-mark { display: block; width: calc(var(--nav-base, 12px) + var(--nav-boost, 0px)); height: 3px; margin-left: 4px; border-radius: 1.5px; background: rgba(150, 178, 226, .35); transition: width .12s ease, background-color .12s ease; }
+   spaced, so a shorter window simply packs them tighter; the expanded bubble
+   gets a slightly longer resting mark. */
+.panel-nav { position: absolute; z-index: 5; left: 0; top: 50%; transform: translateY(-50%); display: grid; gap: 2.4px; width: 26px; height: 26.4px; padding: 6px 0; border-radius: 0 10px 10px 0; background: rgba(10, 22, 50, 0); cursor: pointer; transition: height .18s ease, background-color .16s ease; -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 6.4px, #000 calc(100% - 6.4px), transparent 100%); mask-image: linear-gradient(180deg, transparent 0, #000 6.4px, #000 calc(100% - 6.4px), transparent 100%); }
+.panel-nav.is-expanded { height: 345.6px; background: rgba(10, 22, 50, .32); }
+.panel-nav-mark { display: block; width: calc(var(--nav-base, 8.8px) + var(--nav-boost, 0px)); height: 3.2px; margin-left: 4px; border-radius: 1.6px; background: rgba(150, 178, 226, .35); transition: width .12s ease, background-color .12s ease; }
 /* The user's own lines read brighter, so the wheel visibly slides over
    something — a column of identical grey ticks gives no sense of motion. */
 .panel-nav-mark.is-user { background: rgba(196, 212, 240, .6); }
 .panel-nav-mark.is-active { background: #dbe7ff; }
-.panel-bubble.is-expanded .panel-nav { --nav-base: 16px; }
+.panel-bubble.is-expanded .panel-nav { --nav-base: 12px; }
 .panel-nav-card { position: absolute; z-index: 6; left: 28px; width: 206px; padding: 8px 10px 9px; border: 1px solid rgba(190, 212, 255, .30); border-radius: 12px; color: #dfe9ff; background: rgba(16, 31, 66, .97); box-shadow: 0 10px 26px rgba(4, 12, 33, .45); transform: translateY(-50%); }
 .panel-nav-role { display: block; margin-bottom: 3px; color: #8fa9d9; font-size: 9px; }
 .panel-nav-role.is-user { color: #e2c3a5; }
@@ -259,6 +264,10 @@
 .panel-event-user { display: flex; flex-direction: row-reverse; gap: 8px; width: fit-content; max-width: 88%; margin-left: auto; }
 .panel-event-user .panel-event-body { min-width: 0; padding: 6px 10px 7px; border: 1px solid rgba(190, 213, 253, .18); border-radius: 12px 4px 12px 12px; background: rgba(154, 185, 242, .12); }
 .panel-event-avatar { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+/* A thin thread from under the clock down to the end of the block: the pieces
+   below it (thoughts, tools, further paragraphs) hang off the avatar column
+   instead of floating loose. */
+.panel-event-avatar::after { content: ''; flex: 1; width: 1.6px; margin: 1px 0 2px; border-radius: 1px; background: linear-gradient(180deg, rgba(150, 178, 226, .32), rgba(150, 178, 226, .08)); }
 /* One reply is one box: the avatar and clock appear once at its top, and
    every further piece is a list-like paragraph. Its dot is a pseudo-element
    of the paragraph itself — alignment by construction, it cannot drift. */
@@ -569,9 +578,12 @@
 .panel-ask-submit:disabled { opacity: .55; }
 
 /* The floating quote/copy bar over a text selection in the feed: one capsule
-   holding both actions, split by a hairline — two loose pills read as clutter. */
-.panel-quote-bar { position: absolute; z-index: 9; transform: translateX(-50%); display: flex; align-items: stretch; overflow: hidden; border: 1px solid rgba(190, 213, 253, .32); border-radius: 999px; background: rgba(23, 43, 87, .97); box-shadow: 0 4px 14px rgba(4, 14, 39, .3); }
-.panel-quote-button { padding: 4px 14px; border: 0; color: #dbe8ff; background: transparent; font-family: inherit; font-size: 10px !important; }
+   holding both actions, split by a hairline — two loose pills read as clutter.
+   Width and wrapping are pinned: with `left` near the right edge a shrink-wrap
+   box used to squeeze into the sliver left of it and stack each label onto its
+   own line, turning the capsule into a ball. */
+.panel-quote-bar { position: absolute; z-index: 9; transform: translateX(-50%); display: flex; align-items: stretch; width: max-content; white-space: nowrap; overflow: hidden; border: 1px solid rgba(190, 213, 253, .32); border-radius: 999px; background: rgba(23, 43, 87, .97); box-shadow: 0 4px 14px rgba(4, 14, 39, .3); }
+.panel-quote-button { padding: 4px 10px; border: 0; color: #dbe8ff; background: transparent; font-family: inherit; font-size: 10px !important; }
 .panel-quote-button + .panel-quote-button { border-left: 1px solid rgba(190, 213, 253, .24); }
 .panel-quote-button:hover { background: rgba(41, 66, 122, .98); }
 

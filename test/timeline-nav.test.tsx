@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { NAV_RESTING, navBoost, navMarks, navPreview, navWindow, TimelineNav } from '../src/renderer/timeline-nav'
+import { NAV_RESTING, NAV_STEP, navBoost, navMarks, navPreview, navWindow, TimelineNav } from '../src/renderer/timeline-nav'
 import { groupTimeline } from '../src/renderer/timeline-groups'
 import type { TimelineEntry } from '../src/shared/contracts'
 
@@ -29,9 +29,9 @@ describe('navMarks', () => {
 describe('navWindow', () => {
   it('slides a fixed-size window clamped to the ends', () => {
     expect(navWindow(10, 0)).toEqual({ from: 0, to: 10 })
-    expect(navWindow(80, 0)).toEqual({ from: 0, to: 45 })
-    expect(navWindow(80, 20)).toEqual({ from: 20, to: 65 })
-    expect(navWindow(80, 99)).toEqual({ from: 35, to: 80 })
+    expect(navWindow(80, 0)).toEqual({ from: 0, to: 60 })
+    expect(navWindow(80, 5)).toEqual({ from: 5, to: 65 })
+    expect(navWindow(80, 99)).toEqual({ from: 20, to: 80 })
   })
 })
 
@@ -41,6 +41,12 @@ describe('navPreview', () => {
     const long = '长'.repeat(200)
     expect(navPreview(long)).toBe(`${'长'.repeat(120)}…`)
     expect(navPreview(long).length).toBe(121)
+  })
+})
+
+describe('NAV_STEP', () => {
+  it('lands on a whole physical pixel row under 125% display scaling', () => {
+    expect(NAV_STEP * 1.25).toBe(7)
   })
 })
 

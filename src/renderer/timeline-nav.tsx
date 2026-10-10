@@ -26,7 +26,14 @@ export function navMarks(groups: readonly TimelineGroup[]): NavMark[] {
 
 /** How many marks the expanded rail shows at once — the wheel slides this
  *  window across the whole conversation instead of stacking every mark. */
-export const NAV_WINDOW = 45;
+export const NAV_WINDOW = 60;
+/** Row pitch of the rail: a 3.2 px mark plus a 2.4 px gap. Both are multiples
+ *  of 0.8, so under 125% display scaling every row lands on a whole physical
+ *  pixel — mixed rounding used to make the rows look unevenly spaced. */
+export const NAV_STEP = 5.6;
+/** Half the expanded rail's span — how far from centre the hover card sits
+ *  when the first row is hovered. */
+const NAV_HALF_SPAN = ((NAV_WINDOW - 1) / 2) * NAV_STEP;
 /** The resting handle: just the newest few marks, short enough not to crowd
  *  the messages beside it. */
 export const NAV_RESTING = 3;
@@ -53,9 +60,9 @@ export function navBoost(distance: number): number {
 
 /**
  * The message rail: a short handle of the newest marks at rest; hovering
- * opens a window of about thirty marks that the wheel slides up and down the
- * whole conversation, and clicking a mark jumps to that message. The wheel is
- * captured while hovering so the feed behind never scrolls instead.
+ * opens a window of the newest sixty marks that the wheel slides up and down
+ * the whole conversation, and clicking a mark jumps to that message. The wheel
+ * is captured while hovering so the feed behind never scrolls instead.
  */
 export function TimelineNav({ marks, onJump }: { marks: NavMark[]; onJump: (id: string) => void }) {
   const [expanded, setExpanded] = useState(false);
@@ -103,7 +110,7 @@ export function TimelineNav({ marks, onJump }: { marks: NavMark[]; onJump: (id: 
     {current && <div
       className="panel-nav-card"
       role="tooltip"
-      style={{ top: `clamp(40px, calc(50% + ${(active ?? 0) * 6 - 132}px), calc(100% - 40px))` }}
+      style={{ top: `clamp(40px, calc(50% + ${(active ?? 0) * NAV_STEP - NAV_HALF_SPAN}px), calc(100% - 40px))` }}
     >
       <span className={`panel-nav-role${current.role === 'user' ? ' is-user' : ''}`}>{current.role === 'user' ? '你' : '小鲸'}</span>
       <p className="panel-nav-text">{navPreview(current.text) || '（图片消息）'}</p>

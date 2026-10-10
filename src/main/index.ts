@@ -10,6 +10,7 @@ import { ClaudeAgentClient } from './claude-agent'
 import { linkClaudeUserResources } from './claude-resource-links'
 import { CLAUDE_BASE_URL, DEFAULT_CLAUDE_MODEL, findClaudeExecutable, probeAnthropicEndpoint } from './claude-code'
 import { seedClaudeMemory } from './claude-memory'
+import { computeStageBounds, STAGE_HEIGHT, STAGE_WIDTH } from './stage-bounds'
 import { DeepSeekClient } from './deepseek'
 import { fetchDeepSeekBalance } from './deepseek-balance'
 import { transcribeAudio } from './asr-server'
@@ -56,7 +57,7 @@ let rendererAvatarState: import('../shared/contracts').AvatarState | undefined
 
 // Keep the avatar's window origin and width stable while its cards open/close.
 // The unused area stays transparent and outside the shaped hit regions.
-const stageSize = { width: 554, height: 560 }
+const stageSize = { width: STAGE_WIDTH, height: STAGE_HEIGHT }
 
 function avatarRegion(size: { width: number; height: number }): Electron.Rectangle {
   return { x: size.width - 168, y: size.height - 186, width: 160, height: 180 }
@@ -101,16 +102,13 @@ function syncStageBounds(): void {
   const win = avatarWindow
   if (!win || win.isDestroyed()) return
   const previous = win.getBounds()
-  const right = previous.x + previous.width
   const bottom = previous.y + previous.height
-  const work = screen.getDisplayNearestPoint({ x: right - 88, y: bottom - 96 }).workArea
-  const width = Math.min(work.width, stageSize.width)
-  const height = bubbleExpanded ? Math.min(work.height, Math.max(193, bottom - work.y)) : stageSize.height
-  if (previous.width === width && previous.height === height) return
+  const work = screen.getDisplayNearestPoint({ x: previous.x + previous.width - 88, y: bottom - 96 }).workArea
+  const next = computeStageBounds(previous, work, bubbleExpanded)
+  if (previous.x === next.x && previous.y === next.y && previous.width === next.width && previous.height === next.height) return
   if (shapeShrinkTimer) clearTimeout(shapeShrinkTimer)
   shapeShrinkTimer = undefined
-  const x = Math.max(work.x, Math.min(right - width, work.x + work.width - width))
-  win.setBounds({ x, y: bottom - height, width, height }, false)
+  win.setBounds(next, false)
   syncBalancePosition()
   applyPointerShape()
 }

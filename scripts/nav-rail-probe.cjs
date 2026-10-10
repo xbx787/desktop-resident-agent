@@ -47,6 +47,21 @@ app.whenReady().then(async () => {
   await win.loadFile(pagePath)
   win.showInactive()
   await new Promise((resolve) => setTimeout(resolve, 900))
+  // The layout numbers (CSS px) behind the rows: what the grid actually
+  // budgets for a mark and a gap before rasterization snaps them.
+  const layout = await win.webContents.executeJavaScript(`(() => {
+    const nav = document.querySelectorAll('.panel-nav')[1]
+    const marks = [...nav.querySelectorAll('.panel-nav-mark')]
+    const round = (value) => Math.round(value * 1000) / 1000
+    return {
+      dpr: window.devicePixelRatio,
+      gap: getComputedStyle(nav).gap,
+      markHeight: getComputedStyle(marks[0]).height,
+      tops: marks.slice(0, 6).map((mark) => round(mark.getBoundingClientRect().top)),
+      heights: marks.slice(0, 3).map((mark) => round(mark.getBoundingClientRect().height))
+    }
+  })()`)
+  console.log('layout:', JSON.stringify(layout))
   writeFileSync(SHOT, (await win.webContents.capturePage()).toPNG())
   console.log(`shot: ${SHOT}`)
   app.exit(0)

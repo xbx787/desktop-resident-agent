@@ -109,6 +109,10 @@ export function claudeEnvironment(env: NodeJS.ProcessEnv, options: ClaudeEnviron
   childEnv.CLAUDE_CODE_SUBAGENT_MODEL = smallModel
   childEnv.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB = '1'
   childEnv.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = '70'
+  // Engine builds since 2.1.233 hide the todo/task tools on model names they do
+  // not recognise — an Anthropic-compatible provider's model is one of those.
+  // The flag keeps TaskCreate/TaskUpdate/TaskList available there.
+  childEnv.CLAUDE_CODE_ENABLE_TODO_TOOLS = '1'
   // The documented marker for host applications: settings files must not
   // override the endpoint/key/model this host injects.
   childEnv.CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST = '1'
