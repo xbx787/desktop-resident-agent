@@ -647,6 +647,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     if (!workspace || !dock) return;
     const measure = () => setDrawerBottom(drawerBottomOffset(workspace.getBoundingClientRect().bottom, dock.getBoundingClientRect().top));
     measure();
+    if (typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(measure);
     observer.observe(workspace);
     observer.observe(dock);

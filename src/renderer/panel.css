@@ -347,7 +347,9 @@
 .panel-thought-time { color: #9fb7df; font-variant-numeric: tabular-nums; }
 .panel-thought-state { margin-left: auto; flex: none; color: #9bd8ad; font-size: 14px; line-height: 1; }
 .panel-thought-state.is-running { color: #f0c47b; animation: voice-pulse 1.2s ease-in-out infinite; }
-.panel-thought .panel-markdown { margin: 6px 0 8px; max-height: 240px; overflow: auto; font-size: 11px; line-height: 1.55; scrollbar-width: thin; }
+/* The opened thought body lines up under the "已思考" label — icon 14 px plus
+   the summary's 8 px gap — instead of hanging flush against the window edge. */
+.panel-thought .panel-markdown { margin: 6px 0 8px 22px; max-height: 240px; overflow: auto; font-size: 11px; line-height: 1.55; scrollbar-width: thin; }
 .panel-thought .panel-markdown, .panel-thought .panel-markdown p, .panel-thought .panel-markdown li { color: #a9bee4; }
 /* Indented so the counts start on the same line as the cluster's 思考 label
    (6px padding + 12px chevron + 8px gap); the pulse is pinned out of flow so it
@@ -474,6 +476,13 @@
    footer's dot: spine, dot and the summary's chevron share one column (12px —
    the chevron's centre), so the chain reads as a single sequence. */
 .panel-cluster-body::before { content: ""; position: absolute; left: 12px; top: -3px; bottom: -12px; width: 1px; background: rgba(150, 190, 255, .16); }
+/* The whole-process fold brackets the inner folds instead of nesting inside
+   them: it draws no guide line of its own — the inner clusters already carry
+   theirs. The body keeps a light 12 px indent (the old 22 px plus a second
+   line squeezed the process into a narrow column; flush to the edge read as
+   detached). */
+.panel-cluster.is-turn-process > .panel-cluster-body { padding-left: 12px; }
+.panel-cluster.is-turn-process > .panel-cluster-body::before { content: none; }
 .panel-cluster-body .panel-thought, .panel-cluster-body .panel-tool-activity { margin-left: 0; }
 /* Something is happening but nothing is streaming yet: say what, and for how long. */
 .panel-working { display: flex; align-items: center; gap: 9px; margin: 1px 0 15px; color: #9fb7df; font-size: 11px; }
