@@ -74,10 +74,13 @@ describe('renderer motion budget', () => {
     const css = read('panel.css')
     const label = ruleBody(css, '.panel-live-label') ?? ''
     expect(label).toContain('text-shadow')
-    expect(label).toContain('animation: panel-live-breath')
+    // The opacity breath was retired: the probe priced it at over half the
+    // remaining GPU cost across 80 live labels (2.2% → 1.0%) while being the
+    // ingredient nobody can see. The sweep bars are the whole motion now.
+    expect(label).not.toContain('animation')
     expect(label).not.toContain('will-change')
     const frames = keyframeProperties(css)
-    expect(frames.get('panel-live-breath')).toEqual(['opacity', 'opacity'])
+    expect(frames.has('panel-live-breath')).toBe(false)
     expect(frames.get('panel-live-sweep')).toEqual(['transform', 'transform', 'transform'])
   })
 })

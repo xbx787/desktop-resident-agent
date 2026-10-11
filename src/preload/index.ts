@@ -12,6 +12,7 @@ const api: PetAPI = {
   selectConversation: (id) => ipcRenderer.invoke('pet:select-conversation', id),
   renameConversation: (id, title) => ipcRenderer.invoke('pet:rename-conversation', id, title),
   setConversationPinned: (id, pinned) => ipcRenderer.invoke('pet:set-conversation-pinned', id, pinned),
+  setConversationTabOrder: (ids) => ipcRenderer.invoke('pet:set-tab-order', ids),
   archiveConversation: (id) => ipcRenderer.invoke('pet:archive-conversation', id),
   restoreConversation: (id) => ipcRenderer.invoke('pet:restore-conversation', id),
   deleteConversation: (id) => ipcRenderer.invoke('pet:delete-conversation', id),

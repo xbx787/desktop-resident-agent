@@ -103,7 +103,7 @@ describe('persistent conversation library', () => {
       visibleConversationTabs: 5, autoArchiveAfterDays: 0, effort: 'max',
       modelProfiles: [], activeModelProfileId: null, enableAutoTitleGeneration: true,
       showMessageTimestamps: true, userName: '主人', assistantName: '小鲸',
-      userAvatar: null, assistantAvatar: null
+      userAvatar: null, assistantAvatar: null, tabOrder: []
     })
     expect((await migrated.listConversations()).length).toBe(8)
     expect((await migrated.getConversation(created[0].id))?.pendingMessages[0].text).toBe('继续执行')

@@ -215,6 +215,7 @@
    the composer's top edge (inline `bottom`, measured live from the dock), so
    the input never ends up buried under the list. */
 .panel-library-drawer { position: absolute; z-index: 7; top: 0; left: 0; display: flex; flex-direction: column; width: min(280px, calc(100% - 56px)); min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid rgba(190, 212, 255, .26); border-radius: 0 14px 14px 0; background: linear-gradient(155deg, rgba(36, 61, 116, .99), rgba(14, 29, 65, .99)); box-shadow: 12px 0 30px rgba(4, 12, 33, .42); animation: panel-drawer-in .21s cubic-bezier(.22, .75, .25, 1) both; }
+.panel-library-drawer.is-closing { pointer-events: none; animation: panel-drawer-out .19s cubic-bezier(.55, 0, .85, .4) both; }
 .panel-library-header { display: flex; align-items: center; gap: 6px; flex: none; height: 43px; padding: 7px 9px 4px 11px; }
 .panel-library-header h2 { flex: 1; margin: 0; color: #f0f5ff; font-size: 13px; font-weight: 600; }
 .panel-library-header button { flex: none; border: 0; color: #d7e5ff; background: transparent; }
@@ -252,11 +253,13 @@
 .panel-library-error { flex: none; margin: 2px 12px 7px; color: #ffd2d6; font-size: 10px; line-height: 1.35; }
 .panel-quick-tabs { display: flex; align-items: end; gap: 3px; flex: 1; min-width: 0; height: 35px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .panel-quick-tabs::-webkit-scrollbar { display: none; }
-.panel-quick-tab { display: flex; align-items: center; justify-content: center; gap: 5px; flex: 1 0 70px; min-width: 0; max-width: 150px; height: 31px; padding: 0 8px; overflow: hidden; border: 1px solid transparent; border-bottom: 0; border-radius: 9px 9px 0 0; color: #aebfe0; background: rgba(155, 190, 252, .055); font-size: 11px !important; white-space: nowrap; }
+.panel-quick-tab { display: flex; align-items: center; justify-content: center; gap: 5px; flex: 1 1 70px; min-width: 0; max-width: 150px; height: 31px; padding: 0 8px; overflow: hidden; border: 1px solid transparent; border-bottom: 0; border-radius: 9px 9px 0 0; color: #aebfe0; background: rgba(155, 190, 252, .055); font-size: 11px !important; white-space: nowrap; touch-action: none; }
 .panel-quick-tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .panel-quick-tab:hover { color: #f3f7ff; background: rgba(185, 210, 255, .14); }
 .panel-quick-tab-new { flex: 0 0 31px; max-width: 31px; padding: 0; color: #b8cdf0; }
-.panel-quick-tab-new svg { width: 10px; height: 10px; }
+.panel-quick-tab-new svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.panel-quick-tabs.is-dragging, .panel-quick-tabs.is-dragging .panel-quick-tab { cursor: grabbing; }
+.panel-quick-tab.is-dragging { opacity: .55; }
 .panel-quick-tab.is-current { height: 34px; border-color: rgba(188, 212, 255, .21); color: #f3f7ff; background: rgba(185, 210, 255, .20); box-shadow: inset 0 2px #a9caff; }
 .panel-chat-header.is-numeric .panel-quick-tabs { align-items: center; height: 35px; }
 .panel-chat-header.is-numeric .panel-quick-tab { flex: none; width: 27px; height: 27px; padding: 0; border: 0; border-radius: 7px; background: transparent; font-variant-numeric: tabular-nums; }
@@ -392,12 +395,14 @@
    a glance. The sheen travels out and comes back instead of restarting at the
    left edge, so the motion reads as continuous rather than as a loop; one full
    round trip takes twice the one-way duration. Every moving part here runs on
-   the compositor — a static text-shadow glow breathing on opacity, and the two
-   light bars swept on transform — because animating the filter or the
-   background-position re-rasterized the title on every frame for the whole
-   turn (scripts/live-label-probe.cjs measures ~3x the renderer CPU and ~2x the
-   GPU for that old shape). Reduced-motion users get the plain highlighted
-   title instead. */
+   the compositor — the two light bars swept on transform — because animating
+   the filter or the background-position re-rasterized the title on every frame
+   for the whole turn (scripts/live-label-probe.cjs measures ~3x the renderer
+   CPU and ~2x the GPU for that old shape). The opacity breath that used to sit
+   on the title itself is gone: the probe priced it at more than half of the
+   remaining GPU cost (80 live labels: 2.2% → 1.0%) while being the least
+   visible ingredient. Reduced-motion users get the plain highlighted title
+   instead. */
 .panel-live-label {
   --panel-live-base: #6fd3ff;
   --panel-live-mid: #c9b8ff;
@@ -414,7 +419,6 @@
   font-weight: 700;
   letter-spacing: .02em;
   text-shadow: 0 0 7px rgba(111, 211, 255, .30);
-  animation: panel-live-breath 1.7s ease-in-out infinite;
 }
 /* A light bar gliding under the title, so the live row reads even at a glance.
    Both bars are three labels wide and travel only one label's width: the
@@ -430,7 +434,6 @@
    quiet header above them. */
 .panel-status .panel-live-label { --panel-live-base: #f7c778; background-image: none; -webkit-text-fill-color: var(--panel-live-base); text-shadow: none; animation: none; }
 .panel-status .panel-live-label::before, .panel-status .panel-live-label::after { display: none; }
-@keyframes panel-live-breath { 0%, 100% { opacity: .8; } 50% { opacity: 1; } }
 @keyframes panel-live-sweep { 0% { transform: translateX(-66.67%); } 50% { transform: translateX(0%); } 100% { transform: translateX(-66.67%); } }
 .panel-tool-activity { margin: 0 0 3px; padding: 0 5px 0 0; border: 1px solid transparent; border-radius: 7px; color: #cad8f5; background: rgba(7, 23, 56, .12); font-size: 11px; content-visibility: auto; contain-intrinsic-size: auto 26px; }
 .panel-tool-activity:hover, .panel-tool-activity[open] { border-color: rgba(185, 210, 255, .15); background: rgba(7, 23, 56, .24); }
@@ -657,6 +660,7 @@
 .panel-plan-approve:disabled, .panel-plan-revise:disabled { opacity: .55; }
 
 .panel-composer { position: relative; display: flex; flex: 1; flex-direction: column; gap: 5px; min-width: 0; min-height: 0; padding: 6px 8px 7px 10px; border: 1px solid rgba(190, 213, 253, .28); border-radius: 13px; background: rgba(9, 21, 53, .55); animation: composer-appear .16s cubic-bezier(.22, .75, .25, 1) both; }
+.panel-composer.is-closing { pointer-events: none; animation: composer-dismiss .15s cubic-bezier(.55, 0, .85, .4) both; }
 .panel-composer:focus-within { border-color: rgba(196, 219, 255, .58); }
 .panel-composer-collapse { position: absolute; z-index: 2; top: 5px; right: 5px; display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; border-radius: 7px; color: #b8c9e9; background: transparent; }
 .panel-composer-collapse:hover { color: #fff; background: rgba(169, 195, 246, .16); }
@@ -748,9 +752,11 @@
 .panel-effort-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; background: #6fb4ff; }
 .panel-effort-tick { position: absolute; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: rgba(196, 214, 244, .45); }
 .panel-effort-tick.is-past { background: rgba(255, 255, 255, .92); }
-/* The slider rides on top with an invisible native track; the negative margin
-   lets the white thumb's centre reach both capsule ends exactly. */
-.panel-effort-slider { position: relative; z-index: 1; flex: none; width: calc(100% + 24px); height: 24px; margin: 0 -12px; -webkit-appearance: none; appearance: none; background: transparent; }
+/* The slider rides on top with an invisible native track; the box is inset by
+   3 px (end-point inset 9 px minus the 24 px thumb's half-width) so the white
+   thumb's centre comes to rest exactly on the end-cap centres — the same spot
+   the end dots and the fill read from (stopOffsetCss). */
+.panel-effort-slider { position: relative; z-index: 1; flex: none; width: calc(100% + 6px); height: 24px; margin: 0 -3px; -webkit-appearance: none; appearance: none; background: transparent; }
 .panel-effort-slider::-webkit-slider-runnable-track { height: 18px; border: 0; background: transparent; }
 .panel-effort-slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 24px; height: 24px; margin-top: -3px; border: 1px solid rgba(255, 255, 255, .92); border-radius: 50%; background: #fff; box-shadow: 0 2px 8px rgba(4, 12, 33, .55); }
 .panel-effort-slider:focus-visible { outline: none; }
@@ -800,10 +806,12 @@
 @keyframes composer-appear { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes panel-scroll-appear { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes panel-drawer-in { from { transform: translateX(-100%); } }
+@keyframes panel-drawer-out { to { transform: translateX(-103%); } }
+@keyframes composer-dismiss { to { opacity: 0; transform: translateY(5px); } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes voice-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .55; transform: scale(.85); } }
 @media (prefers-reduced-motion: reduce) {
-  .panel-bubble:not([hidden]), .panel-library-drawer, .panel-composer, .panel-send-spinner, .panel-scroll-bottom, .panel-scroll-ring, .panel-thought-state.is-running, .panel-turn-stats-dot.is-running, .panel-working-dots i, .panel-cluster-state.is-running, .panel-attachment-preview { animation: none; }
+  .panel-bubble:not([hidden]), .panel-library-drawer, .panel-library-drawer.is-closing, .panel-composer, .panel-composer.is-closing, .panel-send-spinner, .panel-scroll-bottom, .panel-scroll-ring, .panel-thought-state.is-running, .panel-turn-stats-dot.is-running, .panel-working-dots i, .panel-cluster-state.is-running, .panel-attachment-preview { animation: none; }
   .panel-bubble, .panel-model-menu, .panel-context-tooltip, .panel-cluster-chevron, .panel-tasks-chevron, .panel-mode-switch, .panel-mode-switch::after { transition: none; }
   .panel-compose-trigger:hover { transform: none; }
   .panel-live-label { animation: none; text-shadow: none; background-image: none; -webkit-text-fill-color: var(--panel-live-base); }

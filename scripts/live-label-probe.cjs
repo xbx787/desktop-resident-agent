@@ -24,35 +24,22 @@ const page = `<!doctype html>
 body { margin: 0; background: linear-gradient(155deg, #26417d, #0c1b3e); }
 .stage { padding: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 5px 14px; }
 .cell { display: flex; align-items: center; gap: 10px; color: #c5d6fb; font: 11px 'Microsoft YaHei UI', sans-serif; }
-/* Variant B — the compositor-only recipe, layered over the current file so the
-   two run under identical conditions. */
-.variant-b .panel-live-label {
-  overflow: hidden;
-  will-change: auto;
-  filter: none;
-  text-shadow: 0 0 7px rgba(111, 211, 255, .75);
-  animation: b-breath 1.7s ease-in-out infinite;
-}
-.variant-b .panel-status .panel-live-label { text-shadow: 0 0 7px rgba(255, 214, 150, .85); }
-.variant-b .panel-live-label::before {
-  content: ''; position: absolute; left: 0; bottom: 0; width: 55%; height: 2px; border-radius: 2px;
-  background-image: linear-gradient(90deg, transparent, #fff, #c9b8ff, transparent);
-  animation: b-sweep 3.4s ease-in-out infinite;
-}
-.variant-b .panel-live-label::after {
-  content: ''; position: absolute; top: 0; bottom: 0; left: 0; right: auto; width: 55%; height: auto;
-  background: linear-gradient(100deg, transparent, rgba(255,255,255,.6), transparent);
-  animation: b-sweep 3.4s ease-in-out infinite;
-}
-@keyframes b-breath { 0%, 100% { opacity: .8; } 50% { opacity: 1; } }
-@keyframes b-sweep { 0% { transform: translateX(-110%); } 50% { transform: translateX(190%); } 100% { transform: translateX(-110%); } }
+/* Peel the current recipe apart one ingredient at a time to see which piece
+   owns the cost: b = no breathing, c = no glyph sheen (::after), d = none of
+   breath/sheen/shadow, e = fully static (baseline). */
+.variant-b .panel-live-label { animation: none; opacity: 1; }
+.variant-c .panel-live-label::after { display: none; }
+.variant-d .panel-live-label { animation: none; opacity: 1; text-shadow: none; }
+.variant-d .panel-live-label::after { display: none; }
+.variant-e .panel-live-label { animation: none; opacity: 1; text-shadow: none; }
+.variant-e .panel-live-label::before, .variant-e .panel-live-label::after { display: none; }
 </style></head>
 <body><div class="stage" id="stage"></div>
 <script>
 const items = ${ITEMS};
 const stage = document.getElementById('stage');
 window.__fill = (variant) => {
-  stage.className = 'stage' + (variant === 'b' ? ' variant-b' : '');
+  stage.className = 'stage' + (variant === 'a' ? '' : ' variant-' + variant);
   stage.innerHTML = '';
   for (let i = 0; i < items; i++) {
     const cell = document.createElement('div');
@@ -92,15 +79,21 @@ app.whenReady().then(async () => {
   win.showInactive()
   await sleep(800)
 
-  const a = await measurePhase(win, 'a', 8000)
-  writeFileSync(SHOT_A, a.shotted.toPNG())
-  const b = await measurePhase(win, 'b', 8000)
-  writeFileSync(SHOT_B, b.shotted.toPNG())
-
+  const LABELS = {
+    a: 'current       (breath + bottom bar + glyph sheen + shadow)',
+    b: 'no breath     (bars + sheen + shadow)',
+    c: 'no sheen      (breath + bottom bar + shadow)',
+    d: 'no breath/shadow (bottom bar only)',
+    e: 'fully static  (baseline)',
+  }
   const fmt = (u) => `renderer ${u.renderer.toFixed(1)}%  gpu ${u.gpu.toFixed(1)}%`
-  console.log(`current recipe     (animated filter + background-position): ${fmt(a.usage)}`)
-  console.log(`compositor recipe  (static text-shadow + opacity + transform): ${fmt(b.usage)}`)
-  console.log(`shot A (current):    ${SHOT_A}`)
-  console.log(`shot B (compositor): ${SHOT_B}`)
+  for (const variant of ['a', 'b', 'c', 'd', 'e']) {
+    const phase = await measurePhase(win, variant, 8000)
+    if (variant === 'a') writeFileSync(SHOT_A, phase.shotted.toPNG())
+    if (variant === 'd') writeFileSync(SHOT_B, phase.shotted.toPNG())
+    console.log(`${variant}  ${LABELS[variant]}: ${fmt(phase.usage)}`)
+  }
+  console.log(`shot A (current):  ${SHOT_A}`)
+  console.log(`shot D (trimmed):  ${SHOT_B}`)
   app.exit(0)
 })

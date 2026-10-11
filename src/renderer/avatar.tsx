@@ -8,7 +8,7 @@ import { petBridge, usePetState } from './pet-state';
 import { playClickBounce } from './avatar-motion';
 import { startIdleFidgets } from './avatar-idle';
 import { playPoseSwap, poseSrc, preloadPoses, startPoseClock } from './avatar-poses';
-import { FACE_HOLD_MS, stateFace } from './avatar-face';
+import { FACE_HOLD_MS, lastUserEntryId, SEND_FACE_HOLD_MS, stateFace } from './avatar-face';
 import { playAhogeFlick } from './avatar-ahoge';
 import './avatar.css';
 
@@ -47,6 +47,10 @@ function Avatar() {
   // A state face outranks the idle rotation; the clock below sits out.
   const faceActive = useRef(false);
   const faceHold = useRef<number | null>(null);
+  // A send's smile owns the face for a beat: the state effect stands clear
+  // until that window closes (it then re-reads the state and settles into
+  // whatever the turn wants — usually the focus).
+  const sendHold = useRef(false);
 
   useEffect(() => startIdleFidgets(portraitRef.current), []);
   useEffect(() => {
@@ -62,7 +66,10 @@ function Avatar() {
   // follow it (a voice broadcast flips avatarState again right after), while
   // a new turn cancels any lingering smile immediately.
   const avatarState = snapshot?.avatarState;
+  const avatarStateRef = useRef(avatarState);
+  avatarStateRef.current = avatarState;
   useEffect(() => {
+    if (sendHold.current) return;
     const face = stateFace(avatarState);
     if (face === 'focus') {
       if (faceHold.current !== null) {
@@ -92,6 +99,38 @@ function Avatar() {
       playPoseSwap(portraitRef.current, () => setFaceId(null));
     }
   }, [avatarState]);
+
+  // A message the user just sent gets a beat of its own — the "heard you"
+  // smile — before the turn's focus takes over. A first snapshot, an
+  // unchanged newest message, or a different conversation is not a send.
+  const lastUserRef = useRef<{ conversationId: string | undefined; entryId: string | null } | null>(null);
+  useEffect(() => {
+    const conversationId = snapshot?.conversationId;
+    const entryId = snapshot ? lastUserEntryId(snapshot.timeline) : null;
+    const previous = lastUserRef.current;
+    lastUserRef.current = { conversationId, entryId };
+    if (!previous || previous.conversationId !== conversationId || entryId === null || entryId === previous.entryId) return;
+    sendHold.current = true;
+    if (faceHold.current !== null) window.clearTimeout(faceHold.current);
+    faceActive.current = true;
+    playPoseSwap(portraitRef.current, () => setFaceId('smile'));
+    faceHold.current = window.setTimeout(() => {
+      faceHold.current = null;
+      sendHold.current = false;
+      const next = stateFace(avatarStateRef.current);
+      if (next === 'smile') {
+        // The reply landed inside the window — let that smile run its usual beat.
+        faceHold.current = window.setTimeout(() => {
+          faceHold.current = null;
+          faceActive.current = false;
+          playPoseSwap(portraitRef.current, () => setFaceId(null));
+        }, FACE_HOLD_MS);
+        return;
+      }
+      playPoseSwap(portraitRef.current, () => setFaceId(next));
+      if (next === null) faceActive.current = false;
+    }, SEND_FACE_HOLD_MS);
+  }, [snapshot?.conversationId, snapshot?.timeline]);
 
   useEffect(() => {
     let active = true;

@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type AnimationEvent, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import type { AppSnapshot, BubbleLayout, ClaudeWorkflowOption, ContextUsageSnapshot, ConversationSummary, EffortLevel, ModelMode, ModelProfile, PendingMessage, PetAPI, ProposedAction, TaskMetrics, TaskStatus, TimelineEntry, UserAttachment } from '../shared/contracts';
 import { isImageAttachmentName } from '../shared/image-preview';
 import { EFFORT_LABELS } from '../shared/effort';
@@ -15,7 +15,7 @@ import { GoalBanner } from './goal-banner';
 import { MessageMarkdown, writeClipboard } from './message-markdown';
 import { TabContextMenu } from './tab-context-menu';
 import { drawerBottomOffset } from './panel-drawer';
-import { quickTabLimit, showNewTabButton } from './panel-tabs';
+import { moveTab, orderConversationTabs, quickTabLimit, showNewTabButton } from './panel-tabs';
 import { TaskStrip } from './task-strip';
 import { AskQuestionPanel } from './ask-question';
 import { PlanApprovalPanel } from './plan-approval';
@@ -150,7 +150,7 @@ const RunParagraph = memo(function RunParagraph({ entry, onOpenImage }: { entry:
   return <div className="panel-run-item"><MessageBody entry={entry} onOpenImage={onOpenImage} /></div>;
 });
 
-const TimelineItem = memo(function TimelineItem({ entry, running = false, onOpenImage, display }: { entry: TimelineEntry; running?: boolean; onOpenImage?: (name: string, url: string) => void; display: RowDisplay }) {
+export const TimelineItem = memo(function TimelineItem({ entry, running = false, onOpenImage, display }: { entry: TimelineEntry; running?: boolean; onOpenImage?: (name: string, url: string) => void; display: RowDisplay }) {
   const timeLabel = timeText(entry.time);
   const toolPreview = entry.kind === 'tool' ? (entry.text.trim().split(/\r?\n/, 1)[0] || '工具活动') : '';
   const legacyToolDetail = entry.kind === 'tool' ? entry.text.trim().split(/\r?\n/).slice(1).join('\n').trim() : '';
@@ -161,16 +161,19 @@ const TimelineItem = memo(function TimelineItem({ entry, running = false, onOpen
     () => entry.kind === 'tool' ? toolDiffPreview(toolName, entry.tool?.input) : null,
     [entry.kind, toolName, entry.tool?.input]);
   // A tool that has been running past the minute mark can be killed from its
-  // own row; the tick stops the moment the switch appears.
+  // own row. One timeout for the remainder of that minute: the switch arrives
+  // exactly at the mark, and a row that remounts for any reason just schedules
+  // a fresh timeout for whatever is left — toggling the row can neither
+  // summon the switch early nor keep it away.
   const [killable, setKillable] = useState(false);
   useEffect(() => {
     if (entry.kind !== 'tool' || !running || entry.tool?.status !== 'running') { setKillable(false); return; }
     const started = Date.parse(entry.time);
     if (!Number.isFinite(started)) return;
-    const overdue = () => Date.now() - started >= KILL_AFTER_MS;
-    if (overdue()) { setKillable(true); return; }
-    const timer = window.setInterval(() => { if (overdue()) { setKillable(true); window.clearInterval(timer); } }, 1000);
-    return () => window.clearInterval(timer);
+    const remaining = KILL_AFTER_MS - (Date.now() - started);
+    if (remaining <= 0) { setKillable(true); return; }
+    const timer = window.setTimeout(() => setKillable(true), remaining);
+    return () => window.clearTimeout(timer);
   }, [entry.kind, entry.time, entry.tool?.status, running]);
   // The card body (diff preview, long output) mounts on first expand only.
   const [toolOpened, setToolOpened] = useState(false);
@@ -334,10 +337,41 @@ interface PanelBubbleProps {
   run: (action: (bridge: PetAPI) => Promise<void>) => Promise<boolean>;
 }
 
+/** Runs a box's exit animation. `closing` stays true from beginClose until the
+ *  element's own animationend or a backstop timer (a timer is all a
+ *  reduced-motion environment leaves us with, where the animation never
+ *  fires); the element stays mounted while it is true. */
+function useExitAnimation(durationMs: number) {
+  const [closing, setClosing] = useState(false);
+  const timer = useRef<number | undefined>(undefined);
+  const beginClose = useCallback(() => {
+    setClosing(true);
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setClosing(false), durationMs + 80);
+  }, [durationMs]);
+  const endClose = useCallback((event: AnimationEvent<HTMLElement>) => {
+    if (event.target === event.currentTarget) setClosing(false);
+  }, []);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  return { closing, beginClose, endClose };
+}
+
+/** Stable empty arrangement for the `?? []` fallback: a fresh array on every
+ *  render would defeat the memo comparisons downstream. */
+const EMPTY_TAB_ORDER: string[] = [];
+
 export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps) {
   const [expanded, setExpanded] = useState(false);
   const resizePending = useRef(false);
-  const [libraryOpen, setLibraryOpen] = useState(false);
+  const drawerExit = useExitAnimation(190);
+  const [libraryOpen, setLibraryOpenRaw] = useState(false);
+  // Closing plays the drawer's exit animation first: the raw setter flips the
+  // state, the wrapper starts the animation that keeps the drawer mounted
+  // until it has slid away.
+  function setLibraryOpen(open: boolean) {
+    if (!open) drawerExit.beginClose();
+    setLibraryOpenRaw(open);
+  }
   // The drawer's distance from the workspace's bottom edge — the composer
   // dock's height at this moment; live values arrive from the dock observer.
   const [drawerBottom, setDrawerBottom] = useState<number | null>(null);
@@ -360,7 +394,12 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const [suggestionFailed, setSuggestionFailed] = useState(false);
   const [dismissedSuggestion, setDismissedSuggestion] = useState<string | null>(null);
   const [busy, setBusy] = useState<'send' | 'approve' | 'reject' | 'stop' | null>(null);
-  const [composerOpen, setComposerOpen] = useState(false);
+  const composerExit = useExitAnimation(150);
+  const [composerOpen, setComposerOpenRaw] = useState(false);
+  function setComposerOpen(open: boolean) {
+    if (!open) composerExit.beginClose();
+    setComposerOpenRaw(open);
+  }
   // One-line fallback until fitEditorHeight measures the editor (13px * 1.45 line height + 4px padding).
   const [composerHeight, setComposerHeight] = useState(23);
   const [attachments, setAttachments] = useState<DroppedAttachment[]>([]);
@@ -383,6 +422,12 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const feedRef = useRef<HTMLDivElement>(null);
   const sessionHeaderRef = useRef<HTMLElement>(null);
   const quickTabsRef = useRef<HTMLElement>(null);
+  // The tab drag: `tabDragOrder` is the live preview arrangement while a
+  // pointer carries a tab around; the drop commits it and the store's own
+  // `tabOrder` takes over.
+  const [tabDragOrder, setTabDragOrder] = useState<string[] | null>(null);
+  const tabDragRef = useRef<{ id: string; startX: number; moved: boolean } | null>(null);
+  const tabClickSuppressRef = useRef(false);
   const followFeedRef = useRef(true);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const feedWrapRef = useRef<HTMLDivElement>(null);
@@ -421,9 +466,16 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const libraryRevision = library?.conversations.map((item) => `${item.id}:${item.title}:${item.archivedAt ?? ''}`).join('|') ?? '';
   const contextUsage = snapshot?.contextUsage;
   const contextCompacting = compactBusy || Boolean(snapshot?.contextCompacting);
-  const recentSessions = (library?.conversations ?? []).filter((item) => !item.archivedAt).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  const recentSessions = (library?.conversations ?? []).filter((item) => !item.archivedAt);
   const tabLimit = quickTabLimit(library?.settings.visibleConversationTabs);
-  const quickTabs = recentSessions.slice(0, tabLimit);
+  // While a drag is in flight the preview order wins, so the tab under the
+  // pointer sits where the user has carried it; the drop commits the order.
+  const orderedSessions = orderConversationTabs(recentSessions, tabDragOrder ?? library?.settings.tabOrder ?? EMPTY_TAB_ORDER);
+  const orderedSessionsRef = useRef(orderedSessions);
+  orderedSessionsRef.current = orderedSessions;
+  const tabDragOrderRef = useRef(tabDragOrder);
+  tabDragOrderRef.current = tabDragOrder;
+  const quickTabs = orderedSessions.slice(0, tabLimit);
   const selectedSession = recentSessions.find((item) => item.id === library?.activeConversationId);
   if (selectedSession && !quickTabs.some((item) => item.id === selectedSession.id)) quickTabs.splice(Math.max(0, tabLimit - 1), 1, selectedSession);
   const suggestionTrigger = detectComposerTrigger(draft, caretIndex);
@@ -641,7 +693,11 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   // whenever either box resizes, so the drawer follows the composer through
   // collapses, expansions, and every added line.
   useLayoutEffect(() => {
-    if (!libraryOpen) { setDrawerBottom(null); return; }
+    if (!libraryOpen) {
+      // Closing: keep the frozen offset so the exit plays where it was.
+      if (!drawerExit.closing) setDrawerBottom(null);
+      return;
+    }
     const workspace = workspaceRef.current;
     const dock = composeDockRef.current;
     if (!workspace || !dock) return;
@@ -652,7 +708,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     observer.observe(workspace);
     observer.observe(dock);
     return () => observer.disconnect();
-  }, [libraryOpen]);
+  }, [libraryOpen, drawerExit.closing]);
 
   useEffect(() => {
     if (!voiceError) return
@@ -899,7 +955,6 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   function closeComposer() {
     setComposerOpen(false);
     setModelPickerOpen(false);
-    requestAnimationFrame(() => composeTriggerRef.current?.focus());
   }
 
   async function decide(approved: boolean) {
@@ -972,6 +1027,58 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     setSessionMenuOpen(false);
     setTabMenu({ item, container, x: event.clientX - bounds.left, y: event.clientY - bounds.top });
   }
+
+  function beginTabDrag(event: ReactPointerEvent<HTMLButtonElement>, item: ConversationSummary) {
+    if (event.button !== 0 || libraryBusy) return;
+    tabDragRef.current = { id: item.id, startX: event.clientX, moved: false };
+  }
+
+  // A press on a tab becomes a drag after five pixels; the row reorders under
+  // the pointer and the drop commits the arrangement. Pointer events (not
+  // HTML5 dnd) keep the ghost image out and the click suppression close by.
+  useEffect(() => {
+    const onMove = (event: PointerEvent) => {
+      const drag = tabDragRef.current;
+      if (!drag) return;
+      if (!drag.moved) {
+        if (Math.abs(event.clientX - drag.startX) < 5) return;
+        drag.moved = true;
+        setTabDragOrder(orderedSessionsRef.current.map((item) => item.id));
+      }
+      const tabs = quickTabsRef.current;
+      if (!tabs) return;
+      const buttons = Array.from(tabs.querySelectorAll<HTMLElement>('.panel-quick-tab:not(.panel-quick-tab-new)'));
+      let toIndex = Math.max(0, buttons.length - 1);
+      for (let index = 0; index < buttons.length; index += 1) {
+        const rect = buttons[index].getBoundingClientRect();
+        if (event.clientX < rect.left + rect.width / 2) { toIndex = index; break; }
+      }
+      setTabDragOrder((current) => (current ? moveTab(current, drag.id, toIndex) : current));
+    };
+    const onEnd = () => {
+      const drag = tabDragRef.current;
+      if (!drag) return;
+      tabDragRef.current = null;
+      if (!drag.moved) return;
+      // Swallow the click the pointerup is about to send — this gesture was a
+      // drag, not a tab switch.
+      tabClickSuppressRef.current = true;
+      window.setTimeout(() => { tabClickSuppressRef.current = false; }, 0);
+      const order = tabDragOrderRef.current;
+      if (!order) return;
+      void run((bridge) => bridge.setConversationTabOrder(order)).then(() => {
+        setTabDragOrder((latest) => (latest === order ? null : latest));
+      });
+    };
+    document.addEventListener('pointermove', onMove);
+    document.addEventListener('pointerup', onEnd);
+    document.addEventListener('pointercancel', onEnd);
+    return () => {
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', onEnd);
+      document.removeEventListener('pointercancel', onEnd);
+    };
+  }, [run]);
 
   async function libraryAction(action: (bridge: PetAPI) => Promise<void>, onSuccess?: () => void) {
     if (libraryBusy) return;
@@ -1195,6 +1302,31 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const escOwnersRef = useRef(escOwners);
   escOwnersRef.current = escOwners;
 
+  // The compose trigger comes back only once the exit animation has fully
+  // unmounted the form, so it takes the focus after that — not in the frame
+  // the form disappeared.
+  const composerWasOpenRef = useRef(false);
+  useEffect(() => {
+    if (composerWasOpenRef.current && !composerOpen && !composerExit.closing) composeTriggerRef.current?.focus();
+    composerWasOpenRef.current = composerOpen;
+  }, [composerOpen, composerExit.closing]);
+
+  // Clicking outside the open library drawer puts it away — the conversation
+  // beside it is the obvious target, so a plain click there should just work.
+  // The buttons that open the drawer toggle it themselves, so they are left
+  // alone to avoid closing and reopening in one gesture.
+  useEffect(() => {
+    if (!libraryOpen) return;
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target || target.closest('.panel-library-drawer')) return;
+      if (target.closest('.panel-library-toggle, .panel-conversations-button, .panel-session-menu-all')) return;
+      setLibraryOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOutside, true);
+    return () => document.removeEventListener('pointerdown', closeOutside, true);
+  }, [libraryOpen]);
+
   // Escape closes the library drawer — unless its own rename field or delete
   // confirmation is up, which own the key first.
   useEffect(() => {
@@ -1260,7 +1392,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const plan = snapshot?.plan ?? null;
 
   return (
-    <section className={`panel-bubble${compactEmpty ? ' is-empty' : ''}${expanded ? ' is-expanded' : ''}${composerOpen || ask || plan ? ' is-composing' : ''}${attachments.length ? ' has-attachments' : ''}${modelPickerOpen ? ' is-choosing-model' : ''}`} style={compactEmpty && composerOpen ? { height: compactComposerHeight } : undefined} aria-label="交互气泡" hidden={!visible} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => {
+    <section className={`panel-bubble${compactEmpty ? ' is-empty' : ''}${expanded ? ' is-expanded' : ''}${composerOpen || composerExit.closing || ask || plan ? ' is-composing' : ''}${attachments.length ? ' has-attachments' : ''}${modelPickerOpen ? ' is-choosing-model' : ''}`} style={compactEmpty && (composerOpen || composerExit.closing) ? { height: compactComposerHeight } : undefined} aria-label="交互气泡" hidden={!visible} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => {
       if (!event.dataTransfer.files.length) return;
       event.preventDefault();
       if (libraryOpen) return;
@@ -1299,8 +1431,8 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
             {quickTabs.map((item, index) => <button key={item.id} type="button" role="menuitem" aria-current={item.id === library?.activeConversationId ? 'page' : undefined} aria-disabled={libraryBusy || item.id === library?.activeConversationId} onContextMenu={(event) => showTabMenu(event, item)} title={`${item.title}，${taskLabels[conversationStatus(item)]}`} onClick={() => { if (!libraryBusy && item.id !== library?.activeConversationId) void selectConversation(item); }}><i className={`panel-task-dot panel-task-dot-${conversationStatus(item)}`} aria-hidden="true" /><span className="panel-session-menu-number">{index + 1}</span><span className="panel-session-menu-title">{item.title}</span></button>)}
             <button type="button" role="menuitem" className="panel-session-menu-all" onClick={openLibrary}>查看全部会话</button>
           </div>}
-          {quickTabs.length > 0 && <nav className="panel-quick-tabs" ref={quickTabsRef} aria-label={expanded ? '顶部会话标签' : '顶部会话数字快捷切换'}>
-            {quickTabs.map((item, index) => <button key={item.id} type="button" className={`panel-quick-tab${item.id === library?.activeConversationId ? ' is-current' : ''}`} aria-label={`${index + 1}：${item.title}，${taskLabels[conversationStatus(item)]}`} aria-current={item.id === library?.activeConversationId ? 'page' : undefined} title={`${item.title}，${taskLabels[conversationStatus(item)]}`} aria-disabled={libraryBusy || item.id === library?.activeConversationId} onContextMenu={(event) => showTabMenu(event, item)} onClick={() => { if (!libraryBusy && item.id !== library?.activeConversationId) void selectConversation(item); }}><i className={`panel-task-dot panel-task-dot-${conversationStatus(item)}`} aria-hidden="true" /><span className="panel-quick-tab-label">{expanded ? item.title : index + 1}</span></button>)}
+          {quickTabs.length > 0 && <nav className={`panel-quick-tabs${tabDragOrder ? ' is-dragging' : ''}`} ref={quickTabsRef} aria-label={expanded ? '顶部会话标签' : '顶部会话数字快捷切换'}>
+            {quickTabs.map((item, index) => <button key={item.id} type="button" className={`panel-quick-tab${item.id === library?.activeConversationId ? ' is-current' : ''}${tabDragOrder && tabDragRef.current?.id === item.id ? ' is-dragging' : ''}`} aria-label={`${index + 1}：${item.title}，${taskLabels[conversationStatus(item)]}`} aria-current={item.id === library?.activeConversationId ? 'page' : undefined} title={`${item.title}，${taskLabels[conversationStatus(item)]}`} aria-disabled={libraryBusy || item.id === library?.activeConversationId} onContextMenu={(event) => showTabMenu(event, item)} onPointerDown={(event) => beginTabDrag(event, item)} onClick={() => { if (tabClickSuppressRef.current) { tabClickSuppressRef.current = false; return; } if (!libraryBusy && item.id !== library?.activeConversationId) void selectConversation(item); }}><i className={`panel-task-dot panel-task-dot-${conversationStatus(item)}`} aria-hidden="true" /><span className="panel-quick-tab-label">{expanded ? item.title : index + 1}</span></button>)}
             {showNewTabButton(quickTabs.length, tabLimit) && <button type="button" className="panel-quick-tab panel-quick-tab-new" aria-label="新建会话" title="新建会话" onClick={() => { if (!libraryBusy) void createConversation(); }}><PlusIcon /></button>}
           </nav>}
         </header>}
@@ -1413,7 +1545,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
 
         {!compactEmpty && snapshot?.goal && <GoalBanner goal={snapshot.goal} onClear={() => { void sendGoal('/goal clear'); }} />}
 
-        <div className={`panel-compose-dock${composerOpen || ask || plan ? ' is-open' : ''}`} ref={composeDockRef}>
+        <div className={`panel-compose-dock${composerOpen || composerExit.closing || ask || plan ? ' is-open' : ''}`} ref={composeDockRef}>
           {ask ? (
             <AskQuestionPanel
               key={ask.id}
@@ -1427,8 +1559,8 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
               request={plan}
               onDecide={(approved) => run((bridge) => bridge.answerPlan(plan.id, approved))}
             />
-          ) : composerOpen ? (
-          <form className="panel-composer" ref={composerRef} onSubmit={(event) => { event.preventDefault(); void send('queue'); }} onKeyDown={(event) => {
+          ) : composerOpen || composerExit.closing ? (
+          <form className={`panel-composer${composerOpen ? '' : ' is-closing'}`} ref={composerRef} onAnimationEnd={composerExit.endClose} onSubmit={(event) => { event.preventDefault(); void send('queue'); }} onKeyDown={(event) => {
               if (event.key === 'Escape') {
                 event.preventDefault();
                 event.stopPropagation();
@@ -1572,7 +1704,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
             </button>
           )}
         </div>
-        {libraryOpen && drawerBottom !== null && <aside className="panel-library-drawer" style={{ bottom: drawerBottom }} aria-label="会话列表">
+        {(libraryOpen || drawerExit.closing) && drawerBottom !== null && <aside className={`panel-library-drawer${libraryOpen ? '' : ' is-closing'}`} style={{ bottom: drawerBottom }} aria-label="会话列表" onAnimationEnd={drawerExit.endClose}>
           <header className="panel-library-header">
             <button type="button" className="panel-library-icon panel-library-back" aria-label="返回对话" title="返回对话" onClick={() => setLibraryOpen(false)}><BackIcon /></button>
             <h2>会话</h2>

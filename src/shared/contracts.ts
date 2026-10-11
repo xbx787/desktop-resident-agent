@@ -90,6 +90,10 @@ export interface ConversationSettings {
   /** File name inside the avatars directory, or null for the glyph default. */
   userAvatar: string | null
   assistantAvatar: string | null
+  /** The quick tabs' arrangement, by conversation id. The store keeps every
+   *  conversation in the list — dragging rewrites it, deletions prune it, and
+   *  ids the user never placed simply follow by recency. */
+  tabOrder: string[]
 }
 
 /** One named model endpoint the assistant can talk to. Keys are stored in the
@@ -269,6 +273,7 @@ export interface PetAPI {
   selectConversation(id: string): Promise<void>
   renameConversation(id: string, title: string): Promise<void>
   setConversationPinned(id: string, pinned: boolean): Promise<void>
+  setConversationTabOrder(ids: string[]): Promise<void>
   archiveConversation(id: string): Promise<void>
   restoreConversation(id: string): Promise<void>
   deleteConversation(id: string): Promise<void>

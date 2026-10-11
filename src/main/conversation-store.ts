@@ -194,7 +194,7 @@ export function isModelProfile(value: unknown): value is ModelProfile {
  *  older file simply gets the defaults instead of failing to load. */
 function readExtendedSettings(settings: Record<string, unknown>): Pick<ConversationSettings,
   'modelProfiles' | 'activeModelProfileId' | 'enableAutoTitleGeneration' | 'showMessageTimestamps' |
-  'userName' | 'assistantName' | 'userAvatar' | 'assistantAvatar'> {
+  'userName' | 'assistantName' | 'userAvatar' | 'assistantAvatar' | 'tabOrder'> {
   const profiles = Array.isArray(settings.modelProfiles)
     ? (settings.modelProfiles.filter(isModelProfile) as ModelProfile[]).map((profile) => structuredClone(profile))
     : []
@@ -209,7 +209,8 @@ function readExtendedSettings(settings: Record<string, unknown>): Pick<Conversat
     userName: isDisplayName(settings.userName) ? settings.userName.trim() : '主人',
     assistantName: isDisplayName(settings.assistantName) ? settings.assistantName.trim() : '小鲸',
     userAvatar: isStoredAvatar(settings.userAvatar) ? settings.userAvatar : null,
-    assistantAvatar: isStoredAvatar(settings.assistantAvatar) ? settings.assistantAvatar : null
+    assistantAvatar: isStoredAvatar(settings.assistantAvatar) ? settings.assistantAvatar : null,
+    tabOrder: Array.isArray(settings.tabOrder) ? settings.tabOrder.filter((id): id is string => typeof id === 'string') : []
   }
 }
 
@@ -253,7 +254,7 @@ function parseLibrary(raw: string): { library: PersistedLibrary; migrated: boole
       conversations: records.map((record) => ({ ...record, pinnedAt: record.pinnedAt ?? null,
         pendingMessages: record.pendingMessages ?? [], taskStatus: restoredTaskStatus(record.taskStatus) }))
     },
-    migrated: oldFormat || !isEffortLevel(settings.effort) || records.some((record) => record.pendingMessages === undefined ||
+    migrated: oldFormat || !isEffortLevel(settings.effort) || !Array.isArray(settings.tabOrder) || records.some((record) => record.pendingMessages === undefined ||
       record.pinnedAt === undefined || record.taskStatus !== restoredTaskStatus(record.taskStatus))
   }
 }
@@ -351,7 +352,7 @@ export class ConversationStore {
         version: 2,
         settings: { visibleConversationTabs: DEFAULT_VISIBLE_TABS, autoArchiveAfterDays: 0, effort: 'max',
           modelProfiles: [], activeModelProfileId: null, enableAutoTitleGeneration: true, showMessageTimestamps: true,
-          userName: '主人', assistantName: '小鲸', userAvatar: null, assistantAvatar: null },
+          userName: '主人', assistantName: '小鲸', userAvatar: null, assistantAvatar: null, tabOrder: [] },
         activeConversationId: null,
         conversations: []
       }
@@ -419,6 +420,8 @@ export class ConversationStore {
         archivedAt: null, pinnedAt: null, mode, taskStatus: 'idle', timeline: [], history: [], pendingMessages: [], sdkSessionId: null
       }
       draft.conversations.push(record)
+      // A new session is what the user is about to use — it leads the row.
+      draft.settings.tabOrder.unshift(record.id)
       draft.activeConversationId = record.id
       return record
     })
@@ -501,6 +504,7 @@ export class ConversationStore {
     return this.mutate((draft) => {
       findRecord(draft, id)
       draft.conversations = draft.conversations.filter((record) => record.id !== id)
+      draft.settings.tabOrder = draft.settings.tabOrder.filter((candidate) => candidate !== id)
       if (draft.activeConversationId === id) selectFallback(draft)
       return stateOf(draft)
     })
@@ -573,6 +577,30 @@ export class ConversationStore {
         throw new ConversationStoreError('ARCHIVED_CONVERSATION', '请先恢复归档会话。')
       }
       record.pinnedAt = pinned ? (record.pinnedAt ?? new Date().toISOString()) : null
+      return stateOf(draft)
+    })
+  }
+
+  setTabOrder(ids: string[]): Promise<ConversationLibraryState> {
+    if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string')) {
+      throw new ConversationStoreError('INVALID_INPUT', '标签顺序格式无效。')
+    }
+    return this.mutate((draft) => {
+      const known = new Set(draft.conversations.map((record) => record.id))
+      const seen = new Set<string>()
+      const next: string[] = []
+      for (const id of ids) {
+        if (known.has(id) && !seen.has(id)) { seen.add(id); next.push(id) }
+      }
+      // Everything the caller left out keeps a slot at the tail, in the order
+      // it already had — a stale renderer must not reshuffle the rest.
+      for (const id of draft.settings.tabOrder) {
+        if (known.has(id) && !seen.has(id)) { seen.add(id); next.push(id) }
+      }
+      for (const record of draft.conversations) {
+        if (!seen.has(record.id)) next.push(record.id)
+      }
+      draft.settings.tabOrder = next
       return stateOf(draft)
     })
   }

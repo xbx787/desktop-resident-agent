@@ -582,6 +582,10 @@ function registerIpc(): void {
     if (!trusted(event) || typeof id !== 'string' || typeof pinned !== 'boolean') throw new Error('置顶请求无效。')
     await activeController().setConversationPinned(id, pinned)
   })
+  ipcMain.handle('pet:set-tab-order', async (event, ids: unknown) => {
+    if (!trusted(event) || !Array.isArray(ids) || ids.some((id) => typeof id !== 'string')) throw new Error('标签顺序无效。')
+    await activeController().setTabOrder(ids as string[])
+  })
   ipcMain.handle('pet:archive-conversation', async (event, id: unknown) => {
     if (!trusted(event) || typeof id !== 'string') throw new Error('会话编号无效。')
     await activeController().archiveConversation(id)

@@ -581,6 +581,15 @@ export class ConversationController {
     })
   }
 
+  async setTabOrder(ids: string[]): Promise<ConversationLibraryState> {
+    await this.initialize()
+    return this.serialize(async () => {
+      await this.store.setTabOrder(ids)
+      await this.refreshLibrary()
+      return structuredClone(this.library!)
+    })
+  }
+
   async archiveInactiveConversations(now?: Date): Promise<ConversationLibraryState> {
     await this.initialize()
     return this.serialize(async () => {
