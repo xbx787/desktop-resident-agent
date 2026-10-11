@@ -1567,7 +1567,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
           <div className="panel-queue-heading">待发送 <strong>{snapshot?.pendingMessages?.length}</strong></div>
           <div className="panel-queue-list">{snapshot?.pendingMessages?.map((message) => <div key={message.id} className="panel-queue-item">
             <span title={message.text}>{message.text || `附件 ${message.attachments.length} 个`}</span>
-            <button type="button" aria-label={`引导：${message.text.slice(0, 20)}`} title="引导" onClick={() => { void run((bridge) => bridge.steerQueuedMessage(message.id)); }}><ReturnIcon /></button>
+            <button type="button" aria-label={`引导：${message.text.slice(0, 20)}`} title="引导（插队发送）" onClick={() => { void run((bridge) => bridge.steerQueuedMessage(message.id)); }}><ReturnIcon /></button>
             <button type="button" aria-label={`修改待发送消息：${message.text.slice(0, 20)}`} title="修改" onClick={() => { void editQueuedMessage(message); }}><EditIcon /></button>
             <button type="button" aria-label={`移除待发送消息：${message.text.slice(0, 20)}`} title="从队列移除" onClick={() => { void run((bridge) => bridge.removeQueuedMessage(message.id)); }}>×</button>
           </div>)}</div>
@@ -1725,7 +1725,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
                     <button type="button" className="panel-compact-button" disabled={contextCompacting || !snapshot || snapshot.mode === 'demo'} onClick={() => { void compactContext(); }}>{contextCompacting ? '压缩中…' : '压缩上下文'}</button>
                   </div>
                 </div>
-                <button type={active && !draft.trim() && !attachments.length ? 'button' : 'submit'} className={`panel-send${busy === 'send' ? ' is-sending' : ''}`} disabled={(!active && !draft.trim() && !attachments.length) || Boolean(busy) || !snapshot || (contextCompacting && !(active && !draft.trim() && !attachments.length))} aria-label={goalPrompting ? '设定目标' : busy === 'send' ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务' : active ? '排队发送消息' : '发送消息'} title={goalPrompting ? '回车设定目标' : busy === 'send' ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务' : active ? snapshot?.mode === 'claude_code' ? 'Enter 排队发送，Ctrl+Enter 尝试介入当前任务' : 'Enter 排队发送，Ctrl+Enter 优先排队' : '发送消息'} onClick={active && !draft.trim() && !attachments.length ? () => { void stop(); } : undefined}>
+                <button type={active && !draft.trim() && !attachments.length ? 'button' : 'submit'} className={`panel-send${busy === 'send' ? ' is-sending' : ''}`} disabled={(!active && !draft.trim() && !attachments.length) || Boolean(busy) || !snapshot || (contextCompacting && !(active && !draft.trim() && !attachments.length))} aria-label={goalPrompting ? '设定目标' : busy === 'send' ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务' : active ? '排队发送消息' : '发送消息'} title={goalPrompting ? '回车设定目标' : busy === 'send' ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务' : active ? snapshot?.mode === 'claude_code' ? 'Enter 排队发送，Ctrl+Enter 插队发送' : 'Enter 排队发送，Ctrl+Enter 优先排队' : '发送消息'} onClick={active && !draft.trim() && !attachments.length ? () => { void stop(); } : undefined}>
                   {busy === 'send' ? <span className="panel-send-spinner" aria-hidden="true" /> : active && !draft.trim() && !attachments.length ? <span className="panel-stop-square" /> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11m-5-5 5 5-5 5" /></svg>}
                 </button>
               </div>
