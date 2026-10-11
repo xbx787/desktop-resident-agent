@@ -63,6 +63,14 @@ export function navWindow(count: number, start: number, size: number): { from: n
   return { from, to: Math.min(count, from + size) };
 }
 
+/** Where a wheel nudge lands: the window clamps at the conversation's ends,
+ *  so a nudge pushed past the end returns the same start — the wheel handler
+ *  reads that unchanged value as "the rail is already there" and stays
+ *  quiet. */
+export function navNextStart(count: number, size: number, current: number, delta: number): number {
+  return Math.max(0, Math.min(Math.max(0, count - size), current + delta));
+}
+
 /** The hover card shows three lines' worth at most — anything longer is
  *  dropped rather than scrolled: the full text already lives in the timeline,
  *  and the popover should not hold a second copy of it. */
@@ -104,6 +112,12 @@ export function TimelineNav({ marks, onJump, windowSize = NAV_WINDOW_WIDE }: { m
   const [expanded, setExpanded] = useState(false);
   const [active, setActive] = useState<number | null>(null);
   const [start, setStart] = useState(() => Math.max(0, marks.length - windowSize));
+  // The wheel handler reads the live start from a ref: the listener is
+  // registered once per expanded/marks change, and re-binding it on every
+  // scroll just to see the new start would tear down the wheel capture
+  // mid-gesture.
+  const startRef = useRef(start);
+  startRef.current = start;
   // A window-size change re-anchors the rail to the newest marks: a start
   // that was legal for the old size can point far away for the new one.
   useEffect(() => {
@@ -126,7 +140,19 @@ export function TimelineNav({ marks, onJump, windowSize = NAV_WINDOW_WIDE }: { m
       event.preventDefault();
       const direction = event.deltaY > 0 ? 1 : -1;
       const step = navWheelStep(event.deltaY);
-      setStart((current) => Math.max(0, Math.min(Math.max(0, marks.length - windowSize), current + direction * step)));
+      // The rail's ends are hard stops: once the window already sits at the
+      // oldest (or newest) mark, a wheel pushing further neither moves the
+      // window nor plays the push-in. The silence is the signal — "nothing
+      // rolled" reads as "that was the top (bottom)", whereas the old
+      // roll-at-the-end kept suggesting there was somewhere left to go.
+      const next = navNextStart(marks.length, windowSize, startRef.current, direction * step);
+      const moved = next !== startRef.current;
+      if (moved) {
+        // Update the ref in the same turn as the state: a fast wheel fires
+        // back to back and the next event must not compute from a stale start.
+        startRef.current = next;
+        setStart(next);
+      }
       // Re-anchor the hover to the row under the pointer: the browser does not
       // reliably re-run its own hit-testing when React swaps the window's
       // marks, so the card used to vanish mid-scroll exactly when it was being
@@ -137,7 +163,7 @@ export function TimelineNav({ marks, onJump, windowSize = NAV_WINDOW_WIDE }: { m
       // one transform pass, no layout or paint — and skipped entirely when the
       // system asks for reduced motion. A fast wheel fires back to back, so
       // each roll cancels the one before it instead of stacking.
-      if (typeof node.animate === 'function' && !window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
+      if (moved && typeof node.animate === 'function' && !window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
         rollRef.current?.cancel();
         rollRef.current = node.animate(
           [{ transform: `translateY(calc(-50% + ${direction * NAV_STEP}px))` }, { transform: 'translateY(-50%)' }],

@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { NAV_RESTING, NAV_STEP, NAV_WINDOW_COMPACT, NAV_WINDOW_WIDE, navBoost, navCardOffset, navMarks, navPreview, navRowAt, navTrackHeight, navWheelStep, navWindow, TimelineNav } from '../src/renderer/timeline-nav'
+import { NAV_RESTING, NAV_STEP, NAV_WINDOW_COMPACT, NAV_WINDOW_WIDE, navBoost, navCardOffset, navMarks, navNextStart, navPreview, navRowAt, navTrackHeight, navWheelStep, navWindow, TimelineNav } from '../src/renderer/timeline-nav'
 import { groupTimeline } from '../src/renderer/timeline-groups'
 import type { TimelineEntry } from '../src/shared/contracts'
 
@@ -39,6 +39,22 @@ describe('navWindow', () => {
     expect(navWindow(40, 0, NAV_WINDOW_COMPACT)).toEqual({ from: 0, to: 20 })
     expect(navWindow(40, 99, NAV_WINDOW_COMPACT)).toEqual({ from: 20, to: 40 })
     expect(navWindow(12, 0, NAV_WINDOW_COMPACT)).toEqual({ from: 0, to: 12 })
+  })
+})
+
+describe('navNextStart', () => {
+  it('clamps at the conversation ends so a nudge past them repeats the start', () => {
+    // Middle of a long conversation: plain movement.
+    expect(navNextStart(100, 60, 10, 3)).toBe(13)
+    expect(navNextStart(100, 60, 10, -3)).toBe(7)
+    // Already at the newest marks: a downward nudge stays put…
+    expect(navNextStart(100, 60, 40, 3)).toBe(40)
+    // …and at the oldest, an upward one does too.
+    expect(navNextStart(100, 60, 0, -3)).toBe(0)
+    // A short conversation has no room at all: the start is pinned to 0.
+    expect(navNextStart(10, 60, 0, 3)).toBe(0)
+    // A big step overshoots into the clamp rather than past it.
+    expect(navNextStart(100, 60, 35, 24)).toBe(40)
   })
 })
 

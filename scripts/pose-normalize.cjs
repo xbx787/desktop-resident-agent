@@ -1,7 +1,12 @@
 // Pose normalize: takes the cut-out generation batch and produces uniform
-// 160×160 sprites — cropped to the alpha bounding box, scaled to fit inside a
-// 148 px box, and anchored to a common bottom baseline so pose swaps do not
-// make the character hop around. Output: src/renderer/assets/poses/.
+// 1024×1024 sprites — cropped to the alpha bounding box, scaled to fit inside
+// the padded box, and anchored to a common bottom baseline so pose swaps do
+// not make the character hop around. Output: src/renderer/assets/poses/.
+//
+// The 1024 canvas matches how the base portrait is displayed: the artwork
+// layer is downscaled live by the browser (1254 px → window size), so pose
+// sprites must carry comparable resolution or they read as blurry. The pad
+// is 1.6 % of the canvas, the same margin the base portrait has at rest.
 //
 //   npx electron scripts/pose-normalize.cjs
 const { app, BrowserWindow } = require('electron')
@@ -10,8 +15,8 @@ const path = require('node:path')
 
 const SRC = path.join(__dirname, '..', 'data', 'avatar-staging', 'cutout')
 const OUT = path.join(__dirname, '..', 'src', 'renderer', 'assets', 'poses')
-const SIZE = 160
-const PAD = 6
+const SIZE = 1024
+const PAD = 16
 
 const MAP = [
   ['蓝发波浪发女仆贴纸少女.png', 'wave'],

@@ -32,6 +32,9 @@ body.avatar-window { -webkit-user-select: none; user-select: none; }
 .avatar-hit-target:focus-visible { outline: 2px solid #9fe5d9; outline-offset: -3px; }
 .avatar-portrait { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
 .avatar-artwork { grid-area: 1 / 1; width: 100%; height: 100%; object-fit: contain; transition: filter .18s ease, transform .18s ease; }
+/* The swingable ahoge layer: same grid cell and contain geometry as the
+   artwork, so it stacks back onto the body pixel-perfectly at rest. */
+.avatar-ahoge { grid-area: 1 / 1; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
 .avatar-stage.is-speaking .avatar-artwork { filter: drop-shadow(0 0 10px rgba(120, 200, 255, .55)); transform: scale(1.02); }
 .avatar-stage.is-listening .avatar-artwork { filter: drop-shadow(0 0 10px rgba(255, 120, 140, .55)); transform: scale(1.02); }
 
