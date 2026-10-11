@@ -29,3 +29,33 @@ export function lastUserEntryId(timeline: readonly { id: string; kind: string }[
   }
   return null
 }
+
+/** How long a finished/failed dot stays on the portrait before it fades. */
+export const TASK_DOT_HOLD_MS = 6000
+
+export interface TaskDot {
+  tone: 'busy' | 'waiting' | 'done' | 'failed'
+  /** Busy tones breathe like the panel's running dots; settled tones sit still. */
+  pulse: boolean
+}
+
+/** The little dot on the portrait's shoulder, in the panel's own task-dot
+ *  palette (panel.css .panel-task-dot-*): amber while work runs, blue while a
+ *  decision waits, green/red once it settled — so a folded panel never hides
+ *  whether she is still busy. */
+export function taskDot(state: string | undefined): TaskDot | null {
+  switch (state) {
+    case 'planning':
+    case 'executing':
+    case 'verifying':
+      return { tone: 'busy', pulse: true }
+    case 'awaiting_approval':
+      return { tone: 'waiting', pulse: true }
+    case 'done':
+      return { tone: 'done', pulse: false }
+    case 'failed':
+      return { tone: 'failed', pulse: false }
+    default:
+      return null
+  }
+}

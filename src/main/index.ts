@@ -155,7 +155,10 @@ function flushSnapshot(): void {
 // renderer re-render the whole panel (including its Markdown) per token and the window
 // stops reacting to clicks until the turn ends. Publish at a fixed cadence instead; the
 // scheduler always keeps the trailing send, so the final state still reaches the renderer.
-const snapshotScheduler = createSnapshotScheduler(flushSnapshot, 50)
+// 80 ms: the stream still reads as typing, while every published frame costs a panel
+// redraw plus a full-window composite twice over (GPU process + dwm) — the panel's
+// measured ~16% at 20 Hz scales with the commit rate.
+const snapshotScheduler = createSnapshotScheduler(flushSnapshot, 80)
 function publishSnapshot(): void {
   snapshotScheduler.publish()
 }

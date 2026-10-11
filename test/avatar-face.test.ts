@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FACE_HOLD_MS, lastUserEntryId, SEND_FACE_HOLD_MS, stateFace } from '../src/renderer/avatar-face'
+import { FACE_HOLD_MS, lastUserEntryId, SEND_FACE_HOLD_MS, stateFace, taskDot } from '../src/renderer/avatar-face'
 
 describe('stateFace', () => {
   it('maps a busy turn to focus and a delivered reply to smile', () => {
@@ -42,5 +42,25 @@ describe('lastUserEntryId', () => {
   it('returns null for timelines with no user message at all', () => {
     expect(lastUserEntryId([])).toBeNull()
     expect(lastUserEntryId([{ id: 'x', kind: 'system' }])).toBeNull()
+  })
+})
+
+describe('taskDot', () => {
+  it('rides busy statuses with a pulsing amber dot', () => {
+    for (const state of ['planning', 'executing', 'verifying']) {
+      expect(taskDot(state)).toEqual({ tone: 'busy', pulse: true })
+    }
+  })
+
+  it('marks a waiting decision blue and settled outcomes green/red', () => {
+    expect(taskDot('awaiting_approval')).toEqual({ tone: 'waiting', pulse: true })
+    expect(taskDot('done')).toEqual({ tone: 'done', pulse: false })
+    expect(taskDot('failed')).toEqual({ tone: 'failed', pulse: false })
+  })
+
+  it('shows nothing for idle, cancelled or unknown states', () => {
+    for (const state of ['idle', 'cancelled', undefined, '']) {
+      expect(taskDot(state)).toBeNull()
+    }
   })
 })

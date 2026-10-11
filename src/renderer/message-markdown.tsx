@@ -1,6 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import Markdown, { type Components } from 'react-markdown';
 import rehypeKatex from 'rehype-katex';
+import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import 'katex/dist/katex.min.css';
@@ -82,7 +83,7 @@ const components: Components = {
 // While a turn streams, math stays plain text (`$…$` shown verbatim): a formula
 // that is still arriving would render half-parsed and re-flow on every delta.
 // The plugins come back once the turn settles and the text is final.
-export const MessageMarkdown = memo(function MessageMarkdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
+export const MessageMarkdown = memo(function MessageMarkdown({ text, streaming = false, breaks = false }: { text: string; streaming?: boolean; breaks?: boolean }) {
   const rootRef = useRef<HTMLDivElement>(null);
   // A block formula wider than its box (the compact bubble, a nested thinking
   // row) shrinks toward the available width instead of growing a horizontal
@@ -111,7 +112,9 @@ export const MessageMarkdown = memo(function MessageMarkdown({ text, streaming =
   return (
     <div className="panel-markdown" ref={rootRef}>
       <Markdown
-        remarkPlugins={streaming ? [remarkGfm] : [remarkGfm, remarkMath]}
+        remarkPlugins={streaming
+          ? [remarkGfm]
+          : breaks ? [remarkGfm, remarkMath, remarkBreaks] : [remarkGfm, remarkMath]}
         rehypePlugins={streaming ? [] : [[rehypeKatex, { trust: false, strict: 'ignore', errorColor: '#bdd7ff' }]]}
         skipHtml
         urlTransform={safeMarkdownUrl}

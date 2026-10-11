@@ -8,7 +8,7 @@ import { petBridge, usePetState } from './pet-state';
 import { playClickBounce } from './avatar-motion';
 import { startIdleFidgets } from './avatar-idle';
 import { playPoseSwap, poseSrc, preloadPoses, startPoseClock } from './avatar-poses';
-import { FACE_HOLD_MS, lastUserEntryId, SEND_FACE_HOLD_MS, stateFace } from './avatar-face';
+import { FACE_HOLD_MS, lastUserEntryId, SEND_FACE_HOLD_MS, stateFace, TASK_DOT_HOLD_MS, taskDot, type TaskDot } from './avatar-face';
 import { playAhogeFlick } from './avatar-ahoge';
 import './avatar.css';
 
@@ -51,6 +51,19 @@ function Avatar() {
   // until that window closes (it then re-reads the state and settles into
   // whatever the turn wants — usually the focus).
   const sendHold = useRef(false);
+  // The shoulder dot: busy tones ride the status as long as it lasts; settled
+  // ones show for a beat and fade, so "done" reads as a moment, not a state.
+  const [dot, setDot] = useState<TaskDot | null>(null);
+  const dotHold = useRef<number | null>(null);
+  const taskStatus = snapshot?.taskStatus;
+  useEffect(() => {
+    const next = taskDot(taskStatus);
+    if (dotHold.current !== null) { window.clearTimeout(dotHold.current); dotHold.current = null; }
+    if (!next || next.pulse) { setDot(next); return; }
+    setDot(next);
+    dotHold.current = window.setTimeout(() => { dotHold.current = null; setDot(null); }, TASK_DOT_HOLD_MS);
+  }, [taskStatus]);
+  useEffect(() => () => { if (dotHold.current !== null) window.clearTimeout(dotHold.current); }, []);
 
   useEffect(() => startIdleFidgets(portraitRef.current), []);
   useEffect(() => {
@@ -291,6 +304,7 @@ function Avatar() {
         }}
       >
         <WhalePortrait containerRef={portraitRef} ahogeRef={ahogeRef} artworkUrl={faceId ? poseSrc(faceId) : poseId ? poseSrc(poseId) : null} />
+        {dot && <span className={`avatar-task-dot is-${dot.tone}${dot.pulse ? ' is-pulsing' : ''}`} aria-hidden="true" />}
       </button>
     </main>
   );

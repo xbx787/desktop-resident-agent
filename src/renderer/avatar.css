@@ -30,6 +30,22 @@ body.avatar-window { -webkit-user-select: none; user-select: none; }
 
 .avatar-hit-target:active { cursor: grabbing; }
 .avatar-hit-target:focus-visible { outline: 2px solid #9fe5d9; outline-offset: -3px; }
+/* The shoulder dot: the panel's own task-dot palette (panel.css
+   .panel-task-dot-*), so a folded panel never hides whether she is still
+   busy. Busy and waiting breathe; settled tones hold still and the component
+   fades them out. */
+.avatar-task-dot { position: absolute; z-index: 2; top: 6px; right: 4px; width: 8px; height: 8px; border-radius: 50%; pointer-events: none; }
+.avatar-task-dot.is-busy { background: #f3c36f; }
+.avatar-task-dot.is-waiting { background: #7bbaff; }
+.avatar-task-dot.is-done { background: #80d6a1; }
+.avatar-task-dot.is-failed { background: #f48790; }
+@keyframes avatar-task-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .55; transform: scale(.85); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .avatar-task-dot.is-pulsing { animation: avatar-task-pulse 1.2s ease-in-out infinite; }
+}
 .avatar-portrait { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; }
 .avatar-artwork { grid-area: 1 / 1; width: 100%; height: 100%; object-fit: contain; transition: filter .18s ease, transform .18s ease; }
 /* The swingable ahoge layer: same grid cell and contain geometry as the

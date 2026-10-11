@@ -133,14 +133,18 @@ function timeText(iso: string): string {
 }
 
 /** One message's body: attachment pictures, else the text — markdown for the
- *  model's own words, plain paragraphs for everyone else. Shared by the
- *  standalone rows and by the list-like pieces of a split reply. */
+ *  model's own words and for the user's (where single newlines stay hard
+ *  breaks, line for line what was typed), plain paragraphs for the rest.
+ *  Shared by the standalone rows and by the list-like pieces of a split
+ *  reply. */
 function MessageBody({ entry, running = false, onOpenImage }: { entry: TimelineEntry; running?: boolean; onOpenImage?: (name: string, url: string) => void }) {
   const attachmentNote = entry.kind === 'user' ? splitAttachmentNote(entry.text) : null;
   return <>
     {attachmentNote
       ? <EventImages note={attachmentNote} prompt={attachmentNote.prompt} images={entry.images} onOpen={onOpenImage ?? noopOpenImage} />
-      : entry.kind === 'assistant' ? <MessageMarkdown text={entry.text} streaming={running} /> : <p>{entry.text}</p>}
+      : entry.kind === 'assistant' ? <MessageMarkdown text={entry.text} streaming={running} />
+      : entry.kind === 'user' ? <MessageMarkdown text={entry.text} breaks />
+      : <p>{entry.text}</p>}
   </>;
 }
 
@@ -1033,6 +1037,34 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     tabDragRef.current = { id: item.id, startX: event.clientX, moved: false };
   }
 
+  // The drag's settle animation: whenever the tab order can change, each tab
+  // that moved glides from its old spot — a DOM reorder has no transition of
+  // its own, so the old x is captured and replayed as a one-off transform
+  // (the FLIP pass), skipped under reduced motion.
+  const tabPositionsRef = useRef(new Map<string, number>());
+  useLayoutEffect(() => {
+    const tabs = quickTabsRef.current;
+    if (!tabs) return;
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    const next = new Map<string, number>();
+    for (const button of tabs.querySelectorAll<HTMLElement>('.panel-quick-tab[data-tab-id]')) {
+      const id = button.dataset.tabId!;
+      const x = button.getBoundingClientRect().left;
+      next.set(id, x);
+      const before = tabPositionsRef.current.get(id);
+      if (reduceMotion || before === undefined || Math.abs(before - x) < 1) continue;
+      for (const animation of button.getAnimations()) {
+        if (animation.id === 'tab-flip') animation.cancel();
+      }
+      const flip = button.animate(
+        [{ transform: `translateX(${before - x}px)` }, { transform: 'none' }],
+        { duration: 160, easing: 'ease-out' }
+      );
+      flip.id = 'tab-flip';
+    }
+    tabPositionsRef.current = next;
+  }, [tabDragOrder, libraryRevision, tabLimit, expanded, quickTabs.length, library?.activeConversationId]);
+
   // A press on a tab becomes a drag after five pixels; the row reorders under
   // the pointer and the drop commits the arrangement. Pointer events (not
   // HTML5 dnd) keep the ghost image out and the click suppression close by.
@@ -1432,7 +1464,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
             <button type="button" role="menuitem" className="panel-session-menu-all" onClick={openLibrary}>查看全部会话</button>
           </div>}
           {quickTabs.length > 0 && <nav className={`panel-quick-tabs${tabDragOrder ? ' is-dragging' : ''}`} ref={quickTabsRef} aria-label={expanded ? '顶部会话标签' : '顶部会话数字快捷切换'}>
-            {quickTabs.map((item, index) => <button key={item.id} type="button" className={`panel-quick-tab${item.id === library?.activeConversationId ? ' is-current' : ''}${tabDragOrder && tabDragRef.current?.id === item.id ? ' is-dragging' : ''}`} aria-label={`${index + 1}：${item.title}，${taskLabels[conversationStatus(item)]}`} aria-current={item.id === library?.activeConversationId ? 'page' : undefined} title={`${item.title}，${taskLabels[conversationStatus(item)]}`} aria-disabled={libraryBusy || item.id === library?.activeConversationId} onContextMenu={(event) => showTabMenu(event, item)} onPointerDown={(event) => beginTabDrag(event, item)} onClick={() => { if (tabClickSuppressRef.current) { tabClickSuppressRef.current = false; return; } if (!libraryBusy && item.id !== library?.activeConversationId) void selectConversation(item); }}><i className={`panel-task-dot panel-task-dot-${conversationStatus(item)}`} aria-hidden="true" /><span className="panel-quick-tab-label">{expanded ? item.title : index + 1}</span></button>)}
+            {quickTabs.map((item, index) => <button key={item.id} type="button" data-tab-id={item.id} className={`panel-quick-tab${item.id === library?.activeConversationId ? ' is-current' : ''}${tabDragOrder && tabDragRef.current?.id === item.id ? ' is-dragging' : ''}`} aria-label={`${index + 1}：${item.title}，${taskLabels[conversationStatus(item)]}`} aria-current={item.id === library?.activeConversationId ? 'page' : undefined} title={`${item.title}，${taskLabels[conversationStatus(item)]}`} aria-disabled={libraryBusy || item.id === library?.activeConversationId} onContextMenu={(event) => showTabMenu(event, item)} onPointerDown={(event) => beginTabDrag(event, item)} onClick={() => { if (tabClickSuppressRef.current) { tabClickSuppressRef.current = false; return; } if (!libraryBusy && item.id !== library?.activeConversationId) void selectConversation(item); }}><i className={`panel-task-dot panel-task-dot-${conversationStatus(item)}`} aria-hidden="true" /><span className="panel-quick-tab-label">{expanded ? item.title : index + 1}</span></button>)}
             {showNewTabButton(quickTabs.length, tabLimit) && <button type="button" className="panel-quick-tab panel-quick-tab-new" aria-label="新建会话" title="新建会话" onClick={() => { if (!libraryBusy) void createConversation(); }}><PlusIcon /></button>}
           </nav>}
         </header>}
