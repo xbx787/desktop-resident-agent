@@ -13,7 +13,7 @@ function rule(selector: string): string {
 
 describe('avatar thread geometry', () => {
   it('keeps the stats dot on the avatar column axis and paints both states', () => {
-    expect(rule('.panel-turn-stats-dot')).toContain('left: 13.5px')
+    expect(rule('.panel-turn-stats-dot')).toContain('left: 16px')
     expect(rule('.panel-turn-stats-dot.is-running')).toContain('background: #f3c36f')
     expect(rule('.panel-turn-stats-dot.is-done')).toContain('background: #9db9e9')
   })
