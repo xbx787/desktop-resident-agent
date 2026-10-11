@@ -13,14 +13,15 @@ export interface PoseSpec {
   kind: 'pose' | 'expression'
 }
 
+/** The idle rotation pool — deliberately without focus and smile: those two
+ *  are reserved for the state faces (see avatar-face.ts), so an idle flicker
+ *  can never be mistaken for the model working, or for a reply landing. */
 export const POSES: readonly PoseSpec[] = [
   { id: 'wave', kind: 'pose' },
   { id: 'doze', kind: 'pose' },
   { id: 'cheer', kind: 'pose' },
   { id: 'dozy', kind: 'pose' },
-  { id: 'smile', kind: 'expression' },
   { id: 'surprise', kind: 'expression' },
-  { id: 'focus', kind: 'expression' },
   { id: 'sleepy', kind: 'expression' },
   { id: 'shy', kind: 'expression' }
 ]
@@ -87,15 +88,13 @@ export function playPoseSwap(el: Element | null, apply: () => void, reduced = pr
   }
 }
 
-/** Warms the decode cache so a swap never flashes an empty frame. */
+/** Warms the decode cache so a swap never flashes an empty frame — every
+ *  sprite, including the two reserved for state faces. */
 export function preloadPoses(): void {
   if (typeof Image === 'undefined') return
-  for (const pose of POSES) {
-    const src = poseSrc(pose.id)
-    if (src) {
-      const image = new Image()
-      image.src = src
-    }
+  for (const src of Object.values(SOURCES)) {
+    const image = new Image()
+    image.src = src
   }
 }
 

@@ -8,6 +8,7 @@ import { petBridge, usePetState } from './pet-state';
 import { playClickBounce } from './avatar-motion';
 import { startIdleFidgets } from './avatar-idle';
 import { playPoseSwap, poseSrc, preloadPoses, startPoseClock } from './avatar-poses';
+import { FACE_HOLD_MS, stateFace } from './avatar-face';
 import { playAhogeFlick } from './avatar-ahoge';
 import './avatar.css';
 
@@ -40,14 +41,57 @@ function Avatar() {
   const portraitRef = useRef<HTMLDivElement | null>(null);
   const ahogeRef = useRef<HTMLImageElement | null>(null);
   const [poseId, setPoseId] = useState<string | null>(null);
+  const [faceId, setFaceId] = useState<string | null>(null);
+  const faceIdRef = useRef<string | null>(null);
+  faceIdRef.current = faceId;
+  // A state face outranks the idle rotation; the clock below sits out.
+  const faceActive = useRef(false);
+  const faceHold = useRef<number | null>(null);
 
   useEffect(() => startIdleFidgets(portraitRef.current), []);
   useEffect(() => {
     preloadPoses();
     return startPoseClock((pose) => {
+      if (faceActive.current) return;
       playPoseSwap(portraitRef.current, () => setPoseId(pose ? pose.id : null));
     });
   }, []);
+
+  // State faces: focus while a reply is being produced, a smile for a beat
+  // once it lands. The smile window shields itself from the states that
+  // follow it (a voice broadcast flips avatarState again right after), while
+  // a new turn cancels any lingering smile immediately.
+  const avatarState = snapshot?.avatarState;
+  useEffect(() => {
+    const face = stateFace(avatarState);
+    if (face === 'focus') {
+      if (faceHold.current !== null) {
+        window.clearTimeout(faceHold.current);
+        faceHold.current = null;
+      }
+      if (!faceActive.current || faceIdRef.current !== 'focus') {
+        faceActive.current = true;
+        playPoseSwap(portraitRef.current, () => setFaceId('focus'));
+      }
+      return;
+    }
+    if (face === 'smile') {
+      if (faceHold.current !== null) return;
+      faceActive.current = true;
+      playPoseSwap(portraitRef.current, () => setFaceId('smile'));
+      faceHold.current = window.setTimeout(() => {
+        faceHold.current = null;
+        faceActive.current = false;
+        playPoseSwap(portraitRef.current, () => setFaceId(null));
+      }, FACE_HOLD_MS);
+      return;
+    }
+    if (faceHold.current !== null) return;
+    if (faceActive.current) {
+      faceActive.current = false;
+      playPoseSwap(portraitRef.current, () => setFaceId(null));
+    }
+  }, [avatarState]);
 
   useEffect(() => {
     let active = true;
@@ -207,7 +251,7 @@ function Avatar() {
           }
         }}
       >
-        <WhalePortrait containerRef={portraitRef} ahogeRef={ahogeRef} artworkUrl={poseId ? poseSrc(poseId) : null} />
+        <WhalePortrait containerRef={portraitRef} ahogeRef={ahogeRef} artworkUrl={faceId ? poseSrc(faceId) : poseId ? poseSrc(poseId) : null} />
       </button>
     </main>
   );

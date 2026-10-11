@@ -2,12 +2,18 @@ import { describe, expect, it } from 'vitest'
 import { nextPose, playPoseSwap, POSES, poseGapMs, poseHoldMs, poseSrc } from '../src/renderer/avatar-poses'
 
 describe('pose library', () => {
-  it('lists the nine sprites with unique ids and static sources', () => {
+  it('keeps seven sprites in the idle rotation pool, each with a static source', () => {
     const ids = POSES.map((pose) => pose.id)
     expect(new Set(ids).size).toBe(ids.length)
-    expect(POSES.length).toBe(9)
+    expect(POSES.length).toBe(7)
     for (const pose of POSES) expect(poseSrc(pose.id)).toBeTruthy()
     expect(poseSrc('nope')).toBeNull()
+  })
+
+  it('reserves focus and smile for the state faces, out of the random rotation', () => {
+    expect(POSES.some((pose) => pose.id === 'focus' || pose.id === 'smile')).toBe(false)
+    expect(poseSrc('focus')).toBeTruthy()
+    expect(poseSrc('smile')).toBeTruthy()
   })
 })
 

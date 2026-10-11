@@ -483,7 +483,10 @@ export class AgentRuntime {
       this.offerNote(reply.note.title, reply.note.content)
     } else {
       this.state.taskStatus = 'done'
-      this.state.avatarState = 'idle'
+      // 'success', not 'idle': the portrait reads it as "the reply just
+      // landed" and raises a smile for a beat. The next turn's sendMessage
+      // flips it back to 'thinking'.
+      this.state.avatarState = 'success'
       // The CLI's stop hook keeps a goal going; its own counter may arrive later.
       if (this.state.goal) this.state.goal = { ...this.state.goal, iterations: this.state.goal.iterations + 1 }
       this.emit()
