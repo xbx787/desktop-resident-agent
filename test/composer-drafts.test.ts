@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { conversationSwitchReason, pastedFileName, pastedFiles, restoreComposerState, stashComposerState, type StashedComposer } from '../src/renderer/composer-drafts';
+import { pastedFileName, pastedFiles, restoreComposerState, stashComposerState, type StashedComposer } from '../src/renderer/composer-drafts';
 
 describe('composer draft stash', () => {
   it('stores copies so later edits to the live composer do not rewrite the stash', () => {
@@ -24,24 +24,6 @@ describe('composer draft stash', () => {
     restored.attachments.push({ name: 'b.txt', content: 'b' });
     restored.draft = 'changed';
     expect(restoreComposerState(stash, 'conv-1')).toEqual({ draft: 'text', attachments: [{ name: 'a.txt', content: 'a' }] });
-  });
-});
-
-describe('conversation switch gate', () => {
-  it('never blocks the conversation that is already open', () => {
-    expect(conversationSwitchReason({ running: true, queued: 3, current: true })).toBeNull();
-  });
-
-  it('reports the running task before the queue', () => {
-    expect(conversationSwitchReason({ running: true, queued: 2, current: false })).toBe('running');
-  });
-
-  it('blocks while the pending queue is not empty', () => {
-    expect(conversationSwitchReason({ running: false, queued: 1, current: false })).toBe('queue');
-  });
-
-  it('allows a switch when idle with an empty queue', () => {
-    expect(conversationSwitchReason({ running: false, queued: 0, current: false })).toBeNull();
   });
 });
 

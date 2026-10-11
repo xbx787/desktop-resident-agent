@@ -5,8 +5,6 @@ export interface StashedComposer<A = UserAttachment> {
   attachments: A[];
 }
 
-export type ConversationSwitchReason = 'running' | 'queue' | null;
-
 /** Saves copies of the live composer state under a conversation id so switching away never drops them. */
 export function stashComposerState<A>(stash: Map<string, StashedComposer<A>>, id: string | null | undefined, draft: string, attachments: A[]): void {
   if (!id) return;
@@ -17,14 +15,6 @@ export function stashComposerState<A>(stash: Map<string, StashedComposer<A>>, id
 export function restoreComposerState<A>(stash: Map<string, StashedComposer<A>>, id: string | null | undefined): StashedComposer<A> {
   const saved = id ? stash.get(id) : undefined;
   return saved ? { draft: saved.draft, attachments: [...saved.attachments] } : { draft: '', attachments: [] };
-}
-
-/** Mirrors the controller gate: a switch is blocked while the task runs or the pending queue is non-empty. */
-export function conversationSwitchReason(input: { running: boolean; queued: number; current: boolean }): ConversationSwitchReason {
-  if (input.current) return null;
-  if (input.running) return 'running';
-  if (input.queued > 0) return 'queue';
-  return null;
 }
 
 /** Clipboard files, including bitmaps that arrive without a disk path. */

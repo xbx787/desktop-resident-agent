@@ -146,11 +146,13 @@
    345.6 px and a short rail shrinks with its marks instead of stretching
    them. align-content: start above keeps rows at their own 3.2 px height. */
 .panel-nav.is-expanded { background: rgba(10, 22, 50, .32); }
-.panel-nav-mark { display: block; width: calc(var(--nav-base, 8.8px) + var(--nav-boost, 0px)); height: 3.2px; margin-left: 4px; border-radius: 1.6px; background: rgba(150, 178, 226, .28); transition: width .12s ease, background-color .12s ease; }
-/* Two tones, one per speaker: the user's lines bright, the model's dim. The
-   bright/dim alternation is what makes the wheel's sliding visible — a column
-   of identical grey ticks gives no sense of motion. */
-.panel-nav-mark.is-user { background: rgba(208, 222, 250, .85); }
+/* Two tones, one per speaker: the user's lines a shade brighter than the
+   model's. The split stays narrow, so the alternation is a shading rather
+   than a stripe — and it only arrives once the rail opens; at rest the newest
+   marks sit in one quiet column. The wheel's sliding still reads through the
+   growing marks around the pointer (nav-boost). */
+.panel-nav-mark { display: block; width: calc(var(--nav-base, 8.8px) + var(--nav-boost, 0px)); height: 3.2px; margin-left: 4px; border-radius: 1.6px; background: rgba(152, 180, 228, .42); transition: width .12s ease, background-color .12s ease; }
+.panel-nav-mark.is-user { background: rgba(202, 218, 250, .68); }
 .panel-nav-mark.is-active { background: #dbe7ff; }
 .panel-bubble.is-expanded .panel-nav { --nav-base: 12px; }
 .panel-nav-card { position: absolute; z-index: 6; left: 28px; width: 206px; padding: 8px 10px 9px; border: 1px solid rgba(190, 212, 255, .30); border-radius: 12px; color: #dfe9ff; background: rgba(16, 31, 66, .97); box-shadow: 0 10px 26px rgba(4, 12, 33, .45); transform: translateY(-50%); }
@@ -208,8 +210,12 @@
 .panel-queue-item button svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .panel-queue-item button:hover { color: #fff; background: rgba(184, 207, 252, .14); }
 
-.panel-library-view { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
-.panel-library-header { display: flex; align-items: center; gap: 6px; flex: none; height: 43px; padding: 7px 83px 4px 11px; }
+/* The session list slides in over the chat's left edge — Codex-style — while
+   the conversation and composer stay in place. Its lower edge is pinned to
+   the composer's top edge (inline `bottom`, measured live from the dock), so
+   the input never ends up buried under the list. */
+.panel-library-drawer { position: absolute; z-index: 7; top: 0; left: 0; display: flex; flex-direction: column; width: min(280px, calc(100% - 56px)); min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid rgba(190, 212, 255, .26); border-radius: 0 14px 14px 0; background: linear-gradient(155deg, rgba(36, 61, 116, .99), rgba(14, 29, 65, .99)); box-shadow: 12px 0 30px rgba(4, 12, 33, .42); animation: panel-drawer-in .21s cubic-bezier(.22, .75, .25, 1) both; }
+.panel-library-header { display: flex; align-items: center; gap: 6px; flex: none; height: 43px; padding: 7px 9px 4px 11px; }
 .panel-library-header h2 { flex: 1; margin: 0; color: #f0f5ff; font-size: 13px; font-weight: 600; }
 .panel-library-header button { flex: none; border: 0; color: #d7e5ff; background: transparent; }
 .panel-library-new:disabled { opacity: .42; }
@@ -249,6 +255,8 @@
 .panel-quick-tab { display: flex; align-items: center; justify-content: center; gap: 5px; flex: 1 0 70px; min-width: 0; max-width: 150px; height: 31px; padding: 0 8px; overflow: hidden; border: 1px solid transparent; border-bottom: 0; border-radius: 9px 9px 0 0; color: #aebfe0; background: rgba(155, 190, 252, .055); font-size: 11px !important; white-space: nowrap; }
 .panel-quick-tab-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .panel-quick-tab:hover { color: #f3f7ff; background: rgba(185, 210, 255, .14); }
+.panel-quick-tab-new { flex: 0 0 31px; max-width: 31px; padding: 0; color: #b8cdf0; }
+.panel-quick-tab-new svg { width: 10px; height: 10px; }
 .panel-quick-tab.is-current { height: 34px; border-color: rgba(188, 212, 255, .21); color: #f3f7ff; background: rgba(185, 210, 255, .20); box-shadow: inset 0 2px #a9caff; }
 .panel-chat-header.is-numeric .panel-quick-tabs { align-items: center; height: 35px; }
 .panel-chat-header.is-numeric .panel-quick-tab { flex: none; width: 27px; height: 27px; padding: 0; border: 0; border-radius: 7px; background: transparent; font-variant-numeric: tabular-nums; }
@@ -782,10 +790,11 @@
 @keyframes panel-appear { from { opacity: 0; transform: translateY(8px) scale(.985); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes composer-appear { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes panel-scroll-appear { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes panel-drawer-in { from { transform: translateX(-100%); } }
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes voice-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .55; transform: scale(.85); } }
 @media (prefers-reduced-motion: reduce) {
-  .panel-bubble:not([hidden]), .panel-composer, .panel-send-spinner, .panel-scroll-bottom, .panel-scroll-ring, .panel-thought-state.is-running, .panel-turn-stats-dot.is-running, .panel-working-dots i, .panel-cluster-state.is-running, .panel-attachment-preview { animation: none; }
+  .panel-bubble:not([hidden]), .panel-library-drawer, .panel-composer, .panel-send-spinner, .panel-scroll-bottom, .panel-scroll-ring, .panel-thought-state.is-running, .panel-turn-stats-dot.is-running, .panel-working-dots i, .panel-cluster-state.is-running, .panel-attachment-preview { animation: none; }
   .panel-bubble, .panel-model-menu, .panel-context-tooltip, .panel-cluster-chevron, .panel-tasks-chevron, .panel-mode-switch, .panel-mode-switch::after { transition: none; }
   .panel-compose-trigger:hover { transform: none; }
   .panel-live-label { animation: none; text-shadow: none; background-image: none; -webkit-text-fill-color: var(--panel-live-base); }

@@ -42,6 +42,7 @@ export function usePetState() {
   // The timeline revision this window has applied; -1 = nothing yet. Every
   // snapshot carries the authoritative value, so desync is detectable.
   const revisionRef = useRef(-1);
+  const conversationRef = useRef<string | null>(null);
   const resyncingRef = useRef(false);
 
   useEffect(() => {
@@ -57,7 +58,10 @@ export function usePetState() {
         if (resyncingRef.current) return;
         resyncingRef.current = true;
         void bridge.getSnapshot().then((full) => {
-          if (!active || full.timelineRevision < revisionRef.current) return;
+          if (!active) return;
+          const switched = full.conversationId !== conversationRef.current;
+          if (!switched && full.timelineRevision < revisionRef.current) return;
+          conversationRef.current = full.conversationId ?? null;
           revisionRef.current = full.timelineRevision;
           setSnapshot(full);
         }).catch((cause: unknown) => {
@@ -69,6 +73,14 @@ export function usePetState() {
       unsubscribe = bridge.onSnapshot((incoming) => {
         if (!active) return;
         setError(null);
+        // A different conversation: adopt it whole and restart the revision
+        // bookkeeping — the controller always sends these in full.
+        if (incoming.conversationId !== conversationRef.current) {
+          conversationRef.current = incoming.conversationId ?? null;
+          revisionRef.current = incoming.timelineRevision;
+          setSnapshot(incoming);
+          return;
+        }
         if (incoming.timelinePartial) {
           // A full pull is in flight and will carry these changes; applying
           // them on top of a stale base would corrupt the row order.
@@ -96,6 +108,7 @@ export function usePetState() {
       // publishes are flowing). Yields to anything that already arrived.
       void bridge.getSnapshot().then((next) => {
         if (active && revisionRef.current < 0) {
+          conversationRef.current = next.conversationId ?? null;
           revisionRef.current = next.timelineRevision;
           setSnapshot(next);
         }

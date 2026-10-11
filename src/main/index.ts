@@ -135,12 +135,16 @@ let publishesSinceFullTimeline = FULL_TIMELINE_EVERY
 
 function flushSnapshot(): void {
   if (!avatarWindow || avatarWindow.isDestroyed()) return
-  const snapshot = controller?.getSnapshot() ?? runtime.getSnapshot()
+  if (!controller) return
+  const snapshot = controller.getSnapshot()
   if (rendererAvatarState) snapshot.avatarState = rendererAvatarState
-  const delta = runtime.takeTimelineDelta()
-  const full = delta.reset || publishesSinceFullTimeline <= 0
+  // The delta belongs to the displayed conversation's runtime; a cold
+  // conversation (no runtime) is a full send by construction.
+  const runtime = controller.displayedRuntime()
+  const delta = runtime?.takeTimelineDelta()
+  const full = !delta || delta.reset || publishesSinceFullTimeline <= 0
   if (!full) {
-    snapshot.timeline = delta.entries
+    snapshot.timeline = delta!.entries
     snapshot.timelinePartial = true
   }
   publishesSinceFullTimeline = full ? FULL_TIMELINE_EVERY : publishesSinceFullTimeline - 1
@@ -158,19 +162,20 @@ function publishSnapshot(): void {
 
 // The CLI alone decides whether the SDK path exists; the key may arrive later
 // from a saved model profile instead of the launch environment.
-const claudeAgent = claudeExecutable
-  ? new ClaudeAgentClient(claudeExecutable, claudeKey ?? '', agentWorkspace, path.join(dataRoot, 'claude'), windowsMcpServers)
-  : undefined
-const runtime = new AgentRuntime(
+// One runtime (and one engine connection) per conversation that actually
+// runs; the controller creates them on demand through this factory.
+const createRuntime = (onChange: () => void): AgentRuntime => new AgentRuntime(
   new NoteStore(projectRoot),
   apiKey ? new DeepSeekClient(apiKey) : undefined,
-  () => controller?.handleRuntimeChange(),
-  claudeAgent,
+  onChange,
+  claudeExecutable
+    ? new ClaudeAgentClient(claudeExecutable, claudeKey ?? '', agentWorkspace, path.join(dataRoot, 'claude'), windowsMcpServers)
+    : undefined,
   agentWorkspace
 )
 controller = new ConversationController(
   new ConversationStore(dataRoot),
-  runtime,
+  createRuntime,
   () => publishSnapshot(),
   (error) => { console.error('Conversation background task failed:', error) },
   claudeKey || apiKey
@@ -531,8 +536,9 @@ function registerIpc(): void {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     return activeController().getSnapshot()
   })
-  ipcMain.handle('pet:send-message', async (event, text: unknown, attachments: unknown, strategy: unknown) => {
+  ipcMain.handle('pet:send-message', async (event, text: unknown, attachments: unknown, strategy: unknown, conversationId: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (conversationId !== undefined && typeof conversationId !== 'string') throw new Error('会话编号无效。')
     if (typeof text !== 'string') throw new Error('消息必须是文本。')
     if (!validAttachmentList(attachments ?? [])) {
       throw new Error('附件数据无效。')
@@ -557,7 +563,7 @@ function registerIpc(): void {
       const file = await verifyDroppedFilePath(item.path)
       return { ...item, path: file.path, name: file.name }
     }))
-    await activeController().sendMessage(text, resolved, strategy as 'queue' | 'steer' | undefined)
+    await activeController().sendMessage(text, resolved, strategy as 'queue' | 'steer' | undefined, conversationId as string | undefined)
   })
   ipcMain.handle('pet:create-conversation', async (event, title: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
@@ -588,25 +594,27 @@ function registerIpc(): void {
     if (!trusted(event) || typeof id !== 'string') throw new Error('会话编号无效。')
     await activeController().deleteConversation(id)
   })
-  ipcMain.handle('pet:get-context-usage', (event) => {
+  ipcMain.handle('pet:get-context-usage', (event, conversationId: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
-    return activeController().getContextUsage()
+    if (conversationId !== undefined && typeof conversationId !== 'string') throw new Error('会话编号无效。')
+    return activeController().getContextUsage(conversationId as string | undefined)
   })
-  ipcMain.handle('pet:compact-conversation', (event) => {
+  ipcMain.handle('pet:compact-conversation', (event, conversationId: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
-    return activeController().compactConversation()
+    if (conversationId !== undefined && typeof conversationId !== 'string') throw new Error('会话编号无效。')
+    return activeController().compactConversation(conversationId as string | undefined)
   })
   ipcMain.handle('pet:list-claude-workflows', async (event) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     await activeController().initialize()
-    const claudeMode = activeController().getSnapshot().mode === 'claude_code' && Boolean(claudeAgent)
+    const claudeMode = activeController().getSnapshot().mode === 'claude_code' && Boolean(claudeExecutable)
     const workflows = claudeMode
       ? await listClaudeWorkflows({ projectRoot: agentWorkspace, userConfigRoot: path.join(userHome, '.claude') })
       : []
     const options = new Map<string, ClaudeWorkflowOption>(workflows.map(({ name, description, kind, source }) => [
       name.toLowerCase(), { name, description, kind, source }
     ]))
-    const catalog = claudeMode ? claudeAgent?.getCommandCatalog() : undefined
+    const catalog = claudeMode ? activeController().commandCatalog() : undefined
     for (const [kind, names] of [['command', catalog?.commands ?? []], ['skill', catalog?.skills ?? []]] as const) {
       for (const rawName of names) {
         const name = rawName.replace(/^[/\$]/u, '').trim()
@@ -639,35 +647,41 @@ function registerIpc(): void {
     if (!trusted(event) || typeof id !== 'string') throw new Error('队列编号无效。')
     await activeController().steerQueued(id)
   })
-  ipcMain.handle('pet:approve-action', (event, id: unknown) => {
+  ipcMain.handle('pet:approve-action', (event, id: unknown, conversationId: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     if (typeof id !== 'string') throw new Error('操作编号无效。')
-    return activeController().approveAction(id)
+    if (conversationId !== undefined && typeof conversationId !== 'string') throw new Error('会话编号无效。')
+    return activeController().approveAction(id, conversationId as string | undefined)
   })
-  ipcMain.handle('pet:reject-action', (event, id: unknown) => {
+  ipcMain.handle('pet:reject-action', (event, id: unknown, conversationId: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     if (typeof id !== 'string') throw new Error('操作编号无效。')
-    return activeController().rejectAction(id)
+    if (conversationId !== undefined && typeof conversationId !== 'string') throw new Error('会话编号无效。')
+    return activeController().rejectAction(id, conversationId as string | undefined)
   })
-  ipcMain.handle('pet:answer-question', (event, id: unknown, answers: unknown) => {
+  ipcMain.handle('pet:answer-question', (event, id: unknown, answers: unknown, conversationId: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     if (typeof id !== 'string') throw new Error('问答编号无效。')
     if (!isAskAnswers(answers)) throw new Error('答案格式无效。')
-    return activeController().answerQuestion(id, answers)
+    if (conversationId !== undefined && typeof conversationId !== 'string') throw new Error('会话编号无效。')
+    return activeController().answerQuestion(id, answers, conversationId as string | undefined)
   })
-  ipcMain.handle('pet:answer-plan', (event, id: unknown, approved: unknown) => {
+  ipcMain.handle('pet:answer-plan', (event, id: unknown, approved: unknown, conversationId: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     if (typeof id !== 'string') throw new Error('计划编号无效。')
     if (typeof approved !== 'boolean') throw new Error('批准结果无效。')
-    return activeController().answerPlan(id, approved)
+    if (conversationId !== undefined && typeof conversationId !== 'string') throw new Error('会话编号无效。')
+    return activeController().answerPlan(id, approved, conversationId as string | undefined)
   })
-  ipcMain.handle('pet:stop', (event) => {
+  ipcMain.handle('pet:stop', (event, conversationId: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
-    return activeController().stop()
+    if (conversationId !== undefined && typeof conversationId !== 'string') throw new Error('会话编号无效。')
+    return activeController().stop(conversationId as string | undefined)
   })
-  ipcMain.handle('pet:interrupt-turn', (event) => {
+  ipcMain.handle('pet:interrupt-turn', (event, conversationId: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
-    return activeController().interruptTurn()
+    if (conversationId !== undefined && typeof conversationId !== 'string') throw new Error('会话编号无效。')
+    return activeController().interruptTurn(conversationId as string | undefined)
   })
   ipcMain.handle('pet:save-model-profile', (event, profile: unknown) => {
     if (!modelTrusted(event)) throw new Error('无效的界面请求。')
@@ -824,7 +838,7 @@ function registerIpc(): void {
     if (state !== 'idle' && state !== 'thinking' && state !== 'listening' && state !== 'speaking' && state !== 'acting' && state !== 'success' && state !== 'error') {
       throw new Error('角色状态无效。')
     }
-    const taskStatus = runtime.getSnapshot().taskStatus
+    const taskStatus = activeController().displayedRuntime()?.getSnapshot().taskStatus ?? 'idle'
     if (state === 'idle' && ['planning', 'awaiting_approval', 'executing', 'verifying'].includes(taskStatus)) {
       throw new Error('任务进行中时不能将角色状态设为待机。')
     }
@@ -951,7 +965,7 @@ if (ownsSingleInstance) void app.whenReady().then(async () => {
 })
 
 app.on('before-quit', () => {
-  runtime.stop()
+  controller?.stopAll()
   if (balanceWindow && !balanceWindow.isDestroyed()) balanceWindow.destroy()
   balanceWindow = undefined
   tray?.destroy()

@@ -93,6 +93,13 @@ export function navWheelStep(deltaY: number): number {
   return Math.max(3, Math.min(24, Math.round(Math.abs(deltaY) / 40)));
 }
 
+/** The classes one mark renders with. The speaker tone (`is-user`) belongs to
+ *  the opened rail only: at rest the newest marks read as one quiet column,
+ *  and even opened the split is a narrow shading, not a stripe. */
+export function navMarkClass(role: NavMark['role'], expanded: boolean, isActive: boolean): string {
+  return `panel-nav-mark${expanded && role === 'user' ? ' is-user' : ''}${expanded && isActive ? ' is-active' : ''}`;
+}
+
 /** Which mark row the pointer sits in — the wheel re-anchors the hover with
  *  it. Rows have a constant 5.6 px pitch, so a still pointer keeps the same
  *  row number while the window slides; only what that row shows changes.
@@ -194,7 +201,7 @@ export function TimelineNav({ marks, onJump, windowSize = NAV_WINDOW_WIDE }: { m
         return <i
           key={mark.id}
           aria-hidden="true"
-          className={`panel-nav-mark${mark.role === 'user' ? ' is-user' : ''}${expanded && index === active ? ' is-active' : ''}`}
+          className={navMarkClass(mark.role, expanded, index === active)}
           style={boost ? ({ '--nav-boost': `${boost}px` } as CSSProperties) : undefined}
           onMouseEnter={expanded ? () => setActive(index) : undefined}
         />;

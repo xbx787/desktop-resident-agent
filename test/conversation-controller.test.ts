@@ -39,8 +39,7 @@ describe('conversation controller', () => {
     let finish!: (reply: ModelReply) => void
     const model: ModelClient = { respond: () => new Promise((resolve) => { finish = resolve }) }
     const store = new ConversationStore(testRoot)
-    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
-    const controller = new ConversationController(store, runtime)
+    const controller = new ConversationController(store, (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model))
     await controller.initialize()
     const firstId = controller.getSnapshot().conversationLibrary.activeConversationId!
 
@@ -60,8 +59,7 @@ describe('conversation controller', () => {
 
   it('does not promise binary file reading in the direct DeepSeek mode', async () => {
     const direct: ModelClient = { respond: async () => ({ text: 'should not run' }) }
-    const runtime = new AgentRuntime(new NoteStore(testRoot), direct)
-    const controller = new ConversationController(new ConversationStore(testRoot), runtime)
+    const controller = new ConversationController(new ConversationStore(testRoot), (onChange) => new AgentRuntime(new NoteStore(testRoot), direct, onChange))
     await controller.initialize()
     await expect(controller.sendMessage('分析文档', [
       { name: 'draft.docx', content: '', path: path.join(testRoot, 'draft.docx') }
@@ -79,8 +77,7 @@ describe('conversation controller', () => {
       }),
       steer: (text) => { guidance.push(text); return true }
     }
-    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
-    const controller = new ConversationController(new ConversationStore(testRoot), runtime)
+    const controller = new ConversationController(new ConversationStore(testRoot), (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model))
     await controller.initialize()
     await controller.sendMessage('任务 A')
     await until(() => calls.length === 1, 'native turn')
@@ -109,7 +106,7 @@ describe('conversation controller', () => {
     await fs.writeFile(store.filePath, JSON.stringify(data), 'utf8')
 
     const reopened = new ConversationStore(testRoot)
-    const controller = new ConversationController(reopened, new AgentRuntime(new NoteStore(testRoot), undefined))
+    const controller = new ConversationController(reopened, (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))
     await controller.initialize()
     const summary = controller.getSnapshot().conversationLibrary.conversations
     expect(summary.find((item) => item.id === stale.id)?.archivedAt).not.toBeNull()
@@ -128,8 +125,7 @@ describe('conversation controller', () => {
       })
     }
     const store = new ConversationStore(testRoot)
-    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
-    const controller = new ConversationController(store, runtime)
+    const controller = new ConversationController(store, (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model))
     await controller.initialize()
     const id = controller.getSnapshot().conversationLibrary.activeConversationId!
 
@@ -158,8 +154,7 @@ describe('conversation controller', () => {
     const sources: string[] = []
     const model: ModelClient = { respond: async () => ({ text: '答复' }) }
     const store = new ConversationStore(testRoot)
-    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
-    const controller = new ConversationController(store, runtime, undefined, undefined, (source) => {
+    const controller = new ConversationController(store, (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model), undefined, undefined, (source) => {
       sources.push(source)
       return new Promise((resolve) => { resolveTitle = resolve })
     })
@@ -180,8 +175,7 @@ describe('conversation controller', () => {
     let resolveTitle!: (value: string | null) => void
     const model: ModelClient = { respond: async () => ({ text: '答复' }) }
     const store = new ConversationStore(testRoot)
-    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
-    const controller = new ConversationController(store, runtime, undefined, undefined, () =>
+    const controller = new ConversationController(store, (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model), undefined, undefined, () =>
       new Promise((resolve) => { resolveTitle = resolve }))
     await controller.initialize()
     const id = controller.getSnapshot().conversationLibrary.activeConversationId!
@@ -197,8 +191,7 @@ describe('conversation controller', () => {
   it('keeps the fallback when title generation fails', async () => {
     const model: ModelClient = { respond: async () => ({ text: '答复' }) }
     const store = new ConversationStore(testRoot)
-    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
-    const controller = new ConversationController(store, runtime, undefined, undefined, async () => null)
+    const controller = new ConversationController(store, (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model), undefined, undefined, async () => null)
     await controller.initialize()
     const id = controller.getSnapshot().conversationLibrary.activeConversationId!
 
@@ -218,8 +211,7 @@ describe('conversation controller', () => {
       })
     }
     const store = new ConversationStore(testRoot)
-    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
-    const controller = new ConversationController(store, runtime)
+    const controller = new ConversationController(store, (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model))
     await controller.initialize()
     const id = controller.getSnapshot().conversationLibrary.activeConversationId!
 
@@ -258,7 +250,7 @@ describe('conversation controller', () => {
     }
     const controller = new ConversationController(
       new ConversationStore(testRoot),
-      new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+      (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model)
     )
     await controller.initialize()
     await controller.sendMessage('运行 A')
@@ -284,8 +276,7 @@ describe('conversation controller', () => {
       steer: async (text: string) => { steered.push(text); return true }
     }
     const store = new ConversationStore(testRoot)
-    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
-    const controller = new ConversationController(store, runtime)
+    const controller = new ConversationController(store, (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model))
     await controller.initialize()
     const id = controller.getSnapshot().conversationLibrary.activeConversationId!
 
@@ -310,8 +301,7 @@ describe('conversation controller', () => {
       })
     }
     const store = new ConversationStore(testRoot)
-    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
-    const controller = new ConversationController(store, runtime)
+    const controller = new ConversationController(store, (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model))
     await controller.initialize()
 
     await controller.sendMessage('第一条')
@@ -345,7 +335,7 @@ describe('conversation controller', () => {
     }
     const controller = new ConversationController(
       new ConversationStore(testRoot),
-      new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+      (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model)
     )
     await controller.initialize()
     await new Promise((resolve) => setTimeout(resolve, 15))
@@ -367,19 +357,18 @@ describe('conversation controller', () => {
       respond: () => new Promise((resolve) => { finish = resolve })
     }
     const store = new ConversationStore(testRoot)
-    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
-    const controller = new ConversationController(store, runtime)
+    const controller = new ConversationController(store, (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model))
     await controller.initialize()
     const firstId = controller.getSnapshot().conversationLibrary.activeConversationId!
 
     await controller.sendMessage('运行中')
-    await until(() => runtime.isRunning(), 'running turn')
+    await until(() => controller.displayedRuntime()!.isRunning(), 'running turn')
     const queued = await controller.sendMessage('不要发送')
     await controller.removeQueued(queued.id)
     expect(controller.getSnapshot().pendingMessages).toEqual([])
     await controller.stop()
     finish({ text: '迟到答复' })
-    await until(() => !runtime.isRunning(), 'stopped turn')
+    await until(() => !controller.displayedRuntime()!.isRunning(), 'stopped turn')
     await until(() => controller.getSnapshot().timeline.some((item) => item.text.includes('已请求停止')), 'stop status')
     const first = await store.getConversation(firstId)
     expect(first?.history.some((item) => item.content === '不要发送')).toBe(false)
@@ -404,13 +393,13 @@ describe('model profiles', () => {
 
   it('materializes the launch environment as the first profile when none exists', async () => {
     const seed: ModelProfile = { id: 'default', name: 'DeepSeek', baseUrl: 'https://api.example.test/anthropic', apiKey: 'sk-env', model: 'm' }
-    const first = new ConversationController(new ConversationStore(testRoot), new AgentRuntime(new NoteStore(testRoot), undefined, undefined, { respond: async () => ({ text: 'ok' }) }), () => {}, () => {}, undefined, seed)
+    const first = new ConversationController(new ConversationStore(testRoot), (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, { respond: async () => ({ text: 'ok' }) }), () => {}, () => {}, undefined, seed)
     await first.initialize()
     expect(first.getSnapshot().conversationLibrary.settings.modelProfiles.map((item) => item.name)).toEqual(['DeepSeek'])
     expect(first.getSnapshot().conversationLibrary.settings.activeModelProfileId).toBe('default')
 
     // A later boot with profiles already present must not seed again.
-    const again = new ConversationController(new ConversationStore(testRoot), new AgentRuntime(new NoteStore(testRoot), undefined, undefined, { respond: async () => ({ text: 'ok' }) }), () => {}, () => {}, undefined, { ...seed, id: 'other', name: '重复' })
+    const again = new ConversationController(new ConversationStore(testRoot), (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, { respond: async () => ({ text: 'ok' }) }), () => {}, () => {}, undefined, { ...seed, id: 'other', name: '重复' })
     await again.initialize()
     expect(again.getSnapshot().conversationLibrary.settings.modelProfiles.map((item) => item.name)).toEqual(['DeepSeek'])
   })
@@ -422,8 +411,7 @@ describe('model profiles', () => {
       setProvider: (provider) => { applied.push(provider) }
     }
     const store = new ConversationStore(testRoot)
-    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, sdk)
-    const controller = new ConversationController(store, runtime)
+    const controller = new ConversationController(store, (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, sdk))
     await controller.initialize()
 
     await controller.saveModelProfile(profile('p1', '一号'))
@@ -443,7 +431,7 @@ describe('model profiles', () => {
     expect(applied.at(-1)).toBeUndefined()
 
     // The choice survives a reload through the store.
-    const reloaded = new ConversationController(new ConversationStore(testRoot), new AgentRuntime(new NoteStore(testRoot), undefined, undefined, { respond: async () => ({ text: 'ok' }) }))
+    const reloaded = new ConversationController(new ConversationStore(testRoot), (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, { respond: async () => ({ text: 'ok' }) }))
     await reloaded.initialize()
     expect(reloaded.getSnapshot().conversationLibrary.settings.modelProfiles.map((item) => item.name)).toEqual(['一号'])
   })
@@ -454,9 +442,8 @@ describe('idle direct send', () => {
     let finish!: (reply: ModelReply) => void
     const model: ModelClient = { respond: () => new Promise((resolve) => { finish = resolve }) }
     const store = new ConversationStore(testRoot)
-    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
     const queuedSeen: number[] = []
-    const controller = new ConversationController(store, runtime, () => {
+    const controller = new ConversationController(store, (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model), () => {
       queuedSeen.push(controller.getSnapshot().pendingMessages.length)
     })
     await controller.initialize()
@@ -481,8 +468,7 @@ describe('idle direct send', () => {
       }
     }
     const store = new ConversationStore(testRoot)
-    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
-    const controller = new ConversationController(store, runtime)
+    const controller = new ConversationController(store, (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model))
     await controller.initialize()
     await controller.sendMessage('第一条')
     await until(() => calls.length === 1, 'first call')
@@ -494,5 +480,115 @@ describe('idle direct send', () => {
     finishes[1]({ text: '二完成' })
     await until(() => controller.getSnapshot().taskStatus === 'done', 'all done')
     expect(calls).toEqual(['第一条', '排队中'])
+  })
+})
+
+describe('parallel conversations', () => {
+  it('switches display while a conversation keeps running, and both drain independently', async () => {
+    const calls: Array<{ text: string; resolve: (reply: ModelReply) => void }> = []
+    const model: ModelClient = {
+      respond: (history) => new Promise((resolve) => {
+        calls.push({ text: history[history.length - 1].content, resolve })
+      })
+    }
+    const store = new ConversationStore(testRoot)
+    const controller = new ConversationController(store, (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model))
+    await controller.initialize()
+    const aId = controller.getSnapshot().conversationLibrary.activeConversationId!
+
+    await controller.sendMessage('A 的任务')
+    await until(() => calls.length === 1, 'A running')
+
+    // Switching display while A runs must not throw and must not stop A.
+    const b = await controller.createConversation('B 会话')
+    expect(controller.getSnapshot().conversationId).toBe(b.id)
+    expect(calls).toHaveLength(1)
+
+    // B runs in parallel on its own runtime.
+    await controller.sendMessage('B 的任务')
+    await until(() => calls.length === 2, 'B running')
+    expect(calls.map((call) => call.text)).toEqual(['A 的任务', 'B 的任务'])
+
+    // Both tabs show live status through the library summaries.
+    let library = controller.getSnapshot().conversationLibrary.conversations
+    expect(library.find((item) => item.id === aId)?.taskStatus).toBe('planning')
+    expect(library.find((item) => item.id === b.id)?.taskStatus).toBe('planning')
+
+    // A finishes while B stays displayed; its reply lands in A only.
+    calls[0].resolve({ text: 'A 答复' })
+    await until(() => controller.getSnapshot().conversationLibrary.conversations
+      .find((item) => item.id === aId)?.taskStatus === 'done', 'A done')
+    expect(controller.getSnapshot().timeline.some((item) => item.text === 'A 答复')).toBe(false)
+
+    await controller.selectConversation(aId)
+    expect(controller.getSnapshot().timeline.some((item) => item.text === 'A 答复')).toBe(true)
+    expect(controller.getSnapshot().conversationLibrary.conversations
+      .find((item) => item.id === b.id)?.taskStatus).toBe('planning')
+
+    calls[1].resolve({ text: 'B 答复' })
+    await until(() => controller.getSnapshot().conversationLibrary.conversations
+      .find((item) => item.id === b.id)?.taskStatus === 'done', 'B done')
+    await controller.selectConversation(b.id)
+    await until(() => controller.getSnapshot().timeline.some((item) => item.text === 'B 答复'), 'B reply')
+
+    const savedA = await store.getConversation(aId)
+    const savedB = await store.getConversation(b.id)
+    expect(savedA?.history.map((item) => item.content)).toEqual(['A 的任务', 'A 答复'])
+    expect(savedB?.history.map((item) => item.content)).toEqual(['B 的任务', 'B 答复'])
+  })
+
+  it('keeps the pending queue per conversation', async () => {
+    const calls: Array<{ text: string; resolve: (reply: ModelReply) => void }> = []
+    const model: ModelClient = {
+      respond: (history) => new Promise((resolve) => {
+        calls.push({ text: history[history.length - 1].content, resolve })
+      })
+    }
+    const store = new ConversationStore(testRoot)
+    const controller = new ConversationController(store, (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model))
+    await controller.initialize()
+    const aId = controller.getSnapshot().conversationLibrary.activeConversationId!
+
+    await controller.sendMessage('A1')
+    await until(() => calls.length === 1, 'A1 running')
+    await controller.sendMessage('A2')
+    expect(controller.getSnapshot().pendingMessages.map((item) => item.text)).toEqual(['A2'])
+
+    // A fresh conversation starts with an empty queue; its idle send dispatches
+    // straight away and never shows in a waiting strip.
+    const b = await controller.createConversation('B')
+    expect(controller.getSnapshot().pendingMessages).toEqual([])
+    await controller.sendMessage('B1')
+    await until(() => calls.length === 2, 'B1 running')
+    expect(controller.getSnapshot().pendingMessages).toEqual([])
+
+    // Switching back shows A's queue untouched.
+    await controller.selectConversation(aId)
+    expect(controller.getSnapshot().pendingMessages.map((item) => item.text)).toEqual(['A2'])
+
+    calls.find((call) => call.text === 'A1')!.resolve({ text: 'A1 答复' })
+    await until(() => calls.some((call) => call.text === 'A2'), 'A2 dispatched')
+    calls.find((call) => call.text === 'A2')!.resolve({ text: 'A2 答复' })
+    await until(() => controller.getSnapshot().pendingMessages.length === 0, 'A drained')
+    calls.find((call) => call.text === 'B1')!.resolve({ text: 'B1 答复' })
+    await until(() => controller.getSnapshot().conversationLibrary.conversations
+      .find((item) => item.id === b.id)?.taskStatus === 'done', 'B done')
+  })
+
+  it('still refuses to delete a conversation while it is running', async () => {
+    let finish!: (reply: ModelReply) => void
+    const model: ModelClient = { respond: () => new Promise((resolve) => { finish = resolve }) }
+    const store = new ConversationStore(testRoot)
+    const controller = new ConversationController(store, (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model))
+    await controller.initialize()
+    const id = controller.getSnapshot().conversationLibrary.activeConversationId!
+
+    await controller.sendMessage('运行中')
+    await until(() => controller.displayedRuntime()!.isRunning(), 'running turn')
+    await expect(controller.deleteConversation(id)).rejects.toThrow('仍有任务')
+    await expect(controller.archiveConversation(id)).rejects.toThrow('仍有任务')
+    await controller.stop()
+    finish({ text: '答复' })
+    await until(() => !controller.displayedRuntime()!.isRunning(), 'stopped')
   })
 })

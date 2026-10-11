@@ -32,20 +32,33 @@ function validateMessage(text: string, attachments: UserAttachment[]): string {
   return clean
 }
 
-/** Keeps one AgentRuntime bound to one persisted conversation at a time. */
+/**
+ * Keeps one AgentRuntime per conversation that has actually run, plus the
+ * queue and drain state of each. `activeId` is the *displayed* conversation —
+ * switching it never touches a runtime, so any number of conversations can be
+ * working in parallel while the panel shows whichever one the user picked.
+ */
 export class ConversationController {
   private initialized = false
   private initialization: Promise<void> | null = null
   private library: ConversationLibraryState | null = null
+  /** The displayed conversation — what every snapshot describes. */
   private activeId: string | null = null
-  private pending: PendingMessage[] = []
+  /** One live runtime per conversation that has sent or been restored. */
+  private readonly runtimes = new Map<string, AgentRuntime>()
+  /** Queue + drain bookkeeping, per conversation. */
+  private readonly pending = new Map<string, PendingMessage[]>()
+  private readonly drains = new Map<string, { promise: Promise<void>; generation: number }>()
+  private readonly drainGenerations = new Map<string, number>()
+  /** A displayed conversation without a runtime is served from this record. */
+  private displayedRecord: ConversationRecord | null = null
   private operations: Promise<void> = Promise.resolve()
-  private drainPromise: Promise<void> | null = null
-  private drainGeneration = 0
+  /** Last seen readiness flags — a cold snapshot still has to answer them. */
+  private readiness = { modelReady: false, claudeCodeReady: false }
 
   constructor(
     private readonly store: ConversationStore,
-    private readonly runtime: AgentRuntime,
+    private readonly createRuntime: (onChange: () => void) => AgentRuntime,
     private readonly onChange: () => void = () => {},
     private readonly onBackgroundError: (error: unknown) => void = () => {},
     private readonly generateTitle?: (source: string) => Promise<string | null>,
@@ -70,14 +83,14 @@ export class ConversationController {
     let state = await this.store.getState()
     let record = state.activeConversationId ? await this.store.getConversation(state.activeConversationId) : null
     if (!record) {
-      record = await this.store.createConversation('新对话', this.runtime.getSnapshot().mode)
+      record = await this.store.createConversation('新对话', 'claude_code')
       state = await this.store.getState()
     }
     this.activeId = record.id
-    this.pending = structuredClone(record.pendingMessages)
+    this.pending.set(record.id, structuredClone(record.pendingMessages))
     this.library = state
     this.initialized = true
-    this.runtime.restoreConversation(record)
+    await this.ensureRuntime(record.id, record)
     // A saved model profile is the launch configuration from here on. A fresh
     // (or freshly upgraded) install has none yet — materialize the launch
     // environment as one editable profile so the model menu has something to
@@ -88,24 +101,91 @@ export class ConversationController {
         activeModelProfileId: this.seedProfile.id
       })
       this.library = { ...this.library, settings }
+      this.applyModelProfile(this.activeProfile())
     }
-    const activeProfile = this.library.settings.modelProfiles
-      .find((item) => item.id === this.library!.settings.activeModelProfileId)
-    if (activeProfile) this.runtime.setModelProfile(activeProfile)
-    this.runtime.setIdentity({ userName: this.library.settings.userName, assistantName: this.library.settings.assistantName })
     this.emit()
+  }
+
+  /** The runtime for `id`, created (and restored from its record) on first
+   *  use — first send, or the initial load. Displaying a conversation never
+   *  comes through here. */
+  private async ensureRuntime(id: string, record?: ConversationRecord): Promise<AgentRuntime> {
+    const existing = this.runtimes.get(id)
+    if (existing) return existing
+    const rec = record ?? (await this.store.getConversation(id))
+    if (!rec) throw new ConversationStoreError('NOT_FOUND', '找不到这个会话。')
+    const runtime = this.createRuntime(() => this.handleRuntimeChange())
+    runtime.conversationId = id
+    runtime.restoreConversation(rec)
+    runtime.setModelProfile(this.activeProfile())
+    if (this.library) {
+      runtime.setIdentity({ userName: this.library.settings.userName, assistantName: this.library.settings.assistantName })
+      runtime.setEffort(this.library.settings.effort)
+    }
+    this.runtimes.set(id, runtime)
+    if (!this.pending.has(id)) this.pending.set(id, structuredClone(rec.pendingMessages))
+    const snap = runtime.getSnapshot()
+    this.readiness = { modelReady: snap.modelReady, claudeCodeReady: snap.claudeCodeReady }
+    return runtime
+  }
+
+  private runtimeIfAny(id: string | null | undefined): AgentRuntime | undefined {
+    return id ? this.runtimes.get(id) : undefined
+  }
+
+  /** The publishing chain's handle on the displayed runtime (null for a cold
+   *  conversation; the snapshot then comes straight from the stored record). */
+  displayedRuntime(): AgentRuntime | null {
+    return this.runtimeIfAny(this.activeId) ?? null
+  }
+
+  /** The first live runtime's command/skill catalog (the catalog is a
+   *  property of the engine, identical across conversations). */
+  commandCatalog(): { commands: string[]; skills: string[] } | undefined {
+    for (const runtime of this.runtimes.values()) {
+      const catalog = runtime.getCommandCatalog()
+      if (catalog) return catalog
+    }
+    return undefined
+  }
+
+  /** Stops every live runtime — used when the app is quitting. */
+  stopAll(): void {
+    for (const runtime of this.runtimes.values()) runtime.stop()
   }
 
   getSnapshot(): ControllerSnapshot {
     if (!this.initialized || !this.library) throw new Error('会话库尚未就绪。')
-    const runtime = this.runtime.getSnapshot()
+    const id = this.activeId!
     const library = structuredClone(this.library)
-    const activeSummary = library.conversations.find((item) => item.id === this.activeId)
-    if (activeSummary) activeSummary.taskStatus = runtime.taskStatus
+    // Every live runtime reports its status into the library so the tab dots
+    // are truthful for background conversations too.
+    for (const [rid, runtime] of this.runtimes) {
+      const summary = library.conversations.find((item) => item.id === rid)
+      if (summary) summary.taskStatus = runtime.getSnapshot().taskStatus
+    }
+    const runtime = this.runtimes.get(id)
+    if (runtime) {
+      return {
+        ...runtime.getSnapshot(),
+        conversationId: id,
+        conversationLibrary: library,
+        pendingMessages: structuredClone(this.pending.get(id) ?? [])
+      }
+    }
+    // Cold conversation: served from its record, full timeline, idle.
+    const record = this.displayedRecord?.id === id ? this.displayedRecord : null
     return {
-      ...runtime,
+      mode: record?.mode ?? 'claude_code',
+      avatarState: 'idle',
+      taskStatus: record?.taskStatus ?? 'idle',
+      timeline: structuredClone(record?.timeline ?? []),
+      timelineRevision: 0,
+      modelReady: this.readiness.modelReady,
+      claudeCodeReady: this.readiness.claudeCodeReady,
+      conversationId: id,
       conversationLibrary: library,
-      pendingMessages: structuredClone(this.pending)
+      pendingMessages: structuredClone(this.pending.get(id) ?? [])
     }
   }
 
@@ -125,25 +205,36 @@ export class ConversationController {
     return result
   }
 
-  private assertIdle(): void {
-    if (this.runtime.isRunning() || this.pending.length > 0 || this.drainPromise) {
-      throw new Error('当前会话仍有任务或待发送消息，请先等待完成或停止。')
+  private assertIdle(id: string): void {
+    const runtime = this.runtimes.get(id)
+    if ((runtime?.isRunning() ?? false) || (this.pending.get(id)?.length ?? 0) > 0 || this.drains.has(id)) {
+      throw new Error('这个会话仍有任务或待发送消息，请先等待完成或停止。')
     }
   }
 
   private async refreshLibrary(): Promise<void> {
     this.library = await this.store.getState()
     // Model clients track the current depth; setting it repeatedly is a no-op.
-    this.runtime.setEffort(this.library.settings.effort)
+    for (const runtime of this.runtimes.values()) runtime.setEffort(this.library.settings.effort)
     this.emit()
   }
 
-  private async persistActive(title?: string): Promise<void> {
-    if (!this.activeId) throw new Error('没有可保存的当前会话。')
-    await this.store.updateConversation(this.activeId, {
-      ...this.runtime.exportConversationState(),
-      taskStatus: this.runtime.getSnapshot().taskStatus,
-      pendingMessages: structuredClone(this.pending),
+  private async persistConversation(id: string, title?: string): Promise<void> {
+    const pending = structuredClone(this.pending.get(id) ?? [])
+    const runtime = this.runtimes.get(id)
+    if (!runtime) {
+      await this.store.updateConversation(id, {
+        taskStatus: this.displayedRecord?.id === id ? this.displayedRecord.taskStatus : 'idle',
+        pendingMessages: pending,
+        ...(title ? { title } : {})
+      })
+      await this.refreshLibrary()
+      return
+    }
+    await this.store.updateConversation(id, {
+      ...runtime.exportConversationState(),
+      taskStatus: runtime.getSnapshot().taskStatus,
+      pendingMessages: pending,
       ...(title ? { title } : {})
     })
     await this.refreshLibrary()
@@ -172,17 +263,24 @@ export class ConversationController {
     }
   }
 
-  private async activateStoreSelection(): Promise<ConversationRecord> {
-    let state = await this.store.getState()
-    let record = state.activeConversationId ? await this.store.getConversation(state.activeConversationId) : null
+  /** Makes `id` the displayed conversation. No runtime is created or touched:
+   *  a running conversation keeps running in the background. */
+  private async setDisplayed(id: string): Promise<ConversationRecord> {
+    let record = await this.store.getConversation(id)
     if (!record) {
-      record = await this.store.createConversation('新对话', this.runtime.getSnapshot().mode)
-      state = await this.store.getState()
+      record = await this.store.createConversation('新对话', 'claude_code')
     }
     this.activeId = record.id
-    this.pending = structuredClone(record.pendingMessages)
-    this.library = state
-    this.runtime.restoreConversation(record)
+    if (!this.pending.has(record.id)) this.pending.set(record.id, structuredClone(record.pendingMessages))
+    this.library = await this.store.getState()
+    const runtime = this.runtimes.get(record.id)
+    if (runtime) {
+      // Coming back to a live conversation: the publisher owes a full timeline.
+      runtime.forceFullTimeline()
+      this.displayedRecord = null
+    } else {
+      this.displayedRecord = record
+    }
     this.emit()
     return record
   }
@@ -195,98 +293,121 @@ export class ConversationController {
   async listConversations(options: ConversationSearchOptions = {}): Promise<ConversationSummary[]> {
     await this.initialize()
     const summaries = await this.store.listConversations(options)
-    const taskStatus = this.runtime.getSnapshot().taskStatus
-    return summaries.map((summary) => summary.id === this.activeId ? { ...summary, taskStatus } : summary)
+    return summaries.map((summary) => {
+      const runtime = this.runtimes.get(summary.id)
+      return runtime ? { ...summary, taskStatus: runtime.getSnapshot().taskStatus } : summary
+    })
   }
 
   /** Acknowledges once safely queued on disk; it never waits for the model. */
-  async sendMessage(text: string, attachments: UserAttachment[] = [], strategy: SendStrategy = 'queue'): Promise<PendingMessage> {
+  async sendMessage(text: string, attachments: UserAttachment[] = [], strategy: SendStrategy = 'queue', conversationId?: string): Promise<PendingMessage> {
     await this.initialize()
+    const id = conversationId ?? this.activeId
+    if (!id) throw new ConversationStoreError('NOT_FOUND', '找不到这个会话。')
     if (strategy !== 'queue' && strategy !== 'steer') {
       throw new ConversationStoreError('INVALID_INPUT', '不支持的发送方式。')
     }
     const clean = validateMessage(text, attachments)
-    if (this.runtime.getSnapshot().mode !== 'claude_code' && attachments.some((item) => item.path && !item.content)) {
+    const runtime = await this.ensureRuntime(id)
+    if (runtime.getSnapshot().mode !== 'claude_code' && attachments.some((item) => item.path && !item.content)) {
       throw new ConversationStoreError('INVALID_INPUT', '当前模型没有本地文件读取工具。请切换到 Claude Code 模式后再发送此文件。')
     }
     const message: PendingMessage = {
       id: randomUUID(), text: clean, attachments: structuredClone(attachments), createdAt: new Date().toISOString()
     }
     return this.serialize(async () => {
+      const queue = this.queueOf(id)
       if (strategy === 'steer') {
-        if (await this.runtime.steerMessage(message.text, message.attachments)) {
-          await this.persistActive()
+        if (await runtime.steerMessage(message.text, message.attachments)) {
+          await this.persistConversation(id)
           return structuredClone(message)
         }
         // Native steering is only available inside an active Claude Code turn.
         // Otherwise place this guidance next, without stopping the turn or dropping queued work.
-        this.pending.unshift(message)
-      } else if (!this.runtime.isRunning() && !this.pending.length && !this.drainPromise) {
+        queue.unshift(message)
+      } else if (!runtime.isRunning() && !queue.length && !this.drains.has(id)) {
         // Idle with an empty queue: hand the message to the drain as its seed
         // instead of queueing it first — going through the waiting strip made
         // it flash there for one snapshot before the drain moved it out, and
         // an idle send should just appear as a message. The drain still runs
         // its usual loop, so anything queued while this turn runs is picked
         // up the moment it ends.
-        this.scheduleDrain(message)
+        this.scheduleDrain(id, message)
         return structuredClone(message)
       } else {
-        this.pending.push(message)
+        queue.push(message)
       }
-      await this.persistActive()
-      this.scheduleDrain()
+      await this.persistConversation(id)
+      this.scheduleDrain(id)
       return structuredClone(message)
     })
   }
 
-  private scheduleDrain(seed?: PendingMessage): void {
-    if (this.drainPromise || (!this.pending.length && !seed) || this.runtime.isRunning()) return
-    const generation = this.drainGeneration
-    const work = Promise.resolve().then(() => this.drain(generation, seed))
-    this.drainPromise = work
+  private queueOf(id: string): PendingMessage[] {
+    let queue = this.pending.get(id)
+    if (!queue) {
+      queue = []
+      this.pending.set(id, queue)
+    }
+    return queue
+  }
+
+  private generationOf(id: string): number {
+    return this.drainGenerations.get(id) ?? 0
+  }
+
+  private scheduleDrain(id: string, seed?: PendingMessage): void {
+    const runtime = this.runtimes.get(id)
+    if (!runtime || this.drains.has(id) || (!this.queueOf(id).length && !seed) || runtime.isRunning()) return
+    const generation = this.generationOf(id)
+    const work = Promise.resolve().then(() => this.drain(id, generation, seed))
+    this.drains.set(id, { promise: work, generation })
     void work.then(
       () => undefined,
       (error: unknown) => {
         try { this.onBackgroundError(error) } catch { /* Keep the queue recoverable. */ }
       }
     ).finally(() => {
-      if (this.drainPromise === work) this.drainPromise = null
-      if (this.pending.length && !this.runtime.isRunning()) this.scheduleDrain()
+      const current = this.drains.get(id)
+      if (current?.promise === work) this.drains.delete(id)
+      const rt = this.runtimes.get(id)
+      if (this.queueOf(id).length && rt && !rt.isRunning()) this.scheduleDrain(id)
     })
   }
 
-  private async drain(generation: number, seed?: PendingMessage): Promise<void> {
+  private async drain(id: string, generation: number, seed?: PendingMessage): Promise<void> {
+    const runtime = this.runtimes.get(id)
+    if (!runtime) return
     // The seed rides the first iteration without ever touching `pending`; from
     // the second iteration on this is the plain queue drain it always was.
     let seeded: PendingMessage | null = seed ?? null
-    while (generation === this.drainGeneration && !this.runtime.isRunning() && (seeded || this.pending.length)) {
+    while (generation === this.generationOf(id) && !runtime.isRunning() && (seeded || this.queueOf(id).length)) {
       const prepared = await this.serialize(async () => {
-        if (generation !== this.drainGeneration) return null
-        const next = seeded ?? this.pending.shift()
+        if (generation !== this.generationOf(id)) return null
+        const next = seeded ?? this.queueOf(id).shift()
         seeded = null
         if (!next) return null
-        const id = this.activeId
         const source = next.text.trim() || next.attachments.map((item) => item.name).join('、')
-        const title = this.library?.conversations.find((item) => item.id === this.activeId)?.title === '新对话'
+        const title = this.library?.conversations.find((item) => item.id === id)?.title === '新对话'
           ? (next.text.split(/\r?\n/u, 1)[0].trim() || `附件：${next.attachments[0]?.name ?? '对话'}`).slice(0, 60)
           : undefined
-        const run = this.runtime.sendMessage(next.text, next.attachments)
+        const run = runtime.sendMessage(next.text, next.attachments)
         try {
-          await this.persistActive(title)
+          await this.persistConversation(id, title)
         } catch (error) {
-          this.runtime.stop()
+          runtime.stop()
           throw error
         }
-        return { run, id, title, source }
+        return { run, title, source }
       })
       if (!prepared) return
-      if (prepared.id && prepared.title) void this.refineTitle(prepared.id, prepared.source, prepared.title)
+      if (prepared.title) void this.refineTitle(id, prepared.source, prepared.title)
       try {
         await prepared.run
       } finally {
-        if (generation === this.drainGeneration) {
+        if (generation === this.generationOf(id)) {
           await this.serialize(async () => {
-            if (generation === this.drainGeneration) await this.persistActive()
+            if (generation === this.generationOf(id)) await this.persistConversation(id)
           })
         }
       }
@@ -296,29 +417,32 @@ export class ConversationController {
   /** The panel's kill switch for a runaway tool: hands the interrupt straight
    *  to the client; the turn ends through its normal path and queued work
    *  stays queued. */
-  async interruptTurn(): Promise<void> {
+  async interruptTurn(conversationId?: string): Promise<void> {
     await this.initialize()
-    await this.runtime.interruptTurn()
+    const runtime = this.runtimeIfAny(conversationId ?? this.activeId)
+    if (runtime) await runtime.interruptTurn()
   }
 
-  async stop(): Promise<void> {
+  async stop(conversationId?: string): Promise<void> {
     await this.initialize()
-    await this.serialize(async () => {
-      this.drainGeneration += 1
-      this.drainPromise = null
-      this.runtime.stop()
-      this.pending = []
-      await this.persistActive()
+    const id = conversationId ?? this.activeId
+    if (!id) return
+    return this.serialize(async () => {
+      this.drainGenerations.set(id, this.generationOf(id) + 1)
+      this.drains.delete(id)
+      this.runtimes.get(id)?.stop()
+      this.pending.set(id, [])
+      await this.persistConversation(id)
     })
   }
 
   async removeQueued(id: string): Promise<void> {
     await this.initialize()
-    await this.serialize(async () => {
-      const before = this.pending.length
-      this.pending = this.pending.filter((message) => message.id !== id)
-      if (before === this.pending.length) throw new ConversationStoreError('NOT_FOUND', '找不到这条待发送消息。')
-      await this.persistActive()
+    return this.serialize(async () => {
+      const owner = this.ownerOfQueued(id)
+      if (!owner) throw new ConversationStoreError('NOT_FOUND', '找不到这条待发送消息。')
+      this.pending.set(owner, this.queueOf(owner).filter((message) => message.id !== id))
+      await this.persistConversation(owner)
     })
   }
 
@@ -327,33 +451,44 @@ export class ConversationController {
    *  instead — it is never dropped. */
   async steerQueued(id: string): Promise<void> {
     await this.initialize()
-    await this.serialize(async () => {
-      const index = this.pending.findIndex((message) => message.id === id)
-      if (index < 0) throw new ConversationStoreError('NOT_FOUND', '找不到这条待发送消息。')
-      const message = this.pending.splice(index, 1)[0]
-      if (!await this.runtime.steerMessage(message.text, message.attachments)) {
-        this.pending.unshift(message)
+    return this.serialize(async () => {
+      const owner = this.ownerOfQueued(id)
+      if (!owner) throw new ConversationStoreError('NOT_FOUND', '找不到这条待发送消息。')
+      const queue = this.queueOf(owner)
+      const index = queue.findIndex((message) => message.id === id)
+      const message = queue.splice(index, 1)[0]
+      const runtime = this.runtimes.get(owner)
+      if (!runtime || !await runtime.steerMessage(message.text, message.attachments)) {
+        queue.unshift(message)
       }
-      await this.persistActive()
-      this.scheduleDrain()
+      await this.persistConversation(owner)
+      this.scheduleDrain(owner)
     })
+  }
+
+  private ownerOfQueued(messageId: string): string | null {
+    for (const [id, queue] of this.pending) {
+      if (queue.some((message) => message.id === messageId)) return id
+    }
+    return null
   }
 
   async createConversation(title = '新对话'): Promise<ConversationRecord> {
     await this.initialize()
     return this.serialize(async () => {
-      this.assertIdle()
-      const record = await this.store.createConversation(title, this.runtime.getSnapshot().mode)
-      return this.activateStoreSelection().then(() => record)
+      const mode = this.displayedRuntime()?.getSnapshot().mode
+        ?? this.library?.conversations.find((item) => item.id === this.activeId)?.mode
+        ?? 'claude_code'
+      const record = await this.store.createConversation(title, mode)
+      return this.setDisplayed(record.id).then(() => record)
     })
   }
 
   async selectConversation(id: string): Promise<ConversationRecord> {
     await this.initialize()
     return this.serialize(async () => {
-      this.assertIdle()
       await this.store.setActiveConversation(id)
-      return this.activateStoreSelection()
+      return this.setDisplayed(id)
     })
   }
 
@@ -369,10 +504,17 @@ export class ConversationController {
   async archiveConversation(id: string): Promise<ConversationLibraryState> {
     await this.initialize()
     return this.serialize(async () => {
-      if (id === this.activeId) this.assertIdle()
+      this.assertIdle(id)
       await this.store.archiveConversation(id)
-      if (id === this.activeId) await this.activateStoreSelection()
-      else await this.refreshLibrary()
+      this.releaseRuntime(id)
+      if (id === this.activeId) {
+        const state = await this.store.getState()
+        const nextId = state.activeConversationId
+        if (nextId) await this.setDisplayed(nextId)
+        else this.emit()
+      } else {
+        await this.refreshLibrary()
+      }
       return structuredClone(this.library!)
     })
   }
@@ -380,9 +522,8 @@ export class ConversationController {
   async restoreConversation(id: string): Promise<ConversationLibraryState> {
     await this.initialize()
     return this.serialize(async () => {
-      this.assertIdle()
       await this.store.restoreConversation(id)
-      await this.activateStoreSelection()
+      await this.setDisplayed(id)
       return structuredClone(this.library!)
     })
   }
@@ -390,12 +531,31 @@ export class ConversationController {
   async deleteConversation(id: string): Promise<ConversationLibraryState> {
     await this.initialize()
     return this.serialize(async () => {
-      if (id === this.activeId) this.assertIdle()
+      this.assertIdle(id)
       await this.store.deleteConversation(id)
-      if (id === this.activeId) await this.activateStoreSelection()
-      else await this.refreshLibrary()
+      this.releaseRuntime(id)
+      this.pending.delete(id)
+      if (id === this.activeId) {
+        const state = await this.store.getState()
+        const nextId = state.activeConversationId
+        if (nextId) await this.setDisplayed(nextId)
+        else this.emit()
+      } else {
+        await this.refreshLibrary()
+      }
       return structuredClone(this.library!)
     })
+  }
+
+  /** A conversation that leaves the list lets its runtime (and SDK query) go. */
+  private releaseRuntime(id: string): void {
+    const runtime = this.runtimes.get(id)
+    if (!runtime) return
+    runtime.stop()
+    this.runtimes.delete(id)
+    this.drains.delete(id)
+    this.drainGenerations.delete(id)
+    if (this.displayedRecord?.id === id) this.displayedRecord = null
   }
 
   async updateSettings(patch: Partial<ConversationSettings>): Promise<ConversationSettings> {
@@ -404,7 +564,8 @@ export class ConversationController {
       const settings = await this.store.updateSettings(patch)
       if (patch.autoArchiveAfterDays !== undefined) await this.store.archiveInactiveConversations()
       if (patch.userName !== undefined || patch.assistantName !== undefined) {
-        this.runtime.setIdentity({ userName: settings.userName, assistantName: settings.assistantName })
+        const identity = { userName: settings.userName, assistantName: settings.assistantName }
+        for (const runtime of this.runtimes.values()) runtime.setIdentity(identity)
       }
       await this.refreshLibrary()
       return settings
@@ -429,19 +590,25 @@ export class ConversationController {
     })
   }
 
-  async setModelMode(mode: ModelMode): Promise<void> {
+  async setModelMode(mode: ModelMode, conversationId?: string): Promise<void> {
     await this.initialize()
+    const id = conversationId ?? this.activeId
+    if (!id) return
     await this.serialize(async () => {
-      if (this.pending.length) throw new Error('待发送消息未处理完，不能切换模型。')
-      this.runtime.setModelMode(mode)
-      await this.persistActive()
+      if (this.queueOf(id).length) throw new Error('待发送消息未处理完，不能切换模型。')
+      const runtime = await this.ensureRuntime(id)
+      runtime.setModelMode(mode)
+      await this.persistConversation(id)
     })
   }
 
-  async setPlanMode(on: boolean): Promise<void> {
+  async setPlanMode(on: boolean, conversationId?: string): Promise<void> {
     await this.initialize()
+    const id = conversationId ?? this.activeId
+    if (!id) return
     await this.serialize(async () => {
-      this.runtime.setPlanMode(on)
+      const runtime = await this.ensureRuntime(id)
+      runtime.setPlanMode(on)
     })
   }
 
@@ -457,7 +624,7 @@ export class ConversationController {
       const activeModelProfileId = settings.activeModelProfileId ?? profile.id
       await this.store.updateSettings({ modelProfiles, activeModelProfileId })
       await this.refreshLibrary()
-      if (activeModelProfileId === profile.id) this.runtime.setModelProfile(profile)
+      if (activeModelProfileId === profile.id) this.applyModelProfile(profile)
     })
   }
 
@@ -468,7 +635,7 @@ export class ConversationController {
       // A dangling active id degrades to null inside the store.
       await this.store.updateSettings({ modelProfiles })
       await this.refreshLibrary()
-      this.runtime.setModelProfile(this.activeProfile())
+      this.applyModelProfile(this.activeProfile())
     })
   }
 
@@ -480,8 +647,20 @@ export class ConversationController {
     await this.serialize(async () => {
       await this.store.updateSettings({ activeModelProfileId: id })
       await this.refreshLibrary()
-      this.runtime.setModelProfile(this.activeProfile())
+      this.applyModelProfile(this.activeProfile())
     })
+  }
+
+  /** Applies a profile to every live runtime; only the displayed conversation
+   *  surfaces a refusal (a running session keeps its old client silently). */
+  private applyModelProfile(profile: ModelProfile | null): void {
+    for (const [id, runtime] of this.runtimes) {
+      try {
+        runtime.setModelProfile(profile)
+      } catch (error) {
+        if (id === this.activeId) throw error
+      }
+    }
   }
 
   private activeProfile(): ModelProfile | null {
@@ -490,41 +669,57 @@ export class ConversationController {
     return settings.modelProfiles.find((item) => item.id === settings.activeModelProfileId) ?? null
   }
 
-  async getContextUsage(): Promise<ContextUsageSnapshot> {
+  async getContextUsage(conversationId?: string): Promise<ContextUsageSnapshot> {
     await this.initialize()
-    return this.runtime.getContextUsage()
+    const runtime = this.runtimeIfAny(conversationId ?? this.activeId)
+    if (!runtime) return { status: 'unavailable' }
+    return runtime.getContextUsage()
   }
 
-  async compactConversation(): Promise<void> {
+  async compactConversation(conversationId?: string): Promise<void> {
     await this.initialize()
+    const id = conversationId ?? this.activeId
+    if (!id) return
     await this.serialize(async () => {
-      this.assertIdle()
-      await this.runtime.compactConversation()
-      await this.persistActive()
+      this.assertIdle(id)
+      const runtime = this.runtimeIfAny(id)
+      if (!runtime) throw new Error('这个会话还没有可以压缩的上下文。')
+      await runtime.compactConversation()
+      await this.persistConversation(id)
     })
   }
 
-  async approveAction(id: string): Promise<void> {
+  async approveAction(id: string, conversationId?: string): Promise<void> {
     await this.initialize()
-    await this.runtime.approveAction(id)
-    await this.serialize(async () => this.persistActive())
-    this.scheduleDrain()
+    const cid = conversationId ?? this.activeId
+    const runtime = this.runtimeIfAny(cid)
+    if (!runtime) throw new Error('找不到这个会话。')
+    await runtime.approveAction(id)
+    await this.serialize(async () => this.persistConversation(cid!))
+    this.scheduleDrain(cid!)
   }
 
-  async rejectAction(id: string): Promise<void> {
+  async rejectAction(id: string, conversationId?: string): Promise<void> {
     await this.initialize()
-    this.runtime.rejectAction(id)
-    await this.serialize(async () => this.persistActive())
-    this.scheduleDrain()
+    const cid = conversationId ?? this.activeId
+    const runtime = this.runtimeIfAny(cid)
+    if (!runtime) throw new Error('找不到这个会话。')
+    runtime.rejectAction(id)
+    await this.serialize(async () => this.persistConversation(cid!))
+    this.scheduleDrain(cid!)
   }
 
-  async answerQuestion(id: string, answers: AskAnswers | null): Promise<void> {
+  async answerQuestion(id: string, answers: AskAnswers | null, conversationId?: string): Promise<void> {
     await this.initialize()
-    await this.runtime.answerQuestion(id, answers)
+    const runtime = this.runtimeIfAny(conversationId ?? this.activeId)
+    if (!runtime) throw new Error('找不到这个会话。')
+    await runtime.answerQuestion(id, answers)
   }
 
-  async answerPlan(id: string, approved: boolean): Promise<void> {
+  async answerPlan(id: string, approved: boolean, conversationId?: string): Promise<void> {
     await this.initialize()
-    await this.runtime.answerPlan(id, approved)
+    const runtime = this.runtimeIfAny(conversationId ?? this.activeId)
+    if (!runtime) throw new Error('找不到这个会话。')
+    await runtime.answerPlan(id, approved)
   }
 }

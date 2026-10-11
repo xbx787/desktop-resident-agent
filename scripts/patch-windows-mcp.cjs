@@ -521,6 +521,130 @@ def pulse(x: int, y: int) -> None:
 from time import sleep, time, perf_counter`
       }
     ]
+  },
+  {
+    file: 'desktop/control_hooks.py',
+    hunks: [
+      {
+        old: `import ctypes
+import time
+from typing import Any`,
+        new: `import ctypes
+import math
+import time
+from typing import Any
+
+_ACTIVITY_WINDOW = 2.5  # seconds
+_ACTIVITY_PX = 24.0  # net pixels inside the window
+
+
+def _note_pointer_activity(owner: Any, dx: float, dy: float) -> None:
+    """Count pointer movement as user activity only when it nets a real move.
+
+    Sensor drift and high-DPI noise trickle out tiny move events (~2 px/s
+    measured while the user is away); feeding every event to
+    _last_physical_event kept the 10 s hand-off window permanently closed.
+    A net of 24 px inside 2.5 s sits an order of magnitude above drift,
+    and a real hand clears it instantly.
+    """
+    now = time.monotonic()
+    if now - getattr(owner, "_activity_window_start", 0.0) > _ACTIVITY_WINDOW:
+        owner._activity_window_start = now
+        owner._activity_net = [0.0, 0.0]
+    net = owner._activity_net
+    net[0] += dx
+    net[1] += dy
+    if math.hypot(net[0], net[1]) >= _ACTIVITY_PX:
+        owner._activity_net = [0.0, 0.0]
+        owner._activity_window_start = now
+        owner._last_physical_event = now`
+      },
+      {
+        old: `        valid = True
+        owner._last_physical_event = time.monotonic()
+        if wparam == 0x200 and owner._suppress:`,
+        new: `        valid = True
+        if wparam == 0x200:
+            last = getattr(owner, "_activity_last_pt", None)
+            if last is None:
+                owner._activity_last_pt = (data.pt.x, data.pt.y)
+            else:
+                _note_pointer_activity(owner, data.pt.x - last[0], data.pt.y - last[1])
+                owner._activity_last_pt = (data.pt.x, data.pt.y)
+        else:
+            # Clicks, wheel, buttons: unambiguous activity, no threshold.
+            owner._last_physical_event = time.monotonic()
+        if wparam == 0x200 and owner._suppress:`
+      },
+      {
+        old: `    raw = _read_raw_mouse(lparam)
+    if raw is None:
+        return  # Null devices can be touchpads; do not infer source.
+    owner._last_physical_event = time.monotonic()
+    if owner._suppress:`,
+        new: `    raw = _read_raw_mouse(lparam)
+    if raw is None:
+        return  # Null devices can be touchpads; do not infer source.
+    _note_pointer_activity(owner, raw[1], raw[2])
+    if owner._suppress:`
+      }
+    ]
+  },
+  {
+    file: 'desktop/control.py',
+    hunks: [
+      {
+        old: `class ControlBlocked(RuntimeError):`,
+        new: `# How long the AI yields after the user's last physical input. Upstream's
+# 10 s read as "stopped entirely" when user and AI share the desktop; two
+# seconds still separates a passing click from sustained use, and the
+# interactive interrupts keep firing instantly.
+_HANDOFF_SECONDS = 2.0
+
+
+class ControlBlocked(RuntimeError):`
+      },
+      {
+        old: `            max(0.0, max(self._last_user, self._last_physical_event) + 10.0 - now)`,
+        new: `            max(0.0, max(self._last_user, self._last_physical_event) + _HANDOFF_SECONDS - now)`
+      },
+      {
+        old: `        if self._state == "ready" and now - self._last_physical_event < 10.0:`,
+        new: `        if self._state == "ready" and now - self._last_physical_event < _HANDOFF_SECONDS:`
+      },
+      {
+        old: `            and now - max(self._last_user, self._last_physical_event) >= 10.0`,
+        new: `            and now - max(self._last_user, self._last_physical_event) >= _HANDOFF_SECONDS`
+      },
+      {
+        old: `            if now - self._last_physical_event < 10.0:`,
+        new: `            if now - self._last_physical_event < _HANDOFF_SECONDS:`
+      },
+      {
+        old: `            recent_input = self._last_physical_event > 0 and now - self._last_physical_event < 10.0`,
+        new: `            recent_input = self._last_physical_event > 0 and now - self._last_physical_event < _HANDOFF_SECONDS`
+      }
+    ]
+  },
+  {
+    file: 'uia/core.py',
+    hunks: [
+      {
+        old: `            scanCode = _VKtoSC(key[0])
+            keybd_event(key[0], scanCode, key[1], 0)`,
+        new: `            scanCode = _VKtoSC(key[0])
+            # Modifier keys must not ride the extended flag: the OS re-reads
+            # "VK_CONTROL + EXTENDEDKEY" as the *right* control (same story
+            # for SHIFT/ALT/WIN), tripping any global hotkey bound to those —
+            # observed: a recording app's RightCtrl shortcut fired on paste.
+            # 0x10..0x12 SHIFT/CONTROL/ALT, 0x5B/0x5C WIN, 0xA0..0xA5 the
+            # left/right variants.
+            flags = key[1]
+            if key[0] in (0x10, 0x11, 0x12, 0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5):
+                flags &= ~int(KeyboardEventFlag.ExtendedKey)
+            keybd_event(key[0], scanCode, flags, 0)`
+      }
+    ]
   }
 ]
 

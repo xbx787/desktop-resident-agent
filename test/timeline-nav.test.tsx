@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { NAV_RESTING, NAV_STEP, NAV_WINDOW_COMPACT, NAV_WINDOW_WIDE, navBoost, navCardOffset, navMarks, navNextStart, navPreview, navRowAt, navTrackHeight, navWheelStep, navWindow, TimelineNav } from '../src/renderer/timeline-nav'
+import { NAV_RESTING, NAV_STEP, NAV_WINDOW_COMPACT, NAV_WINDOW_WIDE, navBoost, navCardOffset, navMarkClass, navMarks, navNextStart, navPreview, navRowAt, navTrackHeight, navWheelStep, navWindow, TimelineNav } from '../src/renderer/timeline-nav'
 import { groupTimeline } from '../src/renderer/timeline-groups'
 import type { TimelineEntry } from '../src/shared/contracts'
 
@@ -119,6 +119,20 @@ describe('navBoost', () => {
   })
 })
 
+describe('navMarkClass', () => {
+  it('keeps the resting handle one even column — no speaker tone until the rail opens', () => {
+    expect(navMarkClass('user', false, false)).toBe('panel-nav-mark')
+    expect(navMarkClass('assistant', false, false)).toBe('panel-nav-mark')
+    expect(navMarkClass('user', false, true)).toBe('panel-nav-mark')
+  })
+
+  it('splits the tones and marks the pointer only once opened', () => {
+    expect(navMarkClass('user', true, false)).toBe('panel-nav-mark is-user')
+    expect(navMarkClass('assistant', true, false)).toBe('panel-nav-mark')
+    expect(navMarkClass('user', true, true)).toBe('panel-nav-mark is-user is-active')
+  })
+})
+
 describe('TimelineNav', () => {
   const marks = (count: number) => Array.from({ length: count }, (_, index) => ({ id: `m${index}`, role: 'user' as const, text: `第 ${index} 条` }))
 
@@ -126,11 +140,12 @@ describe('TimelineNav', () => {
     expect(renderToStaticMarkup(<TimelineNav marks={marks(4)} onJump={() => {}} />)).toBe('')
   })
 
-  it('paints the user\'s marks with the brighter tone', () => {
+  it('renders the resting handle with no speaker tone on its marks', () => {
     const html = renderToStaticMarkup(<TimelineNav marks={marks(40)} onJump={() => {}} />)
-    // The CSS rule always existed; the class used to be missing from the
-    // render, so the tone split never showed up in the app.
-    expect((html.match(/panel-nav-mark is-user/g) ?? []).length).toBe(NAV_RESTING)
+    // The tone classes are for the opened rail; the static render is always
+    // at rest, so none of the marks may carry them.
+    expect(html).not.toContain('is-user')
+    expect(html).not.toContain('is-active')
   })
 
   it('rests as a short handle of the newest marks, with no card until hovered', () => {

@@ -29,7 +29,7 @@ export function TabContextMenu({ title, x, y, container, busy, running, current,
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
   const [position, setPosition] = useState<{ left: number; top: number } | null>(null);
-  const cannotRemove = busy || (running && current);
+  const cannotRemove = busy || running;
 
   useLayoutEffect(() => {
     const menu = menuRef.current;
@@ -69,8 +69,8 @@ export function TabContextMenu({ title, x, y, container, busy, running, current,
     <div ref={menuRef} className="tab-context-menu" role="menu" aria-label={`会话操作：${title}`} style={position ?? { left: x, top: y, visibility: 'hidden' }}>
       <div className="tab-context-menu-title" title={title}>{title}</div>
       <button type="button" role="menuitem" disabled={busy} title="重命名会话" onClick={() => invoke(onRename)}><Icon kind="rename" />重命名</button>
-      <button type="button" role="menuitem" disabled={cannotRemove} title={cannotRemove ? '当前任务运行中，暂不能移除当前会话' : '归档会话'} onClick={() => invoke(onArchive)}><Icon kind="archive" />归档</button>
-      <button type="button" role="menuitem" className="is-danger" disabled={cannotRemove} title={cannotRemove ? '当前任务运行中，暂不能移除当前会话' : '删除会话'} onClick={() => invoke(onDelete)}><Icon kind="delete" />删除</button>
+      <button type="button" role="menuitem" disabled={cannotRemove} title={cannotRemove ? '这个会话还在运行，结束后才能移除' : '归档会话'} onClick={() => invoke(onArchive)}><Icon kind="archive" />归档</button>
+      <button type="button" role="menuitem" className="is-danger" disabled={cannotRemove} title={cannotRemove ? '这个会话还在运行，结束后才能移除' : '删除会话'} onClick={() => invoke(onDelete)}><Icon kind="delete" />删除</button>
     </div>,
     container,
   );

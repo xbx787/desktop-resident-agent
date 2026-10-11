@@ -231,6 +231,9 @@ export interface AppSnapshot {
   currentTask?: string
   modelReady: boolean
   claudeCodeReady: boolean
+  /** Which conversation this snapshot describes (the displayed one). The
+   *  renderer resets its timeline-revision bookkeeping when it changes. */
+  conversationId?: string
   conversationLibrary?: ConversationLibraryState
   pendingMessages?: PendingMessage[]
   contextUsage?: ContextUsageSnapshot
@@ -255,7 +258,9 @@ export interface VoiceConfig {
 
 export interface PetAPI {
   getSnapshot(): Promise<AppSnapshot>
-  sendMessage(text: string, attachments?: UserAttachment[], strategy?: 'queue' | 'steer'): Promise<void>
+  /** `conversationId` targets a specific conversation; omitted = the one
+   *  currently displayed. Every turn-scoped call below follows that rule. */
+  sendMessage(text: string, attachments?: UserAttachment[], strategy?: 'queue' | 'steer', conversationId?: string): Promise<void>
   getPathForFile(file: File): string
   prepareDroppedFile(filePath: string): Promise<UserAttachment>
   preparePastedFile(request: { name: string; data: string }): Promise<UserAttachment>
@@ -267,8 +272,8 @@ export interface PetAPI {
   archiveConversation(id: string): Promise<void>
   restoreConversation(id: string): Promise<void>
   deleteConversation(id: string): Promise<void>
-  getContextUsage(): Promise<ContextUsageSnapshot>
-  compactConversation(): Promise<void>
+  getContextUsage(conversationId?: string): Promise<ContextUsageSnapshot>
+  compactConversation(conversationId?: string): Promise<void>
   listClaudeWorkflows(): Promise<ClaudeWorkflowOption[]>
   onSlashUiAction(callback: (action: SlashUiAction) => void): () => void
   searchWorkspaceFiles(query: string): Promise<WorkspaceFileOption[]>
@@ -277,17 +282,17 @@ export interface PetAPI {
   /** Delivers a queued message into the running turn right now (native steer);
    *  when steering is unavailable it jumps to the front of the queue instead. */
   steerQueuedMessage(id: string): Promise<void>
-  approveAction(id: string): Promise<void>
-  rejectAction(id: string): Promise<void>
+  approveAction(id: string, conversationId?: string): Promise<void>
+  rejectAction(id: string, conversationId?: string): Promise<void>
   /** Submits the inline answer for a parked question; null skips (declines) it. */
-  answerQuestion(id: string, answers: AskAnswers | null): Promise<void>
+  answerQuestion(id: string, answers: AskAnswers | null, conversationId?: string): Promise<void>
   /** Approves (true) or rejects (false) a parked plan; a rejection keeps the
    *  model in plan mode so it can revise and propose again. */
-  answerPlan(id: string, approved: boolean): Promise<void>
-  stop(): Promise<void>
+  answerPlan(id: string, approved: boolean, conversationId?: string): Promise<void>
+  stop(conversationId?: string): Promise<void>
   /** Aborts what the running turn is executing (a stuck command) while the
    *  session and any queued messages survive. */
-  interruptTurn(): Promise<void>
+  interruptTurn(conversationId?: string): Promise<void>
   showPanel(): Promise<void>
   hidePanel(): Promise<void>
   getPanelOpen(): Promise<boolean>

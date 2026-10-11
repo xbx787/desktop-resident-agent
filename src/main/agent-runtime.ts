@@ -29,6 +29,8 @@ export class AgentRuntime {
   private contextGeneration = 0
   private sdkSessionId: string | null = null
   private thinkingOpen = false
+  /** Which conversation this runtime owns; assigned by the controller at creation. */
+  conversationId = ''
   /** Entries changed since the publisher's last take (upsert by id). */
   private timelineDirty = new Map<string, TimelineEntry>()
   /** The timeline revision the publisher last reported; -1 = never. */
@@ -607,6 +609,19 @@ export class AgentRuntime {
     this.timelineDirty.clear()
     this.timelineSentRevision = this.state.timelineRevision
     return { reset, baseRevision, revision: this.state.timelineRevision, entries }
+  }
+
+  /** The publisher's next take must carry the whole timeline — used when a
+   *  runtime that has been running (or sitting) in the background becomes the
+   *  displayed conversation again. */
+  forceFullTimeline(): void {
+    this.timelineSentRevision = -1
+  }
+
+  /** The CLI's command/skill catalog, when the engine backs this runtime. */
+  getCommandCatalog(): { commands: string[]; skills: string[] } | undefined {
+    const model = this.claudeCodeModel as (ModelClient & { getCommandCatalog?: () => { commands: string[]; skills: string[] } }) | undefined
+    return model?.getCommandCatalog?.()
   }
 
   private emit(): void {

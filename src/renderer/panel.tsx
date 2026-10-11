@@ -10,10 +10,12 @@ import { AttachmentPreview, previewPlacement, type PreviewPlacement } from './at
 import { agentTasks } from './agent-tasks';
 import { splitAttachmentNote } from './attachment-note';
 import { ComposerSuggestions, detectComposerTrigger, fileMention, type ComposerSuggestion } from './composer-suggestions';
-import { conversationSwitchReason, pastedFileName, pastedFiles, restoreComposerState, stashComposerState, type StashedComposer } from './composer-drafts';
+import { pastedFileName, pastedFiles, restoreComposerState, stashComposerState, type StashedComposer } from './composer-drafts';
 import { GoalBanner } from './goal-banner';
 import { MessageMarkdown, writeClipboard } from './message-markdown';
 import { TabContextMenu } from './tab-context-menu';
+import { drawerBottomOffset } from './panel-drawer';
+import { quickTabLimit, showNewTabButton } from './panel-tabs';
 import { TaskStrip } from './task-strip';
 import { AskQuestionPanel } from './ask-question';
 import { PlanApprovalPanel } from './plan-approval';
@@ -50,7 +52,6 @@ const kindLabels: Record<TimelineEntry['kind'], string> = {
   thinking: '思考',
 };
 
-const switchBlockLabels = { running: '当前任务运行中，暂不能切换会话', queue: '待发送消息未处理完，暂不能切换会话' } as const;
 
 function PlusIcon() {
   return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>;
@@ -336,7 +337,10 @@ interface PanelBubbleProps {
 export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps) {
   const [expanded, setExpanded] = useState(false);
   const resizePending = useRef(false);
-  const [workspaceView, setWorkspaceView] = useState<'chat' | 'library'>('chat');
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  // The drawer's distance from the workspace's bottom edge — the composer
+  // dock's height at this moment; live values arrive from the dock observer.
+  const [drawerBottom, setDrawerBottom] = useState<number | null>(null);
   const [libraryArchived, setLibraryArchived] = useState(false);
   const [libraryQuery, setLibraryQuery] = useState('');
   const [libraryResults, setLibraryResults] = useState<ConversationSummary[]>([]);
@@ -367,6 +371,8 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const [previewCard, setPreviewCard] = useState<{ path: string; name: string; placement: PreviewPlacement } | null>(null);
   const requestedPreviews = useRef(new Set<string>());
   const composerRef = useRef<HTMLFormElement>(null);
+  const workspaceRef = useRef<HTMLElement>(null);
+  const composeDockRef = useRef<HTMLDivElement>(null);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [effortMenuOpen, setEffortMenuOpen] = useState(false);
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
@@ -416,7 +422,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const contextUsage = snapshot?.contextUsage;
   const contextCompacting = compactBusy || Boolean(snapshot?.contextCompacting);
   const recentSessions = (library?.conversations ?? []).filter((item) => !item.archivedAt).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-  const tabLimit = Math.max(1, Math.min(12, library?.settings.visibleConversationTabs ?? 5));
+  const tabLimit = quickTabLimit(library?.settings.visibleConversationTabs);
   const quickTabs = recentSessions.slice(0, tabLimit);
   const selectedSession = recentSessions.find((item) => item.id === library?.activeConversationId);
   if (selectedSession && !quickTabs.some((item) => item.id === selectedSession.id)) quickTabs.splice(Math.max(0, tabLimit - 1), 1, selectedSession);
@@ -430,15 +436,15 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     return bridge.onSlashUiAction((action) => {
       setSessionMenuOpen(false);
       if (action === 'sessions') {
-        setWorkspaceView('library');
+        setLibraryOpen(true);
         setModelPickerOpen(false);
         setLibraryError(null);
       } else if (action === 'model') {
-        setWorkspaceView('chat');
+        setLibraryOpen(false);
         setComposerOpen(true);
         setModelPickerOpen(true);
       } else {
-        setWorkspaceView('chat');
+        setLibraryOpen(false);
         setComposerOpen(true);
         setModelPickerOpen(false);
         workflowCacheRef.current = null;
@@ -614,7 +620,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   }, [snapshot?.taskMetrics?.finishedAt, snapshot?.mode]);
 
   useEffect(() => {
-    if (workspaceView !== 'library' || !libraryQuery.trim()) return;
+    if (!libraryOpen || !libraryQuery.trim()) return;
     let cancelled = false;
     const timer = window.setTimeout(() => {
       try {
@@ -628,7 +634,24 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
       }
     }, 150);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [workspaceView, libraryQuery, libraryArchived, libraryRevision]);
+  }, [libraryOpen, libraryQuery, libraryArchived, libraryRevision]);
+
+  // While the library drawer is open its lower edge tracks the composer's top
+  // edge: the dock's distance from the workspace's bottom is re-measured
+  // whenever either box resizes, so the drawer follows the composer through
+  // collapses, expansions, and every added line.
+  useLayoutEffect(() => {
+    if (!libraryOpen) { setDrawerBottom(null); return; }
+    const workspace = workspaceRef.current;
+    const dock = composeDockRef.current;
+    if (!workspace || !dock) return;
+    const measure = () => setDrawerBottom(drawerBottomOffset(workspace.getBoundingClientRect().bottom, dock.getBoundingClientRect().top));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(workspace);
+    observer.observe(dock);
+    return () => observer.disconnect();
+  }, [libraryOpen]);
 
   useEffect(() => {
     if (!voiceError) return
@@ -642,7 +665,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
       setModelPickerOpen(false);
       setSessionMenuOpen(false);
       setTabMenu(null);
-      setWorkspaceView('chat');
+      setLibraryOpen(false);
       voiceManagerRef.current?.stop();
     }
   }, [visible]);
@@ -930,7 +953,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   }
 
   function openLibrary() {
-    setWorkspaceView('library');
+    setLibraryOpen(true);
     setModelPickerOpen(false);
     setSessionMenuOpen(false);
     setTabMenu(null);
@@ -961,7 +984,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   async function createConversation() {
     stashComposerState(composerStash.current, library?.activeConversationId, draft, attachments);
     await libraryAction((bridge) => bridge.createConversation(), () => {
-      setWorkspaceView('chat');
+      setLibraryOpen(false);
       setDraft('');
       setAttachments([]);
       setComposerOpen(true);
@@ -974,7 +997,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
       ? (bridge: PetAPI) => bridge.selectConversation(item.id)
       : (bridge: PetAPI) => bridge.restoreConversation(item.id);
     await libraryAction(operation, () => {
-      setWorkspaceView('chat');
+      setLibraryOpen(false);
       setSessionMenuOpen(false);
       const saved = restoreComposerState(composerStash.current, item.id);
       setDraft(saved.draft);
@@ -983,11 +1006,6 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
       setAttachmentError(null);
       setComposerOpen(Boolean(saved.draft || saved.attachments.length));
     });
-  }
-
-  function tabBlockLabel(item: ConversationSummary): string | null {
-    const reason = conversationSwitchReason({ running: active, queued: queuedCount, current: item.id === library?.activeConversationId });
-    return reason ? switchBlockLabels[reason] : null;
   }
 
   async function saveRename(id: string) {
@@ -1001,11 +1019,14 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     : library?.conversations.filter((item) => (item.archivedAt !== null) === libraryArchived) ?? [];
 
   const status = snapshot?.proposal ? 'awaiting_approval' : snapshot?.taskStatus ?? 'idle';
-  const conversationStatus = (item: ConversationSummary): TaskStatus => item.id === library?.activeConversationId ? status : item.taskStatus;
+  // Live per-conversation statuses arrive through the library summaries now,
+  // so every tab dot is truthful — the displayed conversation included.
+  const conversationStatus = (item: ConversationSummary): TaskStatus => item.taskStatus;
+  const statusRunning = (item: ConversationSummary): boolean => ['planning', 'awaiting_approval', 'executing', 'verifying'].includes(conversationStatus(item));
   const active = ['planning', 'awaiting_approval', 'executing', 'verifying'].includes(status);
   const statusLive = status === 'planning' || status === 'executing' || status === 'verifying';
   const queuedCount = snapshot?.pendingMessages?.length ?? 0;
-  const empty = workspaceView === 'chat' && busy !== 'send' && !error && !voiceError && status === 'idle' && !snapshot?.currentTask && !snapshot?.timeline.length && !snapshot?.proposal && queuedCount === 0;
+  const empty = !libraryOpen && busy !== 'send' && !error && !voiceError && status === 'idle' && !snapshot?.currentTask && !snapshot?.timeline.length && !snapshot?.proposal && queuedCount === 0;
   const compactEmpty = empty && !expanded && !modelPickerOpen && !suggestionOpen;
   const layout: BubbleLayout = !compactEmpty ? 'full' : !composerOpen ? 'empty' : attachments.length ? 'composer_attachments' : 'composer';
   const compactComposerHeight = 112 + composerHeight + (attachments.length ? 26 : 0);
@@ -1169,9 +1190,24 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   // A popover owns Escape while it is open: the first Esc closes the popover, a
   // second one stops the task. Without this guard the capture-phase listener
   // below would steal the key from an open menu and kill the running turn.
-  const escOwners = modelPickerOpen || effortMenuOpen || contextMenuOpen || sessionMenuOpen || Boolean(tabMenu) || suggestionOpen || renameId !== null || deleteId !== null;
+  const escOwners = libraryOpen || modelPickerOpen || effortMenuOpen || contextMenuOpen || sessionMenuOpen || Boolean(tabMenu) || suggestionOpen || renameId !== null || deleteId !== null;
   const escOwnersRef = useRef(escOwners);
   escOwnersRef.current = escOwners;
+
+  // Escape closes the library drawer — unless its own rename field or delete
+  // confirmation is up, which own the key first.
+  useEffect(() => {
+    if (!libraryOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || renameId !== null || deleteId !== null) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      setLibraryOpen(false);
+    };
+    // Window capture runs before the document's Esc-to-stop listener.
+    window.addEventListener('keydown', closeOnEscape, true);
+    return () => window.removeEventListener('keydown', closeOnEscape, true);
+  }, [libraryOpen, renameId, deleteId]);
 
   useEffect(() => {
     if (!visible || !active) return;
@@ -1226,7 +1262,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     <section className={`panel-bubble${compactEmpty ? ' is-empty' : ''}${expanded ? ' is-expanded' : ''}${composerOpen || ask || plan ? ' is-composing' : ''}${attachments.length ? ' has-attachments' : ''}${modelPickerOpen ? ' is-choosing-model' : ''}`} style={compactEmpty && composerOpen ? { height: compactComposerHeight } : undefined} aria-label="交互气泡" hidden={!visible} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => {
       if (!event.dataTransfer.files.length) return;
       event.preventDefault();
-      if (workspaceView !== 'chat') return;
+      if (libraryOpen) return;
       setComposerOpen(true);
       void addFiles(Array.from(event.dataTransfer.files));
     }}>
@@ -1246,25 +1282,25 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
         y={tabMenu.y}
         container={tabMenu.container}
         busy={libraryBusy}
-        running={active}
+        running={statusRunning(tabMenu.item)}
         current={tabMenu.item.id === library?.activeConversationId}
         onRename={() => { openLibrary(); setRenameDraft(tabMenu.item.title); setRenameId(tabMenu.item.id); }}
         onArchive={() => { void libraryAction((bridge) => bridge.archiveConversation(tabMenu.item.id)); }}
         onDelete={() => { openLibrary(); setDeleteId(tabMenu.item.id); }}
         onClose={() => setTabMenu(null)}
       />}
-      <section className="panel-workspace">
-        {workspaceView === 'chat' ? <>
+      <section className="panel-workspace" ref={workspaceRef}>
         {!compactEmpty && <header className={`panel-chat-header${expanded ? ' is-browser' : ' is-numeric'}`} ref={sessionHeaderRef}>
           <button type="button" className="panel-library-toggle" aria-label={expanded ? '会话库' : '会话菜单'} title={expanded ? '会话库' : '会话菜单'} aria-haspopup={expanded ? undefined : 'menu'} aria-expanded={expanded ? undefined : sessionMenuOpen} onClick={expanded ? openLibrary : () => setSessionMenuOpen((open) => !open)}><ConversationsIcon /></button>
           {!expanded && sessionMenuOpen && <div className="panel-session-menu" id="panel-session-menu" role="menu" aria-label="会话菜单"
             onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); setSessionMenuOpen(false); } }}>
             <div className="panel-session-menu-heading">快捷会话</div>
-            {quickTabs.map((item, index) => <button key={item.id} type="button" role="menuitem" aria-current={item.id === library?.activeConversationId ? 'page' : undefined} aria-disabled={libraryBusy || Boolean(tabBlockLabel(item)) || item.id === library?.activeConversationId} onContextMenu={(event) => showTabMenu(event, item)} title={tabBlockLabel(item) ?? `${item.title}，${taskLabels[conversationStatus(item)]}`} onClick={() => { if (!libraryBusy && !tabBlockLabel(item) && item.id !== library?.activeConversationId) void selectConversation(item); }}><i className={`panel-task-dot panel-task-dot-${conversationStatus(item)}`} aria-hidden="true" /><span className="panel-session-menu-number">{index + 1}</span><span className="panel-session-menu-title">{item.title}</span></button>)}
+            {quickTabs.map((item, index) => <button key={item.id} type="button" role="menuitem" aria-current={item.id === library?.activeConversationId ? 'page' : undefined} aria-disabled={libraryBusy || item.id === library?.activeConversationId} onContextMenu={(event) => showTabMenu(event, item)} title={`${item.title}，${taskLabels[conversationStatus(item)]}`} onClick={() => { if (!libraryBusy && item.id !== library?.activeConversationId) void selectConversation(item); }}><i className={`panel-task-dot panel-task-dot-${conversationStatus(item)}`} aria-hidden="true" /><span className="panel-session-menu-number">{index + 1}</span><span className="panel-session-menu-title">{item.title}</span></button>)}
             <button type="button" role="menuitem" className="panel-session-menu-all" onClick={openLibrary}>查看全部会话</button>
           </div>}
           {quickTabs.length > 0 && <nav className="panel-quick-tabs" ref={quickTabsRef} aria-label={expanded ? '顶部会话标签' : '顶部会话数字快捷切换'}>
-            {quickTabs.map((item, index) => <button key={item.id} type="button" className={`panel-quick-tab${item.id === library?.activeConversationId ? ' is-current' : ''}`} aria-label={`${index + 1}：${item.title}，${taskLabels[conversationStatus(item)]}`} aria-current={item.id === library?.activeConversationId ? 'page' : undefined} title={tabBlockLabel(item) ?? `${item.title}，${taskLabels[conversationStatus(item)]}`} aria-disabled={libraryBusy || Boolean(tabBlockLabel(item)) || item.id === library?.activeConversationId} onContextMenu={(event) => showTabMenu(event, item)} onClick={() => { if (!libraryBusy && !tabBlockLabel(item) && item.id !== library?.activeConversationId) void selectConversation(item); }}><i className={`panel-task-dot panel-task-dot-${conversationStatus(item)}`} aria-hidden="true" /><span className="panel-quick-tab-label">{expanded ? item.title : index + 1}</span></button>)}
+            {quickTabs.map((item, index) => <button key={item.id} type="button" className={`panel-quick-tab${item.id === library?.activeConversationId ? ' is-current' : ''}`} aria-label={`${index + 1}：${item.title}，${taskLabels[conversationStatus(item)]}`} aria-current={item.id === library?.activeConversationId ? 'page' : undefined} title={`${item.title}，${taskLabels[conversationStatus(item)]}`} aria-disabled={libraryBusy || item.id === library?.activeConversationId} onContextMenu={(event) => showTabMenu(event, item)} onClick={() => { if (!libraryBusy && item.id !== library?.activeConversationId) void selectConversation(item); }}><i className={`panel-task-dot panel-task-dot-${conversationStatus(item)}`} aria-hidden="true" /><span className="panel-quick-tab-label">{expanded ? item.title : index + 1}</span></button>)}
+            {showNewTabButton(quickTabs.length, tabLimit) && <button type="button" className="panel-quick-tab panel-quick-tab-new" aria-label="新建会话" title="新建会话" onClick={() => { if (!libraryBusy) void createConversation(); }}><PlusIcon /></button>}
           </nav>}
         </header>}
         {status !== 'idle' && (
@@ -1376,7 +1412,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
 
         {!compactEmpty && snapshot?.goal && <GoalBanner goal={snapshot.goal} onClear={() => { void sendGoal('/goal clear'); }} />}
 
-        <div className={`panel-compose-dock${composerOpen || ask || plan ? ' is-open' : ''}`}>
+        <div className={`panel-compose-dock${composerOpen || ask || plan ? ' is-open' : ''}`} ref={composeDockRef}>
           {ask ? (
             <AskQuestionPanel
               key={ask.id}
@@ -1535,11 +1571,11 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
             </button>
           )}
         </div>
-        </> : <div className="panel-library-view">
+        {libraryOpen && drawerBottom !== null && <aside className="panel-library-drawer" style={{ bottom: drawerBottom }} aria-label="会话列表">
           <header className="panel-library-header">
-            <button type="button" className="panel-library-icon panel-library-back" aria-label="返回对话" title="返回对话" onClick={() => setWorkspaceView('chat')}><BackIcon /></button>
+            <button type="button" className="panel-library-icon panel-library-back" aria-label="返回对话" title="返回对话" onClick={() => setLibraryOpen(false)}><BackIcon /></button>
             <h2>会话</h2>
-            <button type="button" className="panel-library-icon panel-library-new" disabled={libraryBusy || active || queuedCount > 0} aria-label="新建会话" title={active ? '当前任务运行中，暂不能新建会话' : queuedCount > 0 ? '待发送消息未处理完，暂不能新建会话' : '新建会话'} onClick={() => { void createConversation(); }}><PlusIcon /></button>
+            <button type="button" className="panel-library-icon panel-library-new" disabled={libraryBusy} aria-label="新建会话" title="新建会话" onClick={() => { void createConversation(); }}><PlusIcon /></button>
           </header>
           <div className="panel-library-tabs" role="tablist" aria-label="会话状态">
             <button type="button" role="tab" aria-selected={!libraryArchived} onClick={() => { setLibraryArchived(false); setLibraryResults([]); }}>未归档</button>
@@ -1558,19 +1594,19 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
                 <button type="button" disabled={libraryBusy} onClick={() => { void libraryAction((bridge) => bridge.deleteConversation(item.id), () => { composerStash.current.delete(item.id); setDeleteId(null); }); }}>确认删除</button>
                 <button type="button" onClick={() => setDeleteId(null)}>取消</button>
               </div> : <>
-                <button type="button" className="panel-session-main" disabled={libraryBusy || active || queuedCount > 0} title={tabBlockLabel(item) ?? undefined} onClick={() => { void selectConversation(item); }}>
+                <button type="button" className="panel-session-main" disabled={libraryBusy} onClick={() => { void selectConversation(item); }}>
                   <strong>{item.title}</strong><span>{item.preview || (item.archivedAt ? '点击恢复' : '暂无消息')}</span>
                 </button>
                 <div className="panel-session-actions">
                   {!item.archivedAt && <button type="button" aria-label={item.pinnedAt ? '取消置顶' : '置顶会话'} title={item.pinnedAt ? '取消置顶' : '置顶会话'} disabled={libraryBusy} onClick={() => { void libraryAction((bridge) => bridge.setConversationPinned(item.id, !item.pinnedAt)); }}><PinIcon pinned={Boolean(item.pinnedAt)} /></button>}
                   <button type="button" aria-label={`重命名 ${item.title}`} title="重命名" onClick={() => { setRenameId(item.id); setRenameDraft(item.title); }}><EditIcon /></button>
-                  <button type="button" aria-label={`${item.archivedAt ? '恢复' : '归档'} ${item.title}`} title={active && item.id === library?.activeConversationId ? '当前任务运行中，暂不能归档' : item.archivedAt ? '恢复' : '归档'} disabled={libraryBusy || (active && item.id === library?.activeConversationId)} onClick={() => { void libraryAction((bridge) => item.archivedAt ? bridge.restoreConversation(item.id) : bridge.archiveConversation(item.id)); }}><ArchiveIcon restore={Boolean(item.archivedAt)} /></button>
-                  <button type="button" aria-label={`删除 ${item.title}`} title={active && item.id === library?.activeConversationId ? '当前任务运行中，暂不能删除' : '删除'} disabled={active && item.id === library?.activeConversationId} onClick={() => setDeleteId(item.id)}><DeleteIcon /></button>
+                  <button type="button" aria-label={`${item.archivedAt ? '恢复' : '归档'} ${item.title}`} title={statusRunning(item) ? '这个会话还在运行，结束后才能归档' : item.archivedAt ? '恢复' : '归档'} disabled={libraryBusy || statusRunning(item)} onClick={() => { void libraryAction((bridge) => item.archivedAt ? bridge.restoreConversation(item.id) : bridge.archiveConversation(item.id)); }}><ArchiveIcon restore={Boolean(item.archivedAt)} /></button>
+                  <button type="button" aria-label={`删除 ${item.title}`} title={statusRunning(item) ? '这个会话还在运行，结束后才能删除' : '删除'} disabled={libraryBusy || statusRunning(item)} onClick={() => setDeleteId(item.id)}><DeleteIcon /></button>
                 </div>
               </>}
             </div>)}
           </div>
-        </div>}
+        </aside>}
       </section>
       {imageViewer && <button type="button" className="panel-image-viewer" aria-label={`关闭图片预览：${imageViewer.name}`} onClick={() => setImageViewer(null)}>
         <img src={imageViewer.url} alt={imageViewer.name} />
