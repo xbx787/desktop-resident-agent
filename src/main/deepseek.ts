@@ -37,7 +37,9 @@ export interface ModelClient {
   /** Clients that can control thinking depth implement this. */
   setEffort?(level: EffortLevel): void
   /** Clients that can plan-first implement this. */
-  setPlanMode?(on: boolean): void
+  /** false means a cold query has not yet sent an SDK confirmation. */
+  setPlanMode?(on: boolean): Promise<boolean | void> | boolean | void
+  setPlanModeListener?(listener: (on: boolean) => void): void
   /** Clients that can abort what the current turn is doing implement this
    *  (the SDK client maps it to the CLI's own Esc). */
   interrupt?(): Promise<void>

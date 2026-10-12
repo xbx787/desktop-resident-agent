@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { AgentRuntime } from '../src/main/agent-runtime'
+import { ConversationStore } from '../src/main/conversation-store'
 import { AgentTurnError } from '../src/main/agent-errors'
 import type { DialogueLine, ModelClient, ModelReply } from '../src/main/deepseek'
 import { NoteStore } from '../src/main/note-store'
@@ -360,5 +361,87 @@ describe('task cancellation', () => {
     await pending
     expect(runtime.getSnapshot().taskStatus).toBe('cancelled')
     expect(runtime.getSnapshot().proposal).toBeUndefined()
+  })
+})
+
+describe('plan mode and /goal truth', () => {
+  it('keeps a cold plan-mode request unconfirmed until an SDK init callback arrives', async () => {
+    let report!: (on: boolean) => void
+    const model: ModelClient = {
+      respond: async () => ({ text: 'ok' }),
+      setPlanMode: async () => false,
+      setPlanModeListener: (listener) => { report = listener }
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    await runtime.setPlanMode(true)
+    expect(runtime.getSnapshot().planMode).toBeUndefined()
+    report(true)
+    expect(runtime.getSnapshot().planMode).toBe(true)
+  })
+  it('restores a saved goal as unverified until the CLI reports it again', async () => {
+    const record = await new ConversationStore(testRoot).createConversation('目标', 'claude_code')
+    const model: ModelClient = { respond: async () => ({ text: 'ok' }) }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    runtime.restoreConversation({ ...record, goal: {
+      condition: '完成改进', phase: 'confirmed', iterations: 4, startedAt: new Date().toISOString()
+    } })
+    expect(runtime.getSnapshot().goal).toMatchObject({ condition: '完成改进', phase: 'unverified', iterations: 4 })
+  })
+  it('does not show plan mode until the model confirms the switch', async () => {
+    let confirm!: () => void
+    const model: ModelClient = {
+      respond: async () => ({ text: 'ok' }),
+      setPlanMode: () => new Promise<void>((resolve) => { confirm = resolve })
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    const pending = runtime.setPlanMode(true)
+    expect(runtime.getSnapshot().planMode).toBeUndefined()
+    confirm()
+    await pending
+    expect(runtime.getSnapshot().planMode).toBe(true)
+  })
+
+  it('reports a rejected plan-mode control request without claiming success', async () => {
+    const model: ModelClient = {
+      respond: async () => ({ text: 'ok' }),
+      setPlanMode: async () => { throw new Error('SDK refused') }
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    await expect(runtime.setPlanMode(true)).rejects.toThrow('SDK 未确认')
+    expect(runtime.getSnapshot().planMode).toBeUndefined()
+    expect(runtime.getSnapshot().timeline.at(-1)?.text).toContain('SDK 未确认')
+  })
+
+  it('does not invent an iteration after a reply, then accepts SDK rounds and null clear', async () => {
+    let report!: Parameters<NonNullable<ModelClient['setGoalListener']>>[0]
+    const model: ModelClient = {
+      respond: async () => ({ text: '完成一轮普通回复' }),
+      setGoalListener: (listener) => { report = listener }
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    await runtime.sendMessage('/goal 写完测试')
+    expect(runtime.getSnapshot().goal).toMatchObject({ condition: '写完测试', phase: 'unverified' })
+    expect(runtime.getSnapshot().goal?.iterations).toBeUndefined()
+    report({ condition: '写完测试', phase: 'confirmed', startedAt: new Date().toISOString(), iterations: 2 })
+    expect(runtime.getSnapshot().goal).toMatchObject({ phase: 'confirmed', iterations: 2 })
+    report(null)
+    expect(runtime.getSnapshot().goal).toBeNull()
+  })
+
+  it('stops at confirmed iteration or elapsed-time limits and pauses the queue', async () => {
+    let report!: Parameters<NonNullable<ModelClient['setGoalListener']>>[0]
+    const model: ModelClient = {
+      respond: async () => ({ text: '已接收' }),
+      setGoalListener: (listener) => { report = listener }
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    runtime.setGoalBudget(3, 5)
+    report({ condition: '轮数目标', phase: 'confirmed', startedAt: new Date().toISOString(), iterations: 3 })
+    expect(runtime.getSnapshot().goal?.phase).toBe('unverified')
+    expect(runtime.getQueuePauseReason()).toContain('3 轮上限')
+    runtime.resumeQueue()
+    report({ condition: '时间目标', phase: 'confirmed', startedAt: new Date(Date.now() - 6 * 60_000).toISOString(), iterations: 1 })
+    expect(runtime.getSnapshot().goal?.phase).toBe('unverified')
+    expect(runtime.getQueuePauseReason()).toContain('5 分钟上限')
   })
 })

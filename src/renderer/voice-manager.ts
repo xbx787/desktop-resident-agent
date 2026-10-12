@@ -12,9 +12,9 @@ export interface VoiceManagerCallbacks {
 }
 
 function toSiliconFlowConfig(config: VoiceConfig): SiliconFlowAsrConfig | undefined {
-  if (!config.siliconFlowApiKey) return undefined
+  if (!config.siliconFlowAvailable) return undefined
   return {
-    apiKey: config.siliconFlowApiKey,
+    available: true,
     model: config.siliconFlowModel,
     baseUrl: config.siliconFlowBaseUrl,
   }

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { AppSnapshot, AskAnswers, ContextUsageSnapshot, ModelMode, ModelProfile, UserAttachment } from '../shared/contracts'
+import type { AppSnapshot, AskAnswers, ContextUsageSnapshot, ModelMode, ModelProfile, TimelineEntry, UserAttachment } from '../shared/contracts'
 import type { AgentRuntime } from './agent-runtime'
 import { attachmentContext, validAttachmentList } from './local-context'
 import {
@@ -14,6 +14,19 @@ import {
 } from './conversation-store'
 
 export type SendStrategy = 'queue' | 'steer'
+
+export interface CompletedTurn {
+  conversationId: string
+  userText: string
+  finalReply: string
+  mode: ModelMode
+  timeline: TimelineEntry[]
+}
+
+export interface ConversationTurnHooks {
+  memoryContext?: () => Promise<string>
+  afterSuccessfulTurn?: (turn: CompletedTurn) => Promise<void>
+}
 
 export type ControllerSnapshot = AppSnapshot & {
   conversationLibrary: ConversationLibraryState
@@ -50,11 +63,14 @@ export class ConversationController {
   private readonly pending = new Map<string, PendingMessage[]>()
   private readonly drains = new Map<string, { promise: Promise<void>; generation: number }>()
   private readonly drainGenerations = new Map<string, number>()
+  /** Explicit stop and goal budget pauses retain the pending queue on disk. */
+  private readonly pausedQueues = new Map<string, string>()
   /** A displayed conversation without a runtime is served from this record. */
   private displayedRecord: ConversationRecord | null = null
   private operations: Promise<void> = Promise.resolve()
   /** Last seen readiness flags — a cold snapshot still has to answer them. */
   private readiness = { modelReady: false, claudeCodeReady: false }
+  private turnHooks: ConversationTurnHooks = {}
 
   constructor(
     private readonly store: ConversationStore,
@@ -66,6 +82,16 @@ export class ConversationController {
      *  environment's own setup, so the model menu never starts empty. */
     private readonly seedProfile?: ModelProfile
   ) {}
+
+  setTurnHooks(hooks: ConversationTurnHooks): void {
+    this.turnHooks = hooks
+    for (const runtime of this.runtimes.values()) runtime.setMemoryContextProvider(hooks.memoryContext)
+  }
+
+  allConversationsIdle(): boolean {
+    return this.drains.size === 0 && [...this.runtimes.values()].every((runtime) => !runtime.isRunning()) &&
+      [...this.pending.values()].every((queue) => queue.length === 0)
+  }
 
   initialize(): Promise<void> {
     if (!this.initialization) {
@@ -118,9 +144,11 @@ export class ConversationController {
     runtime.conversationId = id
     runtime.restoreConversation(rec)
     runtime.setModelProfile(this.activeProfile())
+    runtime.setMemoryContextProvider(this.turnHooks.memoryContext)
     if (this.library) {
       runtime.setIdentity({ userName: this.library.settings.userName, assistantName: this.library.settings.assistantName })
       runtime.setEffort(this.library.settings.effort)
+      runtime.setGoalBudget(this.library.settings.goalMaxIterations, this.library.settings.goalMaxMinutes)
     }
     this.runtimes.set(id, runtime)
     if (!this.pending.has(id)) this.pending.set(id, structuredClone(rec.pendingMessages))
@@ -190,6 +218,10 @@ export class ConversationController {
   }
 
   handleRuntimeChange(): void {
+    for (const [id, runtime] of this.runtimes) {
+      const reason = runtime.getQueuePauseReason()
+      if (reason) this.pausedQueues.set(id, reason)
+    }
     this.emit()
   }
 
@@ -215,7 +247,10 @@ export class ConversationController {
   private async refreshLibrary(): Promise<void> {
     this.library = await this.store.getState()
     // Model clients track the current depth; setting it repeatedly is a no-op.
-    for (const runtime of this.runtimes.values()) runtime.setEffort(this.library.settings.effort)
+    for (const runtime of this.runtimes.values()) {
+      runtime.setEffort(this.library.settings.effort)
+      runtime.setGoalBudget(this.library.settings.goalMaxIterations, this.library.settings.goalMaxMinutes)
+    }
     this.emit()
   }
 
@@ -317,6 +352,19 @@ export class ConversationController {
     }
     return this.serialize(async () => {
       const queue = this.queueOf(id)
+      if (this.pausedQueues.has(id) || runtime.getQueuePauseReason()) {
+        if (clean === '/goal clear' && runtime.getSnapshot().mode === 'claude_code') {
+          // Allow a goal-clear command through without releasing older work.
+          this.scheduleDrain(id, message, true)
+          return structuredClone(message)
+        }
+        this.pausedQueues.delete(id)
+        runtime.resumeQueue()
+        queue.unshift(message)
+        await this.persistConversation(id)
+        this.scheduleDrain(id)
+        return structuredClone(message)
+      }
       if (strategy === 'steer') {
         if (await runtime.steerMessage(message.text, message.attachments)) {
           await this.persistConversation(id)
@@ -356,11 +404,12 @@ export class ConversationController {
     return this.drainGenerations.get(id) ?? 0
   }
 
-  private scheduleDrain(id: string, seed?: PendingMessage): void {
+  private scheduleDrain(id: string, seed?: PendingMessage, allowPausedSeed = false): void {
     const runtime = this.runtimes.get(id)
-    if (!runtime || this.drains.has(id) || (!this.queueOf(id).length && !seed) || runtime.isRunning()) return
+    if (!runtime || this.drains.has(id) || (!this.queueOf(id).length && !seed) || runtime.isRunning() ||
+        (this.pausedQueues.has(id) && !allowPausedSeed)) return
     const generation = this.generationOf(id)
-    const work = Promise.resolve().then(() => this.drain(id, generation, seed))
+    const work = Promise.resolve().then(() => this.drain(id, generation, seed, allowPausedSeed))
     this.drains.set(id, { promise: work, generation })
     void work.then(
       () => undefined,
@@ -371,17 +420,18 @@ export class ConversationController {
       const current = this.drains.get(id)
       if (current?.promise === work) this.drains.delete(id)
       const rt = this.runtimes.get(id)
-      if (this.queueOf(id).length && rt && !rt.isRunning()) this.scheduleDrain(id)
+      if (this.queueOf(id).length && rt && !rt.isRunning() && !this.pausedQueues.has(id)) this.scheduleDrain(id)
     })
   }
 
-  private async drain(id: string, generation: number, seed?: PendingMessage): Promise<void> {
+  private async drain(id: string, generation: number, seed?: PendingMessage, allowPausedSeed = false): Promise<void> {
     const runtime = this.runtimes.get(id)
     if (!runtime) return
     // The seed rides the first iteration without ever touching `pending`; from
     // the second iteration on this is the plain queue drain it always was.
     let seeded: PendingMessage | null = seed ?? null
-    while (generation === this.generationOf(id) && !runtime.isRunning() && (seeded || this.queueOf(id).length)) {
+    while (generation === this.generationOf(id) && !runtime.isRunning() &&
+           (!this.pausedQueues.has(id) || (allowPausedSeed && seeded)) && (seeded || this.queueOf(id).length)) {
       const prepared = await this.serialize(async () => {
         if (generation !== this.generationOf(id)) return null
         const next = seeded ?? this.queueOf(id).shift()
@@ -391,6 +441,7 @@ export class ConversationController {
         const title = this.library?.conversations.find((item) => item.id === id)?.title === '新对话'
           ? (next.text.split(/\r?\n/u, 1)[0].trim() || `附件：${next.attachments[0]?.name ?? '对话'}`).slice(0, 60)
           : undefined
+        const beforeCount = runtime.exportConversationState().timeline.length
         const run = runtime.sendMessage(next.text, next.attachments)
         try {
           await this.persistConversation(id, title)
@@ -398,12 +449,23 @@ export class ConversationController {
           runtime.stop()
           throw error
         }
-        return { run, title, source }
+        return { run, title, source, beforeCount, userText: next.text }
       })
       if (!prepared) return
       if (prepared.title) void this.refineTitle(id, prepared.source, prepared.title)
       try {
         await prepared.run
+        const snapshot = runtime.getSnapshot()
+        if (snapshot.taskStatus === 'done' && snapshot.mode !== 'demo' && this.turnHooks.afterSuccessfulTurn) {
+          const history = runtime.exportConversationState().history
+          const last = history.at(-1)
+          const turn: CompletedTurn = {
+            conversationId: id, userText: prepared.userText,
+            finalReply: last?.role === 'assistant' ? last.content : '',
+            mode: snapshot.mode, timeline: snapshot.timeline.slice(prepared.beforeCount)
+          }
+          try { await this.turnHooks.afterSuccessfulTurn(turn) } catch (error) { this.onBackgroundError(error) }
+        }
       } finally {
         if (generation === this.generationOf(id)) {
           await this.serialize(async () => {
@@ -430,8 +492,8 @@ export class ConversationController {
     return this.serialize(async () => {
       this.drainGenerations.set(id, this.generationOf(id) + 1)
       this.drains.delete(id)
+      this.pausedQueues.set(id, '任务已停止；待发送消息仍保留，发送新消息可继续。')
       this.runtimes.get(id)?.stop()
-      this.pending.set(id, [])
       await this.persistConversation(id)
     })
   }
@@ -555,6 +617,7 @@ export class ConversationController {
     this.runtimes.delete(id)
     this.drains.delete(id)
     this.drainGenerations.delete(id)
+    this.pausedQueues.delete(id)
     if (this.displayedRecord?.id === id) this.displayedRecord = null
   }
 
@@ -617,7 +680,7 @@ export class ConversationController {
     if (!id) return
     await this.serialize(async () => {
       const runtime = await this.ensureRuntime(id)
-      runtime.setPlanMode(on)
+      await runtime.setPlanMode(on)
     })
   }
 
@@ -626,14 +689,26 @@ export class ConversationController {
     await this.initialize()
     await this.serialize(async () => {
       const settings = this.library!.settings
-      const exists = settings.modelProfiles.some((item) => item.id === profile.id)
-      const modelProfiles = exists
-        ? settings.modelProfiles.map((item) => item.id === profile.id ? profile : item)
-        : [...settings.modelProfiles, profile]
+      const previous = settings.modelProfiles.find((item) => item.id === profile.id)
+      if (previous && previous.baseUrl !== profile.baseUrl && !profile.apiKey) {
+        throw new Error('更改端点时，请重新输入 API Key。')
+      }
+      const resolved: ModelProfile = {
+        ...profile,
+        apiKey: profile.apiKey || previous?.apiKey || '',
+        extraEnv: profile.extraEnv === undefined ? previous?.extraEnv : profile.extraEnv,
+        needsKeyReentry: false,
+        apiKeyConfigured: undefined,
+        extraEnvConfigured: undefined
+      }
+      if (!resolved.apiKey) throw new Error('请重新输入 API Key。')
+      const modelProfiles = previous
+        ? settings.modelProfiles.map((item) => item.id === resolved.id ? resolved : item)
+        : [...settings.modelProfiles, resolved]
       const activeModelProfileId = settings.activeModelProfileId ?? profile.id
       await this.store.updateSettings({ modelProfiles, activeModelProfileId })
       await this.refreshLibrary()
-      if (activeModelProfileId === profile.id) this.applyModelProfile(profile)
+      if (activeModelProfileId === resolved.id) this.applyModelProfile(resolved)
     })
   }
 

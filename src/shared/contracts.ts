@@ -9,7 +9,31 @@ export type EffortLevel = 'off' | 'low' | 'high' | 'max'
 /** The CLI's /goal state: a condition it re-checks before every stop. */
 export interface AgentGoal {
   condition: string
-  iterations: number
+  phase: 'requested' | 'confirmed' | 'stopping' | 'unverified'
+  /** Only SDK active_goal events can confirm an iteration count. */
+  iterations?: number
+  startedAt: string
+  statusMessage?: string
+}
+
+export type GrowthStatus = 'proposed' | 'running' | 'ready' | 'failed' | 'stale' | 'adopted' | 'published' | 'discarded'
+
+export interface GrowthProposal {
+  id: string
+  title: string
+  objective: string
+  evidence: string
+  sourceConversationId?: string
+  status: GrowthStatus
+  createdAt: string
+  updatedAt: string
+  baseCommit?: string
+  experimentCommit?: string
+  diff?: string
+  checks?: Array<{ name: string; ok: boolean; output: string }>
+  releaseNotes?: string
+  version?: string
+  error?: string
 }
 
 export type TaskStatus =
@@ -72,6 +96,9 @@ export interface BalanceSnapshot {
 export interface ConversationSettings {
   visibleConversationTabs: number
   autoArchiveAfterDays: 0 | 7 | 14 | 30
+  goalMaxIterations: number
+  goalMaxMinutes: number
+  memoryEnabled: boolean
   /** How deep the model thinks. Values are exactly what DeepSeek accepts on
    *  both wire formats; the app rewrites every outgoing request to match. */
   effort: EffortLevel
@@ -96,8 +123,8 @@ export interface ConversationSettings {
   tabOrder: string[]
 }
 
-/** One named model endpoint the assistant can talk to. Keys are stored in the
- *  app's own settings file — this is a single-user desktop app. */
+/** One named model endpoint. Main-process storage encrypts credentials;
+ *  renderer snapshots contain only configured flags, never secret values. */
 export interface ModelProfile {
   id: string
   /** Display name, e.g. 深度求索. */
@@ -105,6 +132,10 @@ export interface ModelProfile {
   /** Anthropic-compatible base URL; requests go to `${baseUrl}/v1/messages`. */
   baseUrl: string
   apiKey: string
+  /** Public settings snapshots carry these flags and never the stored secret. */
+  apiKeyConfigured?: boolean
+  extraEnvConfigured?: boolean
+  needsKeyReentry?: boolean
   /** Main model id, e.g. deepseek-chat. */
   model: string
   /** Small/fast model for background work; falls back to `model`. */
@@ -255,7 +286,7 @@ export interface AppSnapshot {
 }
 
 export interface VoiceConfig {
-  siliconFlowApiKey?: string
+  siliconFlowAvailable?: boolean
   siliconFlowModel?: string
   siliconFlowBaseUrl?: string
 }
@@ -332,7 +363,7 @@ export interface PetAPI {
   openOnboarding(): Promise<void>
   setAvatarState(state: AvatarState): Promise<void>
   getVoiceConfig(): Promise<VoiceConfig>
-  transcribeAudio(request: { bytes: number[]; mimeType: string; apiKey: string; model?: string; baseUrl?: string }): Promise<{ text: string }>
+  transcribeAudio(request: { bytes: number[]; mimeType: string }): Promise<{ text: string }>
   voiceLog(level: 'info' | 'error', message: string, data?: unknown): Promise<void>
   quit(): Promise<void>
   beginDrag(position: { x: number; y: number }): Promise<void>

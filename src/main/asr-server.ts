@@ -36,19 +36,21 @@ export async function transcribeAudio(request: TranscribeAudioRequest): Promise<
     })
     voiceLog('[asr-server] response', { status: response.status })
     if (!response.ok) {
-      const body = await response.text().catch(() => '')
-      voiceLogError('[asr-server] response not ok', { status: response.status, body })
-      throw new Error(`转写失败（${response.status}）：${body || response.statusText}`)
+      // An upstream error body can echo credentials or the spoken audio. Keep
+      // both the log and renderer-facing error limited to the status code.
+      voiceLogError('[asr-server] response not ok', { status: response.status })
+      throw new Error(`转写失败（${response.status}）。`)
     }
     const data = (await response.json()) as { text?: string }
-    voiceLog('[asr-server] response data', data)
+    voiceLog('[asr-server] response data', { textLength: data.text?.length ?? 0 })
     return { text: (data.text ?? '').trim() }
   } catch (error) {
-    voiceLogError('[asr-server] transcribe error', error)
+    voiceLogError('[asr-server] transcribe error', { name: error instanceof Error ? error.name : 'UnknownError' })
     if (error instanceof Error && error.name === 'AbortError') {
       throw new Error('转写超时，请稍后重试。')
     }
-    throw error
+    if (error instanceof Error && /^转写失败（\d{3}）。$/u.test(error.message)) throw error
+    throw new Error('在线转写失败，请稍后重试。')
   } finally {
     clearTimeout(timeout)
   }

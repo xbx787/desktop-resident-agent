@@ -917,7 +917,9 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     submitLockRef.current = true;
     setBusy('send');
     try {
-      await run((bridge) => bridge.sendMessage(text, [], 'queue'));
+      const activeTurn = ['planning', 'awaiting_approval', 'executing', 'verifying'].includes(snapshot.taskStatus);
+      const strategy = text.trim() === '/goal clear' && activeTurn ? 'steer' : 'queue';
+      await run((bridge) => bridge.sendMessage(text, [], strategy));
     } finally {
       submitLockRef.current = false;
       setBusy((current) => current === 'send' ? null : current);

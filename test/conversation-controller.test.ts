@@ -35,6 +35,34 @@ async function until(check: () => boolean, label: string): Promise<void> {
 }
 
 describe('conversation controller', () => {
+  it('adds updated memory to the next queued model request without storing it in chat history', async () => {
+    const calls: string[] = []
+    const resolves: Array<(reply: ModelReply) => void> = []
+    const model: ModelClient = { respond: (history) => new Promise((resolve) => {
+      calls.push(history.at(-1)!.content)
+      resolves.push(resolve)
+    }) }
+    let memory = ''
+    const controller = new ConversationController(new ConversationStore(testRoot),
+      (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model))
+    controller.setTurnHooks({
+      memoryContext: async () => memory,
+      afterSuccessfulTurn: async () => { memory = '用户喜欢蓝色。' }
+    })
+    await controller.initialize()
+    await controller.sendMessage('第一条')
+    await until(() => calls.length === 1, 'first memory-free request')
+    await controller.sendMessage('第二条')
+    resolves[0]({ text: '已完成第一条' })
+    await until(() => calls.length === 2, 'next request with updated memory')
+    expect(calls[0]).not.toContain('用户喜欢蓝色')
+    expect(calls[1]).toContain('用户喜欢蓝色')
+    expect(calls[1]).toContain('第二条')
+    const history = controller.displayedRuntime()!.exportConversationState().history
+    expect(JSON.stringify(history)).not.toContain('用户喜欢蓝色')
+    resolves[1]({ text: '已完成第二条' })
+    await until(() => controller.getSnapshot().taskStatus === 'done', 'second finished turn')
+  })
   it('exposes the active run status on its tab immediately and keeps completed tabs distinct', async () => {
     let finish!: (reply: ModelReply) => void
     const model: ModelClient = { respond: () => new Promise((resolve) => { finish = resolve }) }
@@ -386,6 +414,45 @@ describe('conversation controller', () => {
   })
 })
 
+describe('stopped queue', () => {
+  it('keeps pending messages on disk and resumes only after a new explicit send', async () => {
+    const calls: Array<{ text: string; resolve: (reply: ModelReply) => void }> = []
+    const model: ModelClient = {
+      respond: (history) => new Promise((resolve) => {
+        calls.push({ text: history.at(-1)?.content ?? '', resolve })
+      })
+    }
+    const store = new ConversationStore(testRoot)
+    const controller = new ConversationController(store, (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model))
+    await controller.initialize()
+    const id = controller.getSnapshot().conversationLibrary.activeConversationId!
+    await controller.sendMessage('正在处理')
+    await until(() => calls.length === 1, 'first running turn')
+    await controller.sendMessage('保留在队列')
+    await controller.stop()
+    expect(controller.getSnapshot().pendingMessages.map((item) => item.text)).toEqual(['保留在队列'])
+    expect((await store.getConversation(id))?.pendingMessages.map((item) => item.text)).toEqual(['保留在队列'])
+    calls[0].resolve({ text: '迟到回复' })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(calls).toHaveLength(1)
+    await controller.sendMessage('/goal clear')
+    await until(() => calls.length === 2, 'clear command while paused')
+    expect(calls[1].text).toBe('/goal clear')
+    calls[1].resolve({ text: '目标已清除' })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(calls).toHaveLength(2)
+    expect(controller.getSnapshot().pendingMessages.map((item) => item.text)).toEqual(['保留在队列'])
+    await controller.sendMessage('现在继续')
+    await until(() => calls.length === 3, 'explicit resume')
+    expect(calls[2].text).toBe('现在继续')
+    calls[2].resolve({ text: '继续完成' })
+    await until(() => calls.length === 4, 'old pending after resume')
+    expect(calls[3].text).toBe('保留在队列')
+    calls[3].resolve({ text: '排队完成' })
+    await until(() => controller.getSnapshot().pendingMessages.length === 0, 'drained after resume')
+  })
+})
+
 describe('model profiles', () => {
   const profile = (id: string, name: string): ModelProfile => ({
     id, name, baseUrl: 'https://api.example.test/anthropic', apiKey: 'sk-x', model: 'm'
@@ -434,6 +501,20 @@ describe('model profiles', () => {
     const reloaded = new ConversationController(new ConversationStore(testRoot), (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, { respond: async () => ({ text: 'ok' }) }))
     await reloaded.initialize()
     expect(reloaded.getSnapshot().conversationLibrary.settings.modelProfiles.map((item) => item.name)).toEqual(['一号'])
+  })
+
+  it('preserves a saved secret on same-endpoint edits but requires a new key when endpoint changes', async () => {
+    const controller = new ConversationController(new ConversationStore(testRoot), (onChange) =>
+      new AgentRuntime(new NoteStore(testRoot), undefined, onChange, { respond: async () => ({ text: 'ok' }) }))
+    await controller.initialize()
+    await controller.saveModelProfile({ ...profile('p1', 'Original'), extraEnv: 'CUSTOM_TOKEN=secret' })
+    await controller.saveModelProfile({ ...profile('p1', 'Renamed'), apiKey: '', extraEnv: undefined })
+    expect(controller.getSnapshot().conversationLibrary.settings.modelProfiles[0]).toMatchObject({
+      name: 'Renamed', apiKey: 'sk-x', extraEnv: 'CUSTOM_TOKEN=secret'
+    })
+    await expect(controller.saveModelProfile({ ...profile('p1', 'Wrong endpoint'), baseUrl: 'https://different.example.test', apiKey: '' }))
+      .rejects.toThrow('重新输入 API Key')
+    expect(controller.getSnapshot().conversationLibrary.settings.modelProfiles[0]?.baseUrl).toBe('https://api.example.test/anthropic')
   })
 })
 

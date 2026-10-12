@@ -132,7 +132,7 @@ describe('SiliconFlowAsrEngine', () => {
     const onFinal = vi.fn()
     const onStateChange = vi.fn()
     const engine = new SiliconFlowAsrEngine(
-      { apiKey: 'sk-test', model: 'm' },
+      { available: true, model: 'm' },
       { transcribeAudio: transcribeMock, voiceLog: voiceLogMock },
       { onFinal, onStateChange }
     )
@@ -149,7 +149,9 @@ describe('SiliconFlowAsrEngine', () => {
     expect(transcribeMock).toHaveBeenCalledTimes(1)
     expect(transcribeMock.mock.calls[0]?.[0].bytes).toBeInstanceOf(Array)
     expect(transcribeMock.mock.calls[0]?.[0].bytes.length).toBeGreaterThan(0)
+    expect(transcribeMock.mock.calls[0]?.[0]).not.toHaveProperty('apiKey')
     expect(onFinal).toHaveBeenCalledWith('hello world')
+    expect(JSON.stringify(voiceLogMock.mock.calls)).not.toContain('hello world')
   })
 
   it('reports bridge error', async () => {
@@ -157,7 +159,7 @@ describe('SiliconFlowAsrEngine', () => {
 
     const onError = vi.fn()
     const engine = new SiliconFlowAsrEngine(
-      { apiKey: 'sk-test' },
+      { available: true },
       { transcribeAudio: transcribeMock, voiceLog: voiceLogMock },
       { onError }
     )
@@ -172,11 +174,12 @@ describe('SiliconFlowAsrEngine', () => {
 
     expect(transcribeMock).toHaveBeenCalledTimes(1)
     expect(onError).toHaveBeenCalledWith('转写失败（401）：Unauthorized')
+    expect(JSON.stringify(voiceLogMock.mock.calls)).not.toContain('Unauthorized')
   })
 
   it('reports missing api key', () => {
     const onError = vi.fn()
-    const engine = new SiliconFlowAsrEngine({ apiKey: '' }, { transcribeAudio: transcribeMock, voiceLog: voiceLogMock }, { onError })
+    const engine = new SiliconFlowAsrEngine({ available: false }, { transcribeAudio: transcribeMock, voiceLog: voiceLogMock }, { onError })
     engine.start()
     expect(onError).toHaveBeenCalledWith('未配置 SiliconFlow API Key。')
   })

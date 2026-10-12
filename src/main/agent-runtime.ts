@@ -1,4 +1,4 @@
-import type { AppSnapshot, AskAnswers, ContextUsageSnapshot, EffortLevel, ModelMode, ModelProfile, ProposedAction, TimelineEntry, UserAttachment } from '../shared/contracts'
+import type { AgentGoal, AppSnapshot, AskAnswers, ContextUsageSnapshot, EffortLevel, ModelMode, ModelProfile, ProposedAction, TimelineEntry, UserAttachment } from '../shared/contracts'
 import { isImageAttachmentName } from '../shared/image-preview'
 import { toolLabel } from '../shared/tool-labels'
 import { AgentTurnError } from './agent-errors'
@@ -29,6 +29,11 @@ export class AgentRuntime {
   private contextGeneration = 0
   private sdkSessionId: string | null = null
   private thinkingOpen = false
+  private goalMaxIterations = 30
+  private goalMaxMinutes = 180
+  private goalTimer?: ReturnType<typeof setTimeout>
+  private queuePauseReason: string | null = null
+  private memoryContextProvider?: () => Promise<string>
   /** Which conversation this runtime owns; assigned by the controller at creation. */
   conversationId = ''
   /** Entries changed since the publisher's last take (upsert by id). */
@@ -46,12 +51,11 @@ export class AgentRuntime {
     this.configuredModel = model
     this.claudeCodeModel = claudeCodeModel
     this.model = claudeCodeModel ?? model
-    // The CLI reports its /goal state when it can; the app keeps its own copy too.
-    claudeCodeModel?.setGoalListener?.((goal) => {
-      if (!goal) return;
-      this.state.goal = goal;
-      this.emit();
-    });
+    claudeCodeModel?.setGoalListener?.((goal) => this.observeGoal(goal))
+    claudeCodeModel?.setPlanModeListener?.((on) => {
+      this.state.planMode = on
+      this.emit()
+    })
     // A parked AskUserQuestion lives in the snapshot while the panel shows it.
     claudeCodeModel?.setQuestionListener?.((question) => {
       this.state.question = question;
@@ -81,6 +85,9 @@ export class AgentRuntime {
     if (this.state.mode === mode) return
     this.contextGeneration += 1
     if (this.state.mode === 'claude_code') this.disposeClaudeQuery()
+    this.clearGoalTimer()
+    this.state.goal = null
+    this.queuePauseReason = null
     // A resumed SDK session would otherwise miss turns handled by another model.
     this.sdkSessionId = null
     this.model = mode === 'claude_code' ? this.claudeCodeModel : mode === 'live' ? this.configuredModel : undefined
@@ -91,22 +98,103 @@ export class AgentRuntime {
     this.add('system', mode === 'claude_code' ? '已切换到 Claude Code + DeepSeek。' : mode === 'live' ? '已切换到 DeepSeek Flash。' : '已切换到演示模式。')
   }
 
+  /** Memory is added only to the model request copy, never to the visible or saved history. */
+  setMemoryContextProvider(provider?: () => Promise<string>): void {
+    this.memoryContextProvider = provider
+  }
+
   /** Planned-first sessions: research and propose before touching anything. */
-  setPlanMode(on: boolean): void {
-    if (this.state.planMode === on) return
+  async setPlanMode(on: boolean): Promise<void> {
+    if (Boolean(this.state.planMode) === on) return
+    if (this.state.mode !== 'claude_code' || !this.claudeCodeModel?.setPlanMode) {
+      throw new Error('当前模型不支持计划模式。')
+    }
+    try {
+      const confirmed = await this.claudeCodeModel.setPlanMode(on)
+      if (confirmed === false) {
+        this.add('system', '计划模式请求已保存，等待下次 SDK 会话启动后确认。')
+        return
+      }
+    } catch {
+      this.add('system', '计划模式切换失败，SDK 未确认。')
+      throw new Error('计划模式切换失败，SDK 未确认。')
+    }
     this.state.planMode = on
-    this.claudeCodeModel?.setPlanMode?.(on)
     this.add('system', on ? '已开启计划模式：先研究并给出计划，再动手执行。' : '已关闭计划模式。')
   }
 
-  /** The CLI's own /goal state, as far as the app tracks it: started by the
-   *  user's /goal message, cleared by /goal clear, gone when the session is. */
+  setGoalBudget(maxIterations: number, maxMinutes: number): void {
+    if (!Number.isSafeInteger(maxIterations) || maxIterations < 1 || maxIterations > 300 ||
+        !Number.isSafeInteger(maxMinutes) || maxMinutes < 1 || maxMinutes > 1440) {
+      throw new Error('目标预算必须在允许范围内。')
+    }
+    if (this.goalMaxIterations === maxIterations && this.goalMaxMinutes === maxMinutes) return
+    this.goalMaxIterations = maxIterations
+    this.goalMaxMinutes = maxMinutes
+    this.armGoalTimer()
+    this.checkGoalBudget()
+  }
+
+  getQueuePauseReason(): string | null { return this.queuePauseReason }
+
+  resumeQueue(): void { this.queuePauseReason = null }
+
+  /** A requested goal is only a local request until an SDK event confirms it. */
   private trackGoal(text: string): void {
     const match = /^\/goal(?:\s+([\s\S]+))?$/iu.exec(text.trim())
     const condition = match?.[1]?.trim() ?? ''
     if (!match || !condition) return // Bare /goal just asks the CLI for its state.
-    this.state.goal = /^clear$/iu.test(condition) ? null : { condition, iterations: 0 }
+    if (/^clear$/iu.test(condition)) {
+      if (this.state.goal) {
+        this.state.goal = { ...this.state.goal, phase: 'stopping', statusMessage: '已请求清除目标，等待 CLI 确认。' }
+      }
+    } else {
+      this.state.goal = { condition, phase: 'requested', startedAt: new Date().toISOString() }
+      this.armGoalTimer()
+    }
     this.emit()
+  }
+
+  private observeGoal(goal: AgentGoal | null): void {
+    if (goal === null) {
+      this.state.goal = null
+      this.clearGoalTimer()
+      this.emit()
+      return
+    }
+    const previous = this.state.goal
+    const startedAt = previous?.condition === goal.condition ? previous.startedAt : goal.startedAt
+    this.state.goal = { condition: goal.condition, phase: 'confirmed', startedAt,
+      ...(goal.iterations !== undefined ? { iterations: goal.iterations } : {}),
+      ...(goal.iterations === undefined ? { statusMessage: 'CLI 未提供轮数，仍按时间上限保护。' } : {}) }
+    this.armGoalTimer()
+    this.emit()
+    this.checkGoalBudget()
+  }
+
+  private clearGoalTimer(): void {
+    if (this.goalTimer) clearTimeout(this.goalTimer)
+    this.goalTimer = undefined
+  }
+
+  private armGoalTimer(): void {
+    this.clearGoalTimer()
+    const goal = this.state.goal
+    if (!goal || this.queuePauseReason) return
+    const elapsed = Date.now() - Date.parse(goal.startedAt)
+    const remaining = this.goalMaxMinutes * 60_000 - (Number.isFinite(elapsed) ? elapsed : 0)
+    this.goalTimer = setTimeout(() => this.checkGoalBudget(), Math.max(0, remaining))
+    this.goalTimer.unref?.()
+  }
+
+  private checkGoalBudget(): void {
+    const goal = this.state.goal
+    if (!goal || this.queuePauseReason) return
+    if (goal.iterations !== undefined && goal.iterations >= this.goalMaxIterations) {
+      this.stop(`目标达到 ${this.goalMaxIterations} 轮上限，已停止；待发送消息仍保留。`)
+    } else if (Date.now() - Date.parse(goal.startedAt) >= this.goalMaxMinutes * 60_000) {
+      this.stop(`目标达到 ${this.goalMaxMinutes} 分钟上限，已停止；待发送消息仍保留。`)
+    }
   }
 
   /** Thinking depth is a plain model-layer knob: it goes to every client and
@@ -209,8 +297,13 @@ export class AgentRuntime {
     this.state.contextUsage = { status: 'unavailable' }
     this.state.contextCompacting = false
     this.state.taskMetrics = undefined
-    // A /goal belongs to the CLI session, and a new conversation means a new one.
-    this.state.goal = null
+    // A restored CLI goal is visible, but its state must be confirmed again by
+    // an SDK event before we call it active or count another iteration.
+    this.clearGoalTimer()
+    this.state.goal = record.goal
+      ? { ...record.goal, phase: 'unverified', statusMessage: '会话恢复后尚未收到 CLI 目标状态确认。' }
+      : null
+    this.queuePauseReason = null
     this.draft = undefined
     this.thinkingOpen = false
     const mode = record.mode === 'claude_code' && this.claudeCodeModel ? 'claude_code'
@@ -221,6 +314,9 @@ export class AgentRuntime {
     // the best context source — even when the last stored turn is an unanswered
     // user message (that turn simply continues inside the resumed session).
     this.sdkSessionId = mode === 'claude_code' ? record.sdkSessionId : null
+
+    if (mode !== 'claude_code') this.state.goal = null
+    else this.armGoalTimer()
     this.emit()
   }
 
@@ -290,6 +386,14 @@ export class AgentRuntime {
         const expanded = await expandFileMentions(text, this.workspaceRoot, { maxFileBytes: 32 * 1024, maxTotalBytes: 48 * 1024 })
         modelHistory[modelHistory.length - 1] = { role: 'user', content: [expanded.prompt, context].filter(Boolean).join('\n\n') }
       }
+      if (this.memoryContextProvider) {
+        const memory = await this.memoryContextProvider().catch(() => '')
+        if (memory) {
+          const last = modelHistory[modelHistory.length - 1]
+          modelHistory[modelHistory.length - 1] = { role: 'user', content: `${last.content}\n\n<user_memory>\n${memory}\n</user_memory>` }
+        }
+      }
+      if (abort.signal.aborted || currentGeneration !== this.generation) return
       const reply = await this.model.respond(modelHistory, abort.signal, (partial, segment) => {
         if (segment !== undefined && segment !== progressSegment) {
           progressSegment = segment
@@ -432,12 +536,22 @@ export class AgentRuntime {
     this.configuredModel?.setIdentity?.(identity)
   }
 
-  stop(): void {
+  stop(reason?: string): void {
     if (this.state.mode !== 'claude_code' && (this.state.taskStatus === 'executing' || this.state.taskStatus === 'verifying')) {
       this.add('system', '写入已经开始，当前步骤会完成读回验证；不会继续执行其他动作。')
       return
     }
-    if (!this.isBusy()) return
+    if (!this.isBusy() && !this.state.goal) return
+    if (this.state.goal) {
+      this.state.goal = { ...this.state.goal, phase: 'unverified',
+        statusMessage: reason ?? '已请求停止，但 CLI 尚未确认目标清除；可用 /goal 查询。' }
+      this.clearGoalTimer()
+      this.queuePauseReason = reason ?? '任务已停止；待发送消息仍保留，发送新消息可继续。'
+    }
+    if (!this.isBusy()) {
+      this.add('system', reason ?? '已请求停止目标；CLI 状态尚未确认。')
+      return
+    }
     this.generation += 1
     this.activeRequest?.abort()
     this.activeRequest = undefined
@@ -451,7 +565,7 @@ export class AgentRuntime {
     this.state.avatarState = 'idle'
     this.closeThinkingEntries()
     this.finishRunningTools('已停止')
-    this.add('system', this.state.mode === 'claude_code' ? '已请求停止 Claude Code；正在执行的外部动作可能仍会完成。' : '任务已停止，待批准的操作已取消。')
+    this.add('system', reason ?? (this.state.mode === 'claude_code' ? '已请求停止 Claude Code；正在执行的外部动作可能仍会完成。' : '任务已停止，待批准的操作已取消。'))
   }
 
   private isBusy(): boolean {
@@ -489,8 +603,11 @@ export class AgentRuntime {
       // landed" and raises a smile for a beat. The next turn's sendMessage
       // flips it back to 'thinking'.
       this.state.avatarState = 'success'
-      // The CLI's stop hook keeps a goal going; its own counter may arrive later.
-      if (this.state.goal) this.state.goal = { ...this.state.goal, iterations: this.state.goal.iterations + 1 }
+      // An ordinary reply does not prove a /goal iteration or a clear.
+      if (this.state.goal && (this.state.goal.phase === 'requested' || this.state.goal.phase === 'stopping')) {
+        this.state.goal = { ...this.state.goal, phase: 'unverified',
+          statusMessage: 'CLI 尚未确认目标状态；可用 /goal 查询或重试清除。' }
+      }
       this.emit()
     }
   }

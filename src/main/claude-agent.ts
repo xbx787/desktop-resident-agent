@@ -196,6 +196,7 @@ export class ClaudeAgentClient implements ModelClient {
   /** Planned-first sessions: the CLI researches read-only and proposes, then
    *  implements. Switched live through the query's own control channel. */
   private planMode = false
+  private planModeListener?: (on: boolean) => void
   private goalListener?: (goal: AgentGoal | null) => void
   private questionListener?: (question: AskQuestionRequest | null) => void
   private planListener?: (plan: PlanApprovalRequest | null) => void
@@ -402,10 +403,23 @@ export class ClaudeAgentClient implements ModelClient {
     this.effortProxy?.setEffort(level)
   }
 
-  setPlanMode(on: boolean): void {
+  async setPlanMode(on: boolean): Promise<boolean> {
+    if (this.planMode === on) return Boolean(this.agentQuery?.setPermissionMode && this.queryWarm)
+    // A cold query has not received any input and may ignore control messages.
+    // Close it so the next one starts with the requested permission mode.
+    if (this.agentQuery && !this.queryWarm) await this.closeQuery()
+    else if (this.agentQuery) {
+      await this.agentQuery.setPermissionMode(on ? 'plan' : 'bypassPermissions')
+      this.planMode = on
+      this.planModeListener?.(on)
+      return true
+    }
     this.planMode = on
-    // A missing query simply means the next ensureQuery picks the mode up.
-    void this.agentQuery?.setPermissionMode(on ? 'plan' : 'bypassPermissions').catch(() => undefined)
+    return false
+  }
+
+  setPlanModeListener(listener: (on: boolean) => void): void {
+    this.planModeListener = listener
   }
 
   setGoalListener(listener: (goal: AgentGoal | null) => void): void {
@@ -472,7 +486,7 @@ export class ClaudeAgentClient implements ModelClient {
    *  close) denies with interrupt, like a skipped question. */
   private resolvePlanApproval(input: Record<string, unknown>, signal: AbortSignal): Promise<PermissionResult> {
     const plan = typeof input.plan === 'string' ? input.plan.trim() : ''
-    if (!plan) return Promise.resolve({ behavior: 'allow' })
+    if (!plan) return Promise.resolve({ behavior: 'deny', message: 'A plan must contain text before it can be approved. Stay in plan mode and write a plan.' })
     const id = randomUUID()
     return new Promise<boolean | null>((resolve) => {
       const settle = (value: boolean | null): void => {
@@ -654,16 +668,25 @@ export class ClaudeAgentClient implements ModelClient {
   }
 
   private handleMessage(message: SDKMessage): void {
-    // The CLI's /goal state is an internal event that may or may not surface on
-    // the message stream; use it when it does, the app keeps its own copy anyway.
+    // SDK reports confirmed /goal state here, including a null clear event.
     if ((message as { type?: string }).type === 'active_goal') {
-      const value = (message as { value?: { condition?: unknown; iterations?: unknown } | null }).value;
-      this.goalListener?.(value && typeof value.condition === 'string'
-        ? { condition: value.condition, iterations: Number.isInteger(value.iterations) ? Number(value.iterations) : 0 }
-        : null);
+      const value = (message as { value?: { condition?: unknown; iterations?: unknown; set_at?: unknown } | null }).value
+      if (value === null) this.goalListener?.(null)
+      else if (value && typeof value.condition === 'string' && value.condition.trim()) {
+        const rawStart = value.set_at
+        const epoch = typeof rawStart === 'number' && Number.isFinite(rawStart)
+          ? (rawStart < 1e12 ? rawStart * 1000 : rawStart) : Date.now()
+        const startedAt = Number.isFinite(epoch) && epoch > 0 && epoch <= Date.now() + 60_000
+          ? new Date(epoch).toISOString() : new Date().toISOString()
+        this.goalListener?.({ condition: value.condition.trim(), phase: 'confirmed',
+          startedAt, ...(Number.isSafeInteger(value.iterations) && Number(value.iterations) >= 0
+            ? { iterations: Number(value.iterations) } : {}) })
+      }
     }
     const turn = this.activeTurn
     if (message.type === 'system' && message.subtype === 'init') {
+      this.planMode = message.permissionMode === 'plan'
+      this.planModeListener?.(this.planMode)
       this.commands = [...message.slash_commands]
       this.skills = [...message.skills]
       this.terminalCommands = new Set((message.terminal_slash_commands ?? []).map((name) => name.replace(/^\//u, '').toLowerCase()))
@@ -863,7 +886,18 @@ export class ClaudeAgentClient implements ModelClient {
   }
 
   private redact(value: string): string {
-    return this.apiKey ? value.replaceAll(this.apiKey, '[已隐藏]') : value
+    let redacted = value
+    const provider = this.providerOverride
+    for (const secret of [this.apiKey, provider?.apiKey]) {
+      if (secret) redacted = redacted.replaceAll(secret, '[已隐藏]')
+    }
+    for (const line of provider?.extraEnv?.split(/\r?\n/u) ?? []) {
+      const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/u.exec(line)
+      if (!match || !/(?:KEY|TOKEN|SECRET|PASSWORD|PASS|AUTH)/iu.test(match[1])) continue
+      const secret = match[2].trim().replace(/^['"]|['"]$/gu, '')
+      if (secret.length >= 8) redacted = redacted.replaceAll(secret, '[已隐藏]')
+    }
+    return redacted
   }
 
   private isCompactUnneeded(text: string): boolean {

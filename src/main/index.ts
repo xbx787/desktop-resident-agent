@@ -1,11 +1,14 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, screen, shell, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, screen, shell, Tray } from 'electron'
 import { mkdirSync, promises as fsp } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { AgentRuntime } from './agent-runtime'
 import { isAskAnswers } from './ask-questions'
 import { ConversationController } from './conversation-controller'
+import { MemoryService, type MemoryProvider } from './memory-service'
+import { GrowthExperiments } from './growth-experiments'
 import { ConversationStore, isModelProfile } from './conversation-store'
+import { electronSecretCodec, publicSettings, publicSnapshot, SecretProtectionUnavailableError } from './secret-storage'
 import { ClaudeAgentClient } from './claude-agent'
 import { linkClaudeUserResources } from './claude-resource-links'
 import { CLAUDE_BASE_URL, DEFAULT_CLAUDE_MODEL, findClaudeExecutable, probeAnthropicEndpoint } from './claude-code'
@@ -127,6 +130,20 @@ const claudeKey = process.env.DEEPSEEK_API_KEY?.trim()
 const claudeExecutable = findClaudeExecutable(process.env)
 const windowsMcpServers = loadWindowsMcpConfig(path.join(userHome, '.claude.json'))
 let controller: ConversationController | undefined
+const memory = new MemoryService(dataRoot, { onError: (error) => console.warn(error.message) })
+
+async function backgroundProvider(): Promise<MemoryProvider | null> {
+  const settings = (await activeController().getLibraryState()).settings
+  const profile = settings.modelProfiles.find((item) => item.id === settings.activeModelProfileId)
+  if (profile?.apiKey) return { baseUrl: profile.baseUrl, apiKey: profile.apiKey, model: profile.model, smallModel: profile.smallModel }
+  const key = claudeKey || apiKey
+  return key ? { baseUrl: CLAUDE_BASE_URL, apiKey: key, model: DEFAULT_CLAUDE_MODEL, smallModel: 'deepseek-flash' } : null
+}
+
+const growth = new GrowthExperiments({
+  projectRoot: dataProjectRoot, dataRoot, claudeExecutable,
+  provider: backgroundProvider
+})
 /** Every Nth publish re-sends the whole history, so a renderer that somehow
  *  missed a delta cannot stay desynced; between those only changed entries
  *  travel (see AgentRuntime.takeTimelineDelta). */
@@ -136,7 +153,7 @@ let publishesSinceFullTimeline = FULL_TIMELINE_EVERY
 function flushSnapshot(): void {
   if (!avatarWindow || avatarWindow.isDestroyed()) return
   if (!controller) return
-  const snapshot = controller.getSnapshot()
+  const snapshot = publicSnapshot(controller.getSnapshot())
   if (rendererAvatarState) snapshot.avatarState = rendererAvatarState
   // The delta belongs to the displayed conversation's runtime; a cold
   // conversation (no runtime) is a full send by construction.
@@ -177,7 +194,7 @@ const createRuntime = (onChange: () => void): AgentRuntime => new AgentRuntime(
   agentWorkspace
 )
 controller = new ConversationController(
-  new ConversationStore(dataRoot),
+  new ConversationStore(dataRoot, electronSecretCodec()),
   createRuntime,
   () => publishSnapshot(),
   (error) => { console.error('Conversation background task failed:', error) },
@@ -190,6 +207,18 @@ controller = new ConversationController(
         model: DEFAULT_CLAUDE_MODEL, smallModel: 'deepseek-flash' }
     : undefined
 )
+controller.setTurnHooks({
+  memoryContext: () => memory.contextBlock(),
+  afterSuccessfulTurn: async (turn) => {
+    await memory.observeTurn({ ...turn, success: true, provider: await backgroundProvider() })
+    const before = new Set((await growth.list()).map((item) => item.id))
+    await growth.observeTurn(turn.conversationId, turn.timeline)
+    const added = (await growth.list()).filter((item) => !before.has(item.id))
+    if (added.length && Notification.isSupported()) {
+      new Notification({ title: '小鲸发现一个改进机会', body: '可在设置的“成长”页查看依据，再决定是否实验。' }).show()
+    }
+  }
+})
 
 function activeController(): ConversationController {
   if (!controller) throw new Error('会话库尚未就绪。')
@@ -446,7 +475,7 @@ function isScreenPoint(value: unknown): value is Electron.Point {
 function conversationSettingsPatch(value: unknown): Partial<ConversationSettings> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('会话设置无效。')
   const input = value as Record<string, unknown>
-  if (Object.keys(input).some((key) => key !== 'visibleConversationTabs' && key !== 'autoArchiveAfterDays' && key !== 'effort')) throw new Error('会话设置无效。')
+  if (Object.keys(input).some((key) => !['visibleConversationTabs', 'autoArchiveAfterDays', 'effort', 'goalMaxIterations', 'goalMaxMinutes', 'memoryEnabled'].includes(key))) throw new Error('会话设置无效。')
   const patch: Partial<ConversationSettings> = {}
   if (input.visibleConversationTabs !== undefined) {
     const tabs = input.visibleConversationTabs
@@ -462,7 +491,37 @@ function conversationSettingsPatch(value: unknown): Partial<ConversationSettings
     if (!isEffortLevel(input.effort)) throw new Error('思考强度设置无效。')
     patch.effort = input.effort
   }
+  if (input.goalMaxIterations !== undefined) {
+    const count = input.goalMaxIterations
+    if (typeof count !== 'number' || !Number.isInteger(count) || count < 1 || count > 300) throw new Error('目标轮数上限应为 1–300。')
+    patch.goalMaxIterations = count
+  }
+  if (input.goalMaxMinutes !== undefined) {
+    const minutes = input.goalMaxMinutes
+    if (typeof minutes !== 'number' || !Number.isInteger(minutes) || minutes < 1 || minutes > 1440) throw new Error('目标时长上限应为 1–1440 分钟。')
+    patch.goalMaxMinutes = minutes
+  }
+  if (input.memoryEnabled !== undefined) {
+    if (typeof input.memoryEnabled !== 'boolean') throw new Error('记忆开关无效。')
+    patch.memoryEnabled = input.memoryEnabled
+  }
   return patch
+}
+
+let adoptedRestartTimer: NodeJS.Timeout | undefined
+function restartWhenIdle(version: string): void {
+  if (adoptedRestartTimer) clearInterval(adoptedRestartTimer)
+  const executable = path.join(dataProjectRoot, 'release', `whale-companion-v${version}`, 'win-unpacked', 'Whale Companion Preview.exe')
+  adoptedRestartTimer = setInterval(() => {
+    if (!controller?.allConversationsIdle()) return
+    void fsp.access(executable).then(() => {
+      if (adoptedRestartTimer) clearInterval(adoptedRestartTimer)
+      adoptedRestartTimer = undefined
+      app.relaunch({ execPath: executable })
+      app.quit()
+    }).catch((error: unknown) => console.error('Adopted version restart failed:', error))
+  }, 1500)
+  adoptedRestartTimer.unref?.()
 }
 
 const AVATARS_DIR = path.join(dataRoot, 'avatars')
@@ -509,15 +568,67 @@ function registerIpc(): void {
   const onboardingTrusted = (event: Electron.IpcMainInvokeEvent): boolean => event.sender.id === onboardingWindow?.webContents.id
   ipcMain.handle('pet:settings:get', async (event) => {
     if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
-    return (await activeController().getLibraryState()).settings
+    return publicSettings((await activeController().getLibraryState()).settings)
   })
   ipcMain.handle('pet:settings:update', (event, patch: unknown) => {
     if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
-    return activeController().updateSettings(conversationSettingsPatch(patch))
+    return activeController().updateSettings(conversationSettingsPatch(patch)).then((settings) => {
+      memory.setEnabled(settings.memoryEnabled)
+      return publicSettings(settings)
+    })
   })
   ipcMain.handle('pet:settings:version', (event) => {
     if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
     return app.getVersion()
+  })
+  ipcMain.handle('pet:memory:list', (event) => {
+    if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
+    return memory.list()
+  })
+  ipcMain.handle('pet:memory:set-enabled', async (event, enabled: unknown) => {
+    if (!settingsTrusted(event) || typeof enabled !== 'boolean') throw new Error('记忆开关无效。')
+    const settings = await activeController().updateSettings({ memoryEnabled: enabled })
+    memory.setEnabled(settings.memoryEnabled)
+    return settings.memoryEnabled
+  })
+  ipcMain.handle('pet:memory:update', (event, id: unknown, value: unknown) => {
+    if (!settingsTrusted(event) || typeof id !== 'string' || typeof value !== 'string') throw new Error('记忆修改请求无效。')
+    return memory.update(id, value)
+  })
+  ipcMain.handle('pet:memory:delete', (event, id: unknown) => {
+    if (!settingsTrusted(event) || typeof id !== 'string') throw new Error('记忆删除请求无效。')
+    return memory.delete(id)
+  })
+  ipcMain.handle('pet:growth:status', async (event) => {
+    if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
+    return { ...await growth.availability(), proposals: await growth.list() }
+  })
+  ipcMain.handle('pet:growth:propose', (event, title: unknown, objective: unknown, evidence: unknown) => {
+    if (!settingsTrusted(event) || typeof title !== 'string' || typeof objective !== 'string' || typeof evidence !== 'string') throw new Error('改进提案无效。')
+    return growth.propose(title, objective, evidence)
+  })
+  ipcMain.handle('pet:growth:experiment', (event, id: unknown) => {
+    if (!settingsTrusted(event) || typeof id !== 'string') throw new Error('实验编号无效。')
+    return growth.experiment(id)
+  })
+  ipcMain.handle('pet:growth:update-notes', (event, id: unknown, notes: unknown) => {
+    if (!settingsTrusted(event) || typeof id !== 'string' || typeof notes !== 'string') throw new Error('版本说明无效。')
+    return growth.updateReleaseNotes(id, notes)
+  })
+  ipcMain.handle('pet:growth:adopt', async (event, id: unknown) => {
+    if (!settingsTrusted(event) || typeof id !== 'string') throw new Error('采纳请求无效。')
+    if (!activeController().allConversationsIdle()) throw new Error('请等其他会话完成或停止后再采纳。')
+    const adopted = await growth.adopt(id)
+    if (adopted.version) restartWhenIdle(adopted.version)
+    return adopted
+  })
+  ipcMain.handle('pet:growth:publish', (event, id: unknown) => {
+    if (!settingsTrusted(event) || typeof id !== 'string') throw new Error('发布请求无效。')
+    return growth.publish(id)
+  })
+  ipcMain.handle('pet:growth:discard', (event, id: unknown) => {
+    if (!settingsTrusted(event) || typeof id !== 'string') throw new Error('丢弃请求无效。')
+    return growth.discard(id)
   })
   ipcMain.handle('pet:prepare-dropped-file', async (event, filePath: unknown) => {
     if (!trusted(event) || typeof filePath !== 'string') throw new Error('拖入文件无效。')
@@ -537,7 +648,7 @@ function registerIpc(): void {
   })
   ipcMain.handle('pet:get-snapshot', (event) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
-    return activeController().getSnapshot()
+    return publicSnapshot(activeController().getSnapshot())
   })
   ipcMain.handle('pet:send-message', async (event, text: unknown, attachments: unknown, strategy: unknown, conversationId: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
@@ -705,25 +816,28 @@ function registerIpc(): void {
     if (id !== null && typeof id !== 'string') throw new Error('模型配置编号无效。')
     return activeController().setModelProfile(id)
   })
-  ipcMain.handle('pet:test-model-profile', (event, profile: unknown) => {
+  ipcMain.handle('pet:test-model-profile', async (event, profile: unknown) => {
     if (!modelTrusted(event)) throw new Error('无效的界面请求。')
     if (!isModelProfile(profile)) throw new Error('模型配置格式无效。')
-    return probeAnthropicEndpoint(profile)
+    const saved = (await activeController().getLibraryState()).settings.modelProfiles.find((item) => item.id === profile.id)
+    const apiKey = profile.apiKey || (saved?.baseUrl === profile.baseUrl ? saved.apiKey : '')
+    if (!apiKey) throw new Error('请先输入 API Key。')
+    return probeAnthropicEndpoint({ ...profile, apiKey })
   })
   ipcMain.handle('pet:set-auto-title', (event, on: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     if (typeof on !== 'boolean') throw new Error('设置无效。')
-    return activeController().updateSettings({ enableAutoTitleGeneration: on })
+    return activeController().updateSettings({ enableAutoTitleGeneration: on }).then(publicSettings)
   })
   ipcMain.handle('pet:set-timestamps', (event, on: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     if (typeof on !== 'boolean') throw new Error('设置无效。')
-    return activeController().updateSettings({ showMessageTimestamps: on })
+    return activeController().updateSettings({ showMessageTimestamps: on }).then(publicSettings)
   })
   ipcMain.handle('pet:set-user-names', (event, userName: unknown, assistantName: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     if (typeof userName !== 'string' || typeof assistantName !== 'string') throw new Error('称呼无效。')
-    return activeController().updateSettings({ userName, assistantName })
+    return activeController().updateSettings({ userName, assistantName }).then(publicSettings)
   })
   ipcMain.handle('pet:set-avatar', async (event, kind: unknown, bytes: unknown) => {
     if (!modelTrusted(event)) throw new Error('无效的界面请求。')
@@ -855,38 +969,41 @@ function registerIpc(): void {
   ipcMain.handle('pet:get-voice-config', (event) => {
     if (event.sender.id !== avatarWindow?.webContents.id) return {}
     return {
-      siliconFlowApiKey: process.env.SILICONFLOW_API_KEY,
-      siliconFlowModel: process.env.SILICONFLOW_MODEL,
-      siliconFlowBaseUrl: process.env.SILICONFLOW_BASE_URL,
+      siliconFlowAvailable: Boolean(process.env.SILICONFLOW_API_KEY),
     }
   })
   ipcMain.handle('pet:transcribe-audio', async (event, request: unknown) => {
     voiceLog('[ipc] transcribe-audio called', { hasRequest: !!request, senderId: event.sender.id })
     if (event.sender.id !== avatarWindow?.webContents.id) throw new Error('无效的界面请求。')
     if (!request || typeof request !== 'object') throw new Error('转写请求无效。')
-    const req = request as { bytes?: number[]; mimeType?: string; apiKey?: string; model?: string; baseUrl?: string }
-    voiceLog('[ipc] request', { bytesLen: req.bytes?.length, mimeType: req.mimeType, hasKey: !!req.apiKey, model: req.model })
+    const req = request as { bytes?: number[]; mimeType?: string }
+    voiceLog('[ipc] request', { bytesLen: req.bytes?.length, mimeType: req.mimeType })
     if (!Array.isArray(req.bytes) || req.bytes.length === 0) throw new Error('音频数据无效。')
-    if (!req.apiKey) throw new Error('未配置 SiliconFlow API Key。')
+    const voiceKey = process.env.SILICONFLOW_API_KEY
+    if (!voiceKey) throw new Error('未配置 SiliconFlow API Key。')
     try {
       const result = await transcribeAudio({
         bytes: req.bytes,
         mimeType: req.mimeType ?? 'audio/webm',
-        apiKey: req.apiKey,
-        model: req.model,
-        baseUrl: req.baseUrl,
+        apiKey: voiceKey,
+        model: process.env.SILICONFLOW_MODEL,
+        baseUrl: process.env.SILICONFLOW_BASE_URL,
       })
-      voiceLog('[ipc] transcribe success', result)
+      voiceLog('[ipc] transcribe success', { textLength: result.text?.length ?? 0 })
       return result
     } catch (error) {
-      voiceLogError('[ipc] transcribe failed', error)
+      voiceLog('[ipc] transcribe failed', { kind: error instanceof Error ? error.name : 'UnknownError' })
       throw error
     }
   })
   ipcMain.handle('pet:voice-log', (event, level: unknown, message: unknown, data: unknown) => {
     if (event.sender.id !== avatarWindow?.webContents.id) return
-    if (level === 'error') voiceLogError(String(message ?? ''), data)
-    else voiceLog(String(message ?? ''), data)
+    const allowed = new Set(['[asr] mediaRecorder stop', '[asr] mediaRecorder error', '[asr] transcribe start', '[asr] transcribe result', '[asr] transcribe error'])
+    if (typeof message !== 'string' || !allowed.has(message)) return
+    const fields = data && typeof data === 'object' ? data as Record<string, unknown> : {}
+    const safe = Object.fromEntries(['chunks', 'totalSize', 'bytes', 'textLength'].flatMap((key) =>
+      typeof fields[key] === 'number' && Number.isFinite(fields[key]) && Number(fields[key]) >= 0 ? [[key, fields[key]]] : []))
+    voiceLog(message, { level: level === 'error' ? 'error' : 'info', ...safe })
   })
   ipcMain.handle('pet:quit', (event) => { if (trusted(event)) app.quit() })
   ipcMain.handle('pet:begin-drag', (event, cursor: unknown) => {
@@ -922,6 +1039,8 @@ if (ownsSingleInstance) void app.whenReady().then(async () => {
     console.warn('Claude user resource links unavailable:', error instanceof Error ? error.message : String(error))
   })
   await activeController().initialize()
+  memory.setEnabled((await activeController().getLibraryState()).settings.memoryEnabled)
+  await memory.initialize()
   registerIpc()
   avatarWindow = createAvatarWindow()
   createTray()
@@ -952,7 +1071,7 @@ if (ownsSingleInstance) void app.whenReady().then(async () => {
             apiKey,
             model: 'FunAudioLLM/SenseVoiceSmall',
           })
-          voiceLog('[selftest] result', result)
+          voiceLog('[selftest] result', { textLength: result.text?.length ?? 0 })
         } else {
           voiceLogError('[selftest] no SILICONFLOW_API_KEY', new Error('missing key'))
         }
@@ -960,13 +1079,16 @@ if (ownsSingleInstance) void app.whenReady().then(async () => {
         voiceLogError('[selftest] test audio not found', { testAudio })
       }
     } catch (error) {
-      voiceLogError('[selftest] failed', error)
+      voiceLog('[selftest] failed', { kind: error instanceof Error ? error.name : 'UnknownError' })
     } finally {
       voiceLog('[selftest] done, quitting', undefined)
       setTimeout(() => app.quit(), 500)
     }
   }
 }).catch((error: unknown) => {
+  if (error instanceof SecretProtectionUnavailableError) {
+    dialog.showErrorBox('小鲸无法读取加密配置', 'Windows 密钥保护暂不可用。原配置未更改，请稍后重试。')
+  }
   console.error('Desktop companion failed to start:', error)
   app.quit()
 })

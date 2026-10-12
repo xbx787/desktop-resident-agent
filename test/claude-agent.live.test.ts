@@ -11,6 +11,40 @@ import type { AskQuestionRequest, PlanApprovalRequest } from '../src/shared/cont
 const runLive = process.env.DESKTOP_PET_LIVE_SDK_TEST === '1'
 
 describe('Claude Agent SDK live tool access', () => {
+  it.skipIf(!runLive)('observes a live goal event before interrupting the turn', async () => {
+    const executable = findClaudeExecutable(process.env)
+    const apiKey = process.env.DEEPSEEK_API_KEY?.trim()
+    if (!executable || !apiKey) throw new Error('本机 Claude Code 或 DeepSeek Key 未就绪。')
+    const probeDir = path.join(process.cwd(), '.cache', 'tests', randomUUID())
+    const abort = new AbortController()
+    const timeout = setTimeout(() => abort.abort(), 90_000)
+    let client: ClaudeAgentClient | undefined
+    try {
+      await fs.mkdir(probeDir, { recursive: true })
+      client = new ClaudeAgentClient(executable, apiKey, probeDir, path.join(probeDir, 'claude'))
+      const events: Array<{ condition: string } | null> = []
+      client.setGoalListener((goal) => events.push(goal))
+      const turn = client.respond([{ role: 'user', content: '/goal 回答用户提出的下一道简单问题' }], abort.signal).catch(() => undefined)
+      const deadline = Date.now() + 25_000
+      while (!events.some((goal) => goal?.condition.includes('简单问题')) && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      expect(events.some((goal) => goal?.condition.includes('简单问题')),
+        '当前 CLI 未在 25 秒内发出 active_goal 事件').toBe(true)
+      await client.interrupt()
+      abort.abort()
+      await turn
+    } finally {
+      abort.abort()
+      clearTimeout(timeout)
+      await client?.dispose()
+      const relative = path.relative(process.cwd(), probeDir)
+      if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Unsafe live test cleanup path.')
+      await fs.rm(probeDir, { recursive: true, force: true }).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code !== 'EBUSY') throw error
+      })
+    }
+  }, 100_000)
   it.skipIf(!runLive)('continues a saved SDK session with a second user turn', async () => {
     const executable = findClaudeExecutable(process.env)
     const apiKey = process.env.DEEPSEEK_API_KEY?.trim()
@@ -233,7 +267,7 @@ describe('Claude Agent SDK live tool access', () => {
       client = new ClaudeAgentClient(executable, apiKey, process.cwd(), path.join(probeDir, 'claude'))
       const parked: (PlanApprovalRequest | null)[] = []
       client.setPlanListener((plan) => parked.push(plan))
-      client.setPlanMode(true)
+      await client.setPlanMode(true)
       // The passphrase can only reach the panel if ExitPlanMode's own input
       // carried it, so finding it in the parked plan proves the real path.
       const marker = `PLAN-${randomUUID().slice(0, 8)}`

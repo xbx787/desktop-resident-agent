@@ -32,7 +32,7 @@ function siliconFlowUsable(): boolean {
 }
 
 function createAsrEngine(events: AsrEvents, siliconFlow: SiliconFlowAsrConfig | undefined, bridge: TranscribeBridge): AsrEngine {
-  if (siliconFlow?.apiKey && siliconFlowUsable()) {
+  if (siliconFlow?.available && siliconFlowUsable()) {
     return new SiliconFlowAsrEngine(siliconFlow, bridge, events)
   }
   return new WebSpeechAsrEngine(events)

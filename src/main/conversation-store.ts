@@ -3,7 +3,8 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { DialogueLine } from './deepseek'
 import { isEffortLevel } from '../shared/effort'
-import type { EffortLevel, ModelMode, ModelProfile, TaskStatus, TimelineEntry, UserAttachment, ConversationSettings } from '../shared/contracts'
+import { protectProfiles, restoreProfiles, type SecretCodec } from './secret-storage'
+import type { AgentGoal, EffortLevel, ModelMode, ModelProfile, TaskStatus, TimelineEntry, UserAttachment, ConversationSettings } from '../shared/contracts'
 
 const DEFAULT_VISIBLE_TABS = 5
 const MAX_VISIBLE_TABS = 12
@@ -34,6 +35,7 @@ export interface ConversationRecord {
   history: DialogueLine[]
   pendingMessages: PendingMessage[]
   sdkSessionId: string | null
+  goal?: AgentGoal | null
   compactionSummary?: string
 }
 
@@ -64,6 +66,7 @@ export interface ConversationPatch {
   history?: DialogueLine[]
   pendingMessages?: PendingMessage[]
   sdkSessionId?: string | null
+  goal?: AgentGoal | null
   compactionSummary?: string | null
 }
 
@@ -144,10 +147,21 @@ function isPendingMessages(value: unknown): value is PendingMessage[] {
   )
 }
 
-type LegacyConversationRecord = Omit<ConversationRecord, 'pendingMessages' | 'pinnedAt' | 'taskStatus'> & {
+function isGoal(value: unknown): value is AgentGoal | null {
+  if (value === null) return true
+  return isObject(value) && typeof value.condition === 'string' && value.condition.trim().length > 0 &&
+    value.condition.length <= 8_000 &&
+    ['requested', 'confirmed', 'stopping', 'unverified'].includes(String(value.phase)) &&
+    typeof value.startedAt === 'string' && Number.isFinite(Date.parse(value.startedAt)) &&
+    (value.iterations === undefined || Number.isSafeInteger(value.iterations) && Number(value.iterations) >= 0) &&
+    (value.statusMessage === undefined || typeof value.statusMessage === 'string' && value.statusMessage.length <= 500)
+}
+
+type LegacyConversationRecord = Omit<ConversationRecord, 'pendingMessages' | 'pinnedAt' | 'taskStatus' | 'goal'> & {
   pendingMessages?: PendingMessage[]
   pinnedAt?: string | null
   taskStatus?: TaskStatus
+  goal?: AgentGoal | null
 }
 
 function isRecord(value: unknown): value is LegacyConversationRecord {
@@ -164,6 +178,7 @@ function isRecord(value: unknown): value is LegacyConversationRecord {
     isHistory(value.history) &&
     (value.pendingMessages === undefined || isPendingMessages(value.pendingMessages)) &&
     (value.sdkSessionId === null || typeof value.sdkSessionId === 'string') &&
+    (value.goal === undefined || isGoal(value.goal)) &&
     (value.compactionSummary === undefined || typeof value.compactionSummary === 'string')
 }
 
@@ -194,7 +209,8 @@ export function isModelProfile(value: unknown): value is ModelProfile {
  *  older file simply gets the defaults instead of failing to load. */
 function readExtendedSettings(settings: Record<string, unknown>): Pick<ConversationSettings,
   'modelProfiles' | 'activeModelProfileId' | 'enableAutoTitleGeneration' | 'showMessageTimestamps' |
-  'userName' | 'assistantName' | 'userAvatar' | 'assistantAvatar' | 'tabOrder'> {
+  'userName' | 'assistantName' | 'userAvatar' | 'assistantAvatar' | 'tabOrder' |
+  'goalMaxIterations' | 'goalMaxMinutes' | 'memoryEnabled'> {
   const profiles = Array.isArray(settings.modelProfiles)
     ? (settings.modelProfiles.filter(isModelProfile) as ModelProfile[]).map((profile) => structuredClone(profile))
     : []
@@ -210,7 +226,10 @@ function readExtendedSettings(settings: Record<string, unknown>): Pick<Conversat
     assistantName: isDisplayName(settings.assistantName) ? settings.assistantName.trim() : '小鲸',
     userAvatar: isStoredAvatar(settings.userAvatar) ? settings.userAvatar : null,
     assistantAvatar: isStoredAvatar(settings.assistantAvatar) ? settings.assistantAvatar : null,
-    tabOrder: Array.isArray(settings.tabOrder) ? settings.tabOrder.filter((id): id is string => typeof id === 'string') : []
+    tabOrder: Array.isArray(settings.tabOrder) ? settings.tabOrder.filter((id): id is string => typeof id === 'string') : [],
+    goalMaxIterations: Number.isInteger(settings.goalMaxIterations) && Number(settings.goalMaxIterations) >= 1 && Number(settings.goalMaxIterations) <= 300 ? Number(settings.goalMaxIterations) : 30,
+    goalMaxMinutes: Number.isInteger(settings.goalMaxMinutes) && Number(settings.goalMaxMinutes) >= 1 && Number(settings.goalMaxMinutes) <= 1440 ? Number(settings.goalMaxMinutes) : 180,
+    memoryEnabled: settings.memoryEnabled !== false
   }
 }
 
@@ -252,9 +271,9 @@ function parseLibrary(raw: string): { library: PersistedLibrary; migrated: boole
             effort: isEffortLevel(settings.effort) ? settings.effort : 'max', ...readExtendedSettings(settings) },
       activeConversationId: value.activeConversationId as string | null,
       conversations: records.map((record) => ({ ...record, pinnedAt: record.pinnedAt ?? null,
-        pendingMessages: record.pendingMessages ?? [], taskStatus: restoredTaskStatus(record.taskStatus) }))
+        pendingMessages: record.pendingMessages ?? [], taskStatus: restoredTaskStatus(record.taskStatus), goal: record.goal ?? null }))
     },
-    migrated: oldFormat || !isEffortLevel(settings.effort) || !Array.isArray(settings.tabOrder) || records.some((record) => record.pendingMessages === undefined ||
+    migrated: oldFormat || !isEffortLevel(settings.effort) || !Array.isArray(settings.tabOrder) || settings.goalMaxIterations === undefined || settings.goalMaxMinutes === undefined || settings.memoryEnabled === undefined || records.some((record) => record.pendingMessages === undefined || record.goal === undefined ||
       record.pinnedAt === undefined || record.taskStatus !== restoredTaskStatus(record.taskStatus))
   }
 }
@@ -326,7 +345,7 @@ export class ConversationStore {
   private initialization: Promise<void> | null = null
   private queue: Promise<void> = Promise.resolve()
 
-  constructor(dataRoot: string) {
+  constructor(dataRoot: string, private readonly secretCodec?: SecretCodec) {
     this.filePath = path.join(path.resolve(dataRoot), 'conversations', 'library.json')
   }
 
@@ -344,7 +363,11 @@ export class ConversationStore {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true })
     try {
       const parsed = parseLibrary(await fs.readFile(this.filePath, 'utf8'))
-      if (parsed.migrated) await this.persist(parsed.library)
+      const restored = this.secretCodec
+        ? restoreProfiles(parsed.library.settings.modelProfiles, this.secretCodec)
+        : { profiles: parsed.library.settings.modelProfiles, changed: false }
+      parsed.library.settings.modelProfiles = restored.profiles
+      if (parsed.migrated || restored.changed) await this.persist(parsed.library)
       this.library = parsed.library
     } catch (error) {
       if (!isObject(error) || error.code !== 'ENOENT') throw error
@@ -352,7 +375,8 @@ export class ConversationStore {
         version: 2,
         settings: { visibleConversationTabs: DEFAULT_VISIBLE_TABS, autoArchiveAfterDays: 0, effort: 'max',
           modelProfiles: [], activeModelProfileId: null, enableAutoTitleGeneration: true, showMessageTimestamps: true,
-          userName: '主人', assistantName: '小鲸', userAvatar: null, assistantAvatar: null, tabOrder: [] },
+          userName: '主人', assistantName: '小鲸', userAvatar: null, assistantAvatar: null, tabOrder: [],
+          goalMaxIterations: 30, goalMaxMinutes: 180, memoryEnabled: true },
         activeConversationId: null,
         conversations: []
       }
@@ -364,9 +388,11 @@ export class ConversationStore {
   private async persist(library: PersistedLibrary): Promise<void> {
     const temporary = path.join(path.dirname(this.filePath), `.library.${process.pid}.${randomUUID()}.tmp`)
     try {
+      const diskLibrary = structuredClone(library)
+      if (this.secretCodec) diskLibrary.settings.modelProfiles = protectProfiles(diskLibrary.settings.modelProfiles, this.secretCodec)
       const file = await fs.open(temporary, 'wx')
       try {
-        await file.writeFile(JSON.stringify(library, null, 2) + '\n', 'utf8')
+        await file.writeFile(JSON.stringify(diskLibrary, null, 2) + '\n', 'utf8')
         await file.sync()
       } finally {
         await file.close()
@@ -417,7 +443,7 @@ export class ConversationStore {
       const now = new Date().toISOString()
       const record: ConversationRecord = {
         id: randomUUID(), title: clean, createdAt: now, updatedAt: now,
-        archivedAt: null, pinnedAt: null, mode, taskStatus: 'idle', timeline: [], history: [], pendingMessages: [], sdkSessionId: null
+        archivedAt: null, pinnedAt: null, mode, taskStatus: 'idle', timeline: [], history: [], pendingMessages: [], sdkSessionId: null, goal: null
       }
       draft.conversations.push(record)
       // A new session is what the user is about to use — it leads the row.
@@ -459,6 +485,9 @@ export class ConversationStore {
     if (changes.sdkSessionId !== undefined && changes.sdkSessionId !== null && typeof changes.sdkSessionId !== 'string') {
       throw new ConversationStoreError('INVALID_INPUT', 'SDK 会话 ID 格式无效。')
     }
+    if (changes.goal !== undefined && !isGoal(changes.goal)) {
+      throw new ConversationStoreError('INVALID_INPUT', '目标状态格式无效。')
+    }
     if (changes.compactionSummary !== undefined && changes.compactionSummary !== null && typeof changes.compactionSummary !== 'string') {
       throw new ConversationStoreError('INVALID_INPUT', '上下文摘要格式无效。')
     }
@@ -471,6 +500,7 @@ export class ConversationStore {
       if (changes.history !== undefined) record.history = changes.history
       if (changes.pendingMessages !== undefined) record.pendingMessages = changes.pendingMessages
       if (changes.sdkSessionId !== undefined) record.sdkSessionId = changes.sdkSessionId
+      if (changes.goal !== undefined) record.goal = changes.goal
       if (changes.compactionSummary === null) delete record.compactionSummary
       else if (changes.compactionSummary !== undefined) record.compactionSummary = changes.compactionSummary
       record.updatedAt = new Date().toISOString()
@@ -516,6 +546,7 @@ export class ConversationStore {
     const effort = patch.effort
     const modelProfiles = patch.modelProfiles
     const activeModelProfileId = patch.activeModelProfileId
+    const { goalMaxIterations, goalMaxMinutes, memoryEnabled } = patch
     const { enableAutoTitleGeneration, showMessageTimestamps, userName, assistantName, userAvatar, assistantAvatar } = patch
     if (tabs !== undefined && (!Number.isInteger(tabs) || tabs < 1 || tabs > MAX_VISIBLE_TABS)) {
       throw new ConversationStoreError('INVALID_INPUT', `快捷切换显示数量应为 1–${MAX_VISIBLE_TABS}。`)
@@ -528,6 +559,15 @@ export class ConversationStore {
     }
     if (modelProfiles !== undefined && !(Array.isArray(modelProfiles) && modelProfiles.every(isModelProfile))) {
       throw new ConversationStoreError('INVALID_INPUT', '模型配置格式无效。')
+    }
+    if (goalMaxIterations !== undefined && (!Number.isInteger(goalMaxIterations) || goalMaxIterations < 1 || goalMaxIterations > 300)) {
+      throw new ConversationStoreError('INVALID_INPUT', '目标轮数上限应为 1–300。')
+    }
+    if (goalMaxMinutes !== undefined && (!Number.isInteger(goalMaxMinutes) || goalMaxMinutes < 1 || goalMaxMinutes > 1440)) {
+      throw new ConversationStoreError('INVALID_INPUT', '目标时间上限应为 1–1440 分钟。')
+    }
+    if (memoryEnabled !== undefined && typeof memoryEnabled !== 'boolean') {
+      throw new ConversationStoreError('INVALID_INPUT', '记忆开关无效。')
     }
     if (activeModelProfileId !== undefined && activeModelProfileId !== null &&
         (typeof activeModelProfileId !== 'string' || activeModelProfileId.trim() === '')) {
@@ -546,6 +586,9 @@ export class ConversationStore {
       if (tabs !== undefined) draft.settings.visibleConversationTabs = tabs
       if (autoArchive !== undefined) draft.settings.autoArchiveAfterDays = autoArchive
       if (effort !== undefined) draft.settings.effort = effort
+      if (goalMaxIterations !== undefined) draft.settings.goalMaxIterations = goalMaxIterations
+      if (goalMaxMinutes !== undefined) draft.settings.goalMaxMinutes = goalMaxMinutes
+      if (memoryEnabled !== undefined) draft.settings.memoryEnabled = memoryEnabled
       if (modelProfiles !== undefined) {
         draft.settings.modelProfiles = structuredClone(modelProfiles)
         // Profiles changed: a dangling active id degrades to null.

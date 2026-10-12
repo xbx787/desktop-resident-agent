@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 
@@ -36,12 +37,33 @@ function fakeQuery(
   const generator = (async function* () {
     for await (const message of request.prompt) yield* respond(message)
   })()
-  return Object.assign(generator, { getContextUsage: vi.fn(async () => usage()), close: vi.fn(), interrupt: vi.fn(async () => undefined) })
+  return Object.assign(generator, { getContextUsage: vi.fn(async () => usage()), close: vi.fn(), interrupt: vi.fn(async () => undefined),
+    setPermissionMode: vi.fn(async () => undefined) })
 }
 
 beforeEach(() => queryMock.mockReset())
 
 describe('Claude Agent SDK persistent streaming session', () => {
+  it('redacts saved profile credentials from SDK text and streamed progress', async () => {
+    queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* (message) {
+      yield { type: 'stream_event', parent_tool_use_id: null,
+        event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'saved-secret extra-secret-value' } } }
+      yield { type: 'result', subtype: 'success', is_error: false,
+        result: 'launch-secret saved-secret extra-secret-value', session_id: sessionId,
+        user_message_uuids: [message.uuid], queued_turn_count: 0 }
+    }))
+    const client = new ClaudeAgentClient(executable, 'launch-secret', process.cwd())
+    client.setProvider({ baseUrl: 'https://example.test', model: 'model-1', apiKey: 'saved-secret',
+      extraEnv: 'CUSTOM_TOKEN=extra-secret-value' })
+    try {
+      const updates: string[] = []
+      const reply = await client.respond([{ role: 'user', content: '开始' }], new AbortController().signal,
+        (text) => updates.push(text))
+      expect(reply.text).not.toMatch(/launch-secret|saved-secret|extra-secret-value/u)
+      expect(updates.join(' ')).not.toMatch(/launch-secret|saved-secret|extra-secret-value/u)
+    } finally { await client.dispose() }
+  })
+
   it('reports real per-turn main-agent tokens while streaming and after the result', async () => {
     queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* (message) {
       yield { type: 'assistant', parent_tool_use_id: null,
@@ -560,13 +582,13 @@ describe('ExitPlanMode plan approval parking', () => {
     } finally { await client.dispose() }
   })
 
-  it('lets plan-less calls through and refuses stale verdicts', async () => {
+  it('rejects blank plans and refuses stale verdicts', async () => {
     const { client, canUseTool } = await openClient()
     try {
       const parked: (PlanApprovalRequest | null)[] = []
       client.setPlanListener((plan) => parked.push(plan))
       await expect(canUseTool('ExitPlanMode', { plan: '  ' }, { signal: new AbortController().signal }))
-        .resolves.toEqual({ behavior: 'allow' })
+        .resolves.toEqual({ behavior: 'deny', message: 'A plan must contain text before it can be approved. Stay in plan mode and write a plan.' })
       await expect(canUseTool('Bash', { command: 'ls' }, { signal: new AbortController().signal }))
         .resolves.toEqual({ behavior: 'allow' })
       expect(client.answerPlan('missing', true)).toBe(false)
@@ -583,6 +605,68 @@ describe('ExitPlanMode plan approval parking', () => {
       await vi.waitFor(() => expect(parked).toHaveLength(1))
       await client.dispose()
       await expect(verdict).resolves.toEqual({ behavior: 'deny', message: 'User cancelled the plan review.', interrupt: true })
+    } finally { await client.dispose() }
+  })
+})
+
+describe('plan and goal confirmation', () => {
+  it('waits for SDK init to confirm a cold plan-mode request', async () => {
+    queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* (message) {
+      yield { type: 'system', subtype: 'init', permissionMode: 'plan', slash_commands: [], skills: [] }
+      yield { type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: sessionId,
+        user_message_uuids: [message.uuid], queued_turn_count: 0 }
+    }))
+    const client = new ClaudeAgentClient(executable, 'test-key', process.cwd())
+    try {
+      const confirmed: boolean[] = []
+      client.setPlanModeListener((on) => confirmed.push(on))
+      expect(await client.setPlanMode(true)).toBe(false)
+      expect(confirmed).toEqual([])
+      await client.respond([{ role: 'user', content: '请先计划' }], new AbortController().signal)
+      expect(confirmed).toEqual([true])
+    } finally { await client.dispose() }
+  })
+  it('waits for the SDK permission-mode acknowledgment and keeps the old mode after rejection', async () => {
+    queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* (message) {
+      yield { type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: sessionId,
+        user_message_uuids: [message.uuid], queued_turn_count: 0 }
+    }))
+    const client = new ClaudeAgentClient(executable, 'test-key', process.cwd())
+    try {
+      await client.respond([{ role: 'user', content: '先运行一次' }], new AbortController().signal)
+      const active = queryMock.mock.results[0].value as { setPermissionMode: ReturnType<typeof vi.fn> }
+      let confirm!: () => void
+      active.setPermissionMode.mockImplementationOnce(() => new Promise<void>((resolve) => { confirm = resolve }))
+      const switching = client.setPlanMode(true)
+      expect((client as unknown as { planMode: boolean }).planMode).toBe(false)
+      confirm()
+      await switching
+      expect(active.setPermissionMode).toHaveBeenCalledWith('plan')
+      expect((client as unknown as { planMode: boolean }).planMode).toBe(true)
+      active.setPermissionMode.mockRejectedValueOnce(new Error('control channel failed'))
+      await expect(client.setPlanMode(false)).rejects.toThrow('control channel failed')
+      expect((client as unknown as { planMode: boolean }).planMode).toBe(true)
+    } finally { await client.dispose() }
+  })
+
+  it('uses active_goal events for counted rounds and clears on an SDK null event', async () => {
+    let turn = 0
+    queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* (message) {
+      turn += 1
+      yield { type: 'active_goal', value: turn === 1
+        ? { condition: '写完测试', iterations: 2, set_at: Date.now() } : null,
+      uuid: randomUUID(), session_id: sessionId }
+      yield { type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: sessionId,
+        user_message_uuids: [message.uuid], queued_turn_count: 0 }
+    }))
+    const client = new ClaudeAgentClient(executable, 'test-key', process.cwd())
+    try {
+      const goals: Array<unknown> = []
+      client.setGoalListener((goal) => goals.push(goal))
+      await client.respond([{ role: 'user', content: '开始' }], new AbortController().signal)
+      await client.respond([{ role: 'user', content: '继续' }], new AbortController().signal, undefined, sessionId)
+      expect(goals[0]).toMatchObject({ condition: '写完测试', phase: 'confirmed', iterations: 2 })
+      expect(goals[1]).toBeNull()
     } finally { await client.dispose() }
   })
 })

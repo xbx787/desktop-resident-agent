@@ -155,13 +155,13 @@ export class WebSpeechAsrEngine implements AsrEngine {
 }
 
 export interface SiliconFlowAsrConfig {
-  apiKey: string
+  available: boolean
   baseUrl?: string
   model?: string
 }
 
 export interface TranscribeBridge {
-  transcribeAudio(request: { bytes: number[]; mimeType: string; apiKey: string; model?: string; baseUrl?: string }): Promise<{ text: string }>
+  transcribeAudio(request: { bytes: number[]; mimeType: string }): Promise<{ text: string }>
   voiceLog(level: 'info' | 'error', message: string, data?: unknown): Promise<void>
 }
 
@@ -187,7 +187,7 @@ export class SiliconFlowAsrEngine implements AsrEngine {
   }
 
   get available(): boolean {
-    return Boolean(this.config.apiKey) && typeof MediaRecorder !== 'undefined'
+    return this.config.available && typeof MediaRecorder !== 'undefined'
   }
 
   get listening(): boolean {
@@ -196,7 +196,7 @@ export class SiliconFlowAsrEngine implements AsrEngine {
 
   start(): void {
     if (this._listening) return
-    if (!this.config.apiKey) {
+    if (!this.config.available) {
       this.events.onError('未配置 SiliconFlow API Key。')
       return
     }
@@ -282,11 +282,8 @@ export class SiliconFlowAsrEngine implements AsrEngine {
       const result = await this.bridge.transcribeAudio({
         bytes: Array.from(bytes),
         mimeType,
-        apiKey: this.config.apiKey,
-        model: this.config.model,
-        baseUrl: this.config.baseUrl,
       })
-      await this.bridge.voiceLog('info', '[asr] transcribe result', result)
+      await this.bridge.voiceLog('info', '[asr] transcribe result', { textLength: result.text?.length ?? 0 })
       const text = (result.text ?? '').trim()
       if (text) {
         this.events.onFinal(text)
@@ -294,7 +291,7 @@ export class SiliconFlowAsrEngine implements AsrEngine {
         this.events.onError('转写结果为空。')
       }
     } catch (error) {
-      await this.bridge.voiceLog('error', '[asr] transcribe error', error instanceof Error ? `${error.message}\n${error.stack ?? ''}` : String(error))
+      await this.bridge.voiceLog('error', '[asr] transcribe error', { name: error instanceof Error ? error.name : 'UnknownError' })
       if (error instanceof DOMException && error.name === 'AbortError') {
         return
       }

@@ -167,8 +167,9 @@ export async function probeAnthropicEndpoint(profile: { baseUrl: string; apiKey:
     })()
     if (response.status === 401 || response.status === 403) return { ok: false, message: `鉴权失败（${response.status}）：API Key 可能不正确。` }
     if (response.status === 402) return { ok: false, message: '余额不足（402）：请到服务商平台充值后重试。' }
-    if (response.status === 404) return { ok: false, message: `端点或模型不存在（404）：${detail}` }
-    return { ok: false, message: `请求失败（${response.status}）：${detail}` }
+    const safeDetail = profile.apiKey ? detail.replaceAll(profile.apiKey, '[已隐藏]') : detail
+    if (response.status === 404) return { ok: false, message: `端点或模型不存在（404）：${safeDetail}` }
+    return { ok: false, message: `请求失败（${response.status}）：${safeDetail}` }
   } catch (error) {
     if (error instanceof Error && error.name === 'TimeoutError') return { ok: false, message: '连接超时（15 秒）。' }
     return { ok: false, message: `无法连接到 ${profile.baseUrl}。` }
