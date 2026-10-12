@@ -308,6 +308,7 @@ export interface PetAPI {
   archiveConversation(id: string): Promise<void>
   restoreConversation(id: string): Promise<void>
   deleteConversation(id: string): Promise<void>
+  deleteTurn(conversationId: string, userEntryId: string): Promise<void>
   getContextUsage(conversationId?: string): Promise<ContextUsageSnapshot>
   compactConversation(conversationId?: string): Promise<void>
   listClaudeWorkflows(): Promise<ClaudeWorkflowOption[]>

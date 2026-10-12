@@ -20,7 +20,9 @@ beforeEach(async () => {
 afterEach(async () => {
   const relative = path.relative(projectRoot, testRoot)
   if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Unsafe test cleanup path.')
-  await fs.rm(testRoot, { recursive: true, force: true })
+  // The store's write queue can still land a file while the tree is being
+  // removed (ENOTEMPTY on Windows); retries are the documented remedy.
+  await fs.rm(testRoot, { recursive: true, force: true, maxRetries: 8, retryDelay: 60 })
 })
 
 // Generous budget on purpose: this suite polls real timers, and a busy machine

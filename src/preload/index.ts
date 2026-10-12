@@ -16,6 +16,7 @@ const api: PetAPI = {
   archiveConversation: (id) => ipcRenderer.invoke('pet:archive-conversation', id),
   restoreConversation: (id) => ipcRenderer.invoke('pet:restore-conversation', id),
   deleteConversation: (id) => ipcRenderer.invoke('pet:delete-conversation', id),
+  deleteTurn: (conversationId, userEntryId) => ipcRenderer.invoke('pet:delete-turn', conversationId, userEntryId),
   getContextUsage: (conversationId) => ipcRenderer.invoke('pet:get-context-usage', conversationId),
   compactConversation: (conversationId) => ipcRenderer.invoke('pet:compact-conversation', conversationId),
   listClaudeWorkflows: () => ipcRenderer.invoke('pet:list-claude-workflows'),

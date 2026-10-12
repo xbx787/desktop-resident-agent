@@ -712,6 +712,10 @@ function registerIpc(): void {
     if (!trusted(event) || typeof id !== 'string') throw new Error('会话编号无效。')
     await activeController().deleteConversation(id)
   })
+  ipcMain.handle('pet:delete-turn', async (event, conversationId: unknown, userEntryId: unknown) => {
+    if (!trusted(event) || typeof conversationId !== 'string' || typeof userEntryId !== 'string') throw new Error('删除请求无效。')
+    await activeController().deleteTurn(conversationId, userEntryId)
+  })
   ipcMain.handle('pet:get-context-usage', (event, conversationId: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     if (conversationId !== undefined && typeof conversationId !== 'string') throw new Error('会话编号无效。')

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { TaskStatus } from '../shared/contracts'
+import { formatDuration } from './duration'
 import { toolLabel } from '../shared/tool-labels'
 
 /** What the assistant is busy with right now, in the user's words. The point is
@@ -46,6 +47,6 @@ export function WorkingIndicator({ sending, thinking, status, tool, startedAt }:
   return <div className="panel-working" role="status" aria-live="polite" aria-label={`${phrase}${elapsed >= 1 ? `，已进行 ${elapsed} 秒` : ''}`}>
     <span className="panel-working-dots" aria-hidden="true"><i /><i /><i /></span>
     <span className="panel-working-text">{phrase}</span>
-    {elapsed >= 1 && <span className="panel-working-time">{elapsed} 秒</span>}
+    {elapsed >= 1 && <span className="panel-working-time">{formatDuration(elapsed)}</span>}
   </div>
 }

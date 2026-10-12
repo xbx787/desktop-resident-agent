@@ -1,4 +1,4 @@
-import { Fragment, memo, useEffect, useState, type ReactNode } from 'react'
+import { Fragment, memo, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { TimelineEntry } from '../shared/contracts'
 import { toolLabel } from '../shared/tool-labels'
 import { thinkingDurationText, thinkingElapsedSeconds } from './thinking-item'
@@ -74,13 +74,17 @@ export const WorkCluster = memo(function WorkCluster({ items, running, renderEnt
   renderEntry: (entry: TimelineEntry, running: boolean) => ReactNode
 }) {
   const [open, setOpen] = useState(running)
+  // A fold made by hand sticks, live or not: the running row used to refuse
+  // the click. Only the automatic fold at the end still closes it.
+  const foldedByHandRef = useRef(false)
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     if (!running) { setOpen(false); return }
-    // A stretch that is still running stays open: a transient non-running
-    // snapshot used to close it for good mid-run (reported live), and its
-    // rows are the live view of the work anyway. It folds once it ends.
-    setOpen(true)
+    // A stretch that is still running opens on its own: a transient
+    // non-running snapshot used to close it for good mid-run (reported live),
+    // and its rows are the live view of the work anyway. It folds once it
+    // ends — but a fold the owner made by hand is not reopened.
+    if (!foldedByHandRef.current) setOpen(true)
     setNow(Date.now())
     const timer = window.setInterval(() => setNow(Date.now()), 1000)
     return () => window.clearInterval(timer)
@@ -90,7 +94,7 @@ export const WorkCluster = memo(function WorkCluster({ items, running, renderEnt
   const fullText = workFactsText(facts)
   return <details className={`panel-cluster${running ? ' is-running' : ''}`} open={open}
     onToggle={(event) => {
-      if (running && !event.currentTarget.open) { event.currentTarget.open = true; return }
+      foldedByHandRef.current = !event.currentTarget.open
       setOpen(event.currentTarget.open)
     }}>
     <summary className="panel-cluster-summary" title={fullText} aria-label={`${fullText || '工作记录'}，单击${open ? '收起' : '展开'}`}>

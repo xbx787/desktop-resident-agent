@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { AppSnapshot, AskAnswers, ContextUsageSnapshot, ModelMode, ModelProfile, TimelineEntry, UserAttachment } from '../shared/contracts'
-import type { AgentRuntime } from './agent-runtime'
+import { deleteTurnEntries, type AgentRuntime } from './agent-runtime'
 import { attachmentContext, validAttachmentList } from './local-context'
 import {
   ConversationStore,
@@ -605,6 +605,29 @@ export class ConversationController {
       } else {
         await this.refreshLibrary()
       }
+      return structuredClone(this.library!)
+    })
+  }
+
+  /** Deletes one turn — its message through every entry up to the next user
+   *  line, plus the history behind it — from a conversation. Unlike
+   *  deleteConversation this works while other turns run; only the target
+   *  turn itself must be settled (the runtime refuses otherwise). */
+  async deleteTurn(id: string, userEntryId: string): Promise<ConversationLibraryState> {
+    await this.initialize()
+    return this.serialize(async () => {
+      const runtime = this.runtimes.get(id)
+      if (runtime) {
+        runtime.deleteTurn(userEntryId)
+      } else {
+        const record = await this.store.getConversation(id)
+        if (!record) throw new Error('会话不存在。')
+        const next = deleteTurnEntries(record.timeline, record.history, userEntryId)
+        // No live runtime: edit the stored record directly. The session id is
+        // dropped there too — the model must forget the turn as well.
+        await this.store.updateConversation(id, { timeline: next.timeline, history: next.history, sdkSessionId: null })
+      }
+      await this.persistConversation(id)
       return structuredClone(this.library!)
     })
   }

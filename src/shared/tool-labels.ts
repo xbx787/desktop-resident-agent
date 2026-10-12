@@ -55,7 +55,13 @@ const TOOL_LABELS: Record<string, string> = {
   readmcpresourcedirtool: '浏览 MCP 目录'
 }
 
+/** A malformed model stream can leave a blob of prose where the tool name
+ *  belongs (a broken call once arrived as a screenful of markup). Anything
+ *  that is not name-shaped gets one honest label instead of the raw junk. */
 export function toolLabel(name: string): string {
   const trimmed = name.trim()
-  return TOOL_LABELS[trimmed.toLowerCase()] ?? trimmed
+  const known = TOOL_LABELS[trimmed.toLowerCase()]
+  if (known) return known
+  if (!trimmed) return trimmed
+  return /^[A-Za-z0-9_.-]{1,64}$/.test(trimmed) ? trimmed : '未知工具'
 }

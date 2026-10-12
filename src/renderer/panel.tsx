@@ -14,6 +14,7 @@ import { pastedFileName, pastedFiles, restoreComposerState, stashComposerState, 
 import { GoalBanner } from './goal-banner';
 import { MessageMarkdown, writeClipboard } from './message-markdown';
 import { TabContextMenu } from './tab-context-menu';
+import { TurnContextMenu } from './turn-context-menu';
 import { drawerBottomOffset } from './panel-drawer';
 import { moveTab, orderConversationTabs, quickTabLimit, showNewTabButton } from './panel-tabs';
 import { TaskStrip } from './task-strip';
@@ -132,6 +133,20 @@ function timeText(iso: string): string {
   return Number.isNaN(parsed.valueOf()) ? iso : parsed.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
 
+/** First line of a user message, trimmed for the turn menu's title. */
+function turnMenuTitle(entry: TimelineEntry): string {
+  const line = entry.text.replace(/\s+/g, ' ').trim();
+  return line.length > 28 ? `${line.slice(0, 28)}…` : line || '这一轮对话';
+}
+
+/** Terminal colour codes (CSI/OSC escape sequences) leak into tool output
+ *  verbatim — vitest paints its summary red and green. The row shows text,
+ *  not a terminal, so strip them at display time. */
+function stripAnsi(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\u001b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\)?)/g, '');
+}
+
 /** One message's body: attachment pictures, else the text — markdown for the
  *  model's own words and for the user's (where single newlines stay hard
  *  breaks, line for line what was typed), plain paragraphs for the rest.
@@ -154,7 +169,7 @@ const RunParagraph = memo(function RunParagraph({ entry, onOpenImage }: { entry:
   return <div className="panel-run-item"><MessageBody entry={entry} onOpenImage={onOpenImage} /></div>;
 });
 
-export const TimelineItem = memo(function TimelineItem({ entry, running = false, onOpenImage, display }: { entry: TimelineEntry; running?: boolean; onOpenImage?: (name: string, url: string) => void; display: RowDisplay }) {
+export const TimelineItem = memo(function TimelineItem({ entry, running = false, onOpenImage, onAvatarMenu, display }: { entry: TimelineEntry; running?: boolean; onOpenImage?: (name: string, url: string) => void; onAvatarMenu?: (event: MouseEvent<HTMLElement>) => void; display: RowDisplay }) {
   const timeLabel = timeText(entry.time);
   const toolPreview = entry.kind === 'tool' ? (entry.text.trim().split(/\r?\n/, 1)[0] || '工具活动') : '';
   const legacyToolDetail = entry.kind === 'tool' ? entry.text.trim().split(/\r?\n/).slice(1).join('\n').trim() : '';
@@ -197,7 +212,7 @@ export const TimelineItem = memo(function TimelineItem({ entry, running = false,
       ? <pre className="panel-tool-output panel-tool-plan">{plan}</pre>
       : diff && status !== 'error'
       ? <ToolDiffBody preview={diff} />
-      : detail ? <pre className="panel-tool-output">{detail}</pre>
+      : detail ? <pre className="panel-tool-output">{stripAnsi(detail)}</pre>
       : <div className="panel-tool-empty">{status === 'running' ? '正在运行…' : '没有输出'}</div>;
     return <details className={`panel-tool-activity${status === 'running' ? ' is-running' : ''}`}
       onToggle={(event) => { if (event.currentTarget.open) setToolOpened(true); }}>
@@ -225,7 +240,7 @@ export const TimelineItem = memo(function TimelineItem({ entry, running = false,
   }
   return (
     <article className={`panel-event panel-event-${entry.kind}`} data-entry-id={entry.id} aria-label={`${kindLabels[entry.kind]}，${timeLabel}`}>
-      <div className="panel-event-avatar" aria-hidden="true">
+      <div className="panel-event-avatar" aria-hidden="true" onContextMenu={onAvatarMenu}>
         {entry.kind === 'user' || entry.kind === 'assistant'
           ? <AvatarGlyph kind={entry.kind} fallback={entry.kind === 'user' ? '你' : '鲸'}
               name={entry.kind === 'user' ? display.avatars.user : display.avatars.assistant} />
@@ -390,6 +405,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
   const [tabMenu, setTabMenu] = useState<{ item: ConversationSummary; container: HTMLElement; x: number; y: number } | null>(null);
+  const [turnMenu, setTurnMenu] = useState<{ turnUserId: string; title: string; running: boolean; container: HTMLElement; x: number; y: number } | null>(null);
   const [draft, setDraft] = useState('');
   const [caretIndex, setCaretIndex] = useState(0);
   const [suggestionItems, setSuggestionItems] = useState<ComposerSuggestion[]>([]);
@@ -1034,6 +1050,15 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     setTabMenu({ item, container, x: event.clientX - bounds.left, y: event.clientY - bounds.top });
   }
 
+  function showTurnMenu(event: MouseEvent<HTMLElement>, turnUserId: string, title: string, running: boolean) {
+    event.preventDefault();
+    event.stopPropagation();
+    const container = event.currentTarget.closest<HTMLElement>('.panel-bubble');
+    if (!container) return;
+    const bounds = container.getBoundingClientRect();
+    setTurnMenu({ turnUserId, title, running, container, x: event.clientX - bounds.left, y: event.clientY - bounds.top });
+  }
+
   function beginTabDrag(event: ReactPointerEvent<HTMLButtonElement>, item: ConversationSummary) {
     if (event.button !== 0 || libraryBusy) return;
     tabDragRef.current = { id: item.id, startX: event.clientX, moved: false };
@@ -1169,7 +1194,10 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const statusLive = status === 'planning' || status === 'executing' || status === 'verifying';
   const queuedCount = snapshot?.pendingMessages?.length ?? 0;
   const empty = !libraryOpen && busy !== 'send' && !error && !voiceError && status === 'idle' && !snapshot?.currentTask && !snapshot?.timeline.length && !snapshot?.proposal && queuedCount === 0;
-  const compactEmpty = empty && !expanded && !modelPickerOpen && !suggestionOpen;
+  // With no conversation left the bubble keeps its full shape: the ball form
+  // has no tab strip and no room for the "+", and starting fresh is exactly
+  // what the owner wants to do next.
+  const compactEmpty = empty && !expanded && !modelPickerOpen && !suggestionOpen && recentSessions.length > 0;
   const layout: BubbleLayout = !compactEmpty ? 'full' : !composerOpen ? 'empty' : attachments.length ? 'composer_attachments' : 'composer';
   const compactComposerHeight = 112 + composerHeight + (attachments.length ? 26 : 0);
   // Grouping and task extraction scan the whole history; with incremental
@@ -1456,6 +1484,15 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
         onDelete={() => { openLibrary(); setDeleteId(tabMenu.item.id); }}
         onClose={() => setTabMenu(null)}
       />}
+      {turnMenu && visible && <TurnContextMenu
+        title={turnMenu.title}
+        x={turnMenu.x}
+        y={turnMenu.y}
+        container={turnMenu.container}
+        running={turnMenu.running}
+        onDelete={() => { const id = library?.activeConversationId; if (id) void run((bridge) => bridge.deleteTurn(id, turnMenu.turnUserId)); }}
+        onClose={() => setTurnMenu(null)}
+      />}
       <section className="panel-workspace" ref={workspaceRef}>
         {!compactEmpty && <header className={`panel-chat-header${expanded ? ' is-browser' : ' is-numeric'}`} ref={sessionHeaderRef}>
           <button type="button" className="panel-library-toggle" aria-label={expanded ? '会话库' : '会话菜单'} title={expanded ? '会话库' : '会话菜单'} aria-haspopup={expanded ? undefined : 'menu'} aria-expanded={expanded ? undefined : sessionMenuOpen} onClick={expanded ? openLibrary : () => setSessionMenuOpen((open) => !open)}><ConversationsIcon /></button>
@@ -1465,10 +1502,13 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
             {quickTabs.map((item, index) => <button key={item.id} type="button" role="menuitem" aria-current={item.id === library?.activeConversationId ? 'page' : undefined} aria-disabled={libraryBusy || item.id === library?.activeConversationId} onContextMenu={(event) => showTabMenu(event, item)} title={`${item.title}，${taskLabels[conversationStatus(item)]}`} onClick={() => { if (!libraryBusy && item.id !== library?.activeConversationId) void selectConversation(item); }}><i className={`panel-task-dot panel-task-dot-${conversationStatus(item)}`} aria-hidden="true" /><span className="panel-session-menu-number">{index + 1}</span><span className="panel-session-menu-title">{item.title}</span></button>)}
             <button type="button" role="menuitem" className="panel-session-menu-all" onClick={openLibrary}>查看全部会话</button>
           </div>}
-          {quickTabs.length > 0 && <nav className={`panel-quick-tabs${tabDragOrder ? ' is-dragging' : ''}`} ref={quickTabsRef} aria-label={expanded ? '顶部会话标签' : '顶部会话数字快捷切换'}>
+          {/* The strip keeps its place even when the last conversation is
+              closed: the "+" stays put so a new session is one click away,
+              and the row never blinks out under the pointer. */}
+          <nav className={`panel-quick-tabs${tabDragOrder ? ' is-dragging' : ''}`} ref={quickTabsRef} aria-label={expanded ? '顶部会话标签' : '顶部会话数字快捷切换'}>
             {quickTabs.map((item, index) => <button key={item.id} type="button" data-tab-id={item.id} className={`panel-quick-tab${item.id === library?.activeConversationId ? ' is-current' : ''}${tabDragOrder && tabDragRef.current?.id === item.id ? ' is-dragging' : ''}`} aria-label={`${index + 1}：${item.title}，${taskLabels[conversationStatus(item)]}`} aria-current={item.id === library?.activeConversationId ? 'page' : undefined} title={`${item.title}，${taskLabels[conversationStatus(item)]}`} aria-disabled={libraryBusy || item.id === library?.activeConversationId} onContextMenu={(event) => showTabMenu(event, item)} onPointerDown={(event) => beginTabDrag(event, item)} onClick={() => { if (tabClickSuppressRef.current) { tabClickSuppressRef.current = false; return; } if (!libraryBusy && item.id !== library?.activeConversationId) void selectConversation(item); }}><i className={`panel-task-dot panel-task-dot-${conversationStatus(item)}`} aria-hidden="true" /><span className="panel-quick-tab-label">{expanded ? item.title : index + 1}</span></button>)}
             {showNewTabButton(quickTabs.length, tabLimit) && <button type="button" className="panel-quick-tab panel-quick-tab-new" aria-label="新建会话" title="新建会话" onClick={() => { if (!libraryBusy) void createConversation(); }}><PlusIcon /></button>}
-          </nav>}
+          </nav>
         </header>}
         {status !== 'idle' && (
           <div className="panel-status-row">
@@ -1501,10 +1541,10 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
               const firstReplyId = group.items.find((item) => item.kind === 'assistant')?.id;
               const runAnchor = group.items[0];
               return <div className="panel-turn" key={group.user.id}>
-                <TimelineItem entry={group.user} display={rowDisplay} />
+                <TimelineItem entry={group.user} display={rowDisplay} onAvatarMenu={(event) => showTurnMenu(event, group.user.id, turnMenuTitle(group.user), isLiveTurn)} />
                 {runAnchor && <article className="panel-event panel-event-assistant is-run" data-entry-id={firstReplyId ?? runAnchor.id}
                   aria-label={`${kindLabels.assistant}，${timeText(runAnchor.time)}`}>
-                  <div className="panel-event-avatar" aria-hidden="true">
+                  <div className="panel-event-avatar" aria-hidden="true" onContextMenu={(event) => showTurnMenu(event, group.user.id, turnMenuTitle(group.user), isLiveTurn)}>
                     <AvatarGlyph kind="assistant" fallback="鲸" name={rowDisplay.avatars.assistant} />
                     {rowDisplay.showTimestamps && <time className="panel-event-time" dateTime={runAnchor.time}>{timeText(runAnchor.time)}</time>}
                   </div>

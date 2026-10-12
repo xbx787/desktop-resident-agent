@@ -13,9 +13,9 @@ describe('thinking timing', () => {
   it('freezes at the end timestamp once the block closes', () => {
     const closed = { ...block, endedAt: '2026-10-09T00:01:05.000Z' }
     expect(thinkingElapsedSeconds(closed, Date.parse('2026-10-09T00:10:00.000Z'))).toBe(65)
-    expect(thinkingDurationText(9)).toBe('9 秒')
-    expect(thinkingDurationText(65)).toBe('1 分 5 秒')
-    expect(thinkingDurationText(120)).toBe('2 分')
+    expect(thinkingDurationText(9)).toBe('00:09')
+    expect(thinkingDurationText(65)).toBe('01:05')
+    expect(thinkingDurationText(120)).toBe('02:00')
   })
 })
 
@@ -33,7 +33,7 @@ describe('ThinkingItem', () => {
     const html = renderToStaticMarkup(<ThinkingItem entry={{ ...block, endedAt: '2026-10-09T00:00:07.000Z' }} running={false} />)
     expect(html).toContain('panel-thought')
     expect(html).toContain('已思考')
-    expect(html).toContain('7 秒')
+    expect(html).toContain('00:07')
     expect(html).not.toContain('is-streaming')
     expect(html).not.toContain('panel-live-label')
     expect(html).not.toMatch(/<details[^>]*\sopen/)

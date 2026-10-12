@@ -17,6 +17,28 @@ function messageImages(attachments: readonly UserAttachment[]): Array<{ name: st
   return images.length ? images : undefined
 }
 
+/** Deletes one turn from a timeline and the history that mirrors it — the
+ *  user's message through to the entry before the next user line. The Nth
+ *  user entry maps to the Nth history user line: the send and steer paths
+ *  write both in lockstep. Returns new arrays; throws when the pair cannot be
+ *  aligned rather than guessing at a partial delete. */
+export function deleteTurnEntries(timeline: TimelineEntry[], history: DialogueLine[],
+  userEntryId: string): { timeline: TimelineEntry[]; history: DialogueLine[] } {
+  const index = timeline.findIndex((entry) => entry.id === userEntryId && entry.kind === 'user')
+  if (index < 0) throw new Error('这轮对话已经找不到了。')
+  let end = index + 1
+  while (end < timeline.length && timeline[end].kind !== 'user') end += 1
+  const ordinal = timeline.slice(0, index).filter((entry) => entry.kind === 'user').length
+  const userStarts = history.map((line, at) => (line.role === 'user' ? at : -1)).filter((at) => at >= 0)
+  const start = userStarts[ordinal]
+  if (start === undefined) throw new Error('历史记录与消息对不上，未做删除。')
+  const nextStart = userStarts[ordinal + 1] ?? history.length
+  return {
+    timeline: [...timeline.slice(0, index), ...timeline.slice(end)],
+    history: [...history.slice(0, start), ...history.slice(nextStart)]
+  }
+}
+
 export class AgentRuntime {
   private readonly state: AppSnapshot
   private readonly history: DialogueLine[] = []
@@ -566,6 +588,29 @@ export class AgentRuntime {
     this.closeThinkingEntries()
     this.finishRunningTools('已停止')
     this.add('system', reason ?? (this.state.mode === 'claude_code' ? '已请求停止 Claude Code；正在执行的外部动作可能仍会完成。' : '任务已停止，待批准的操作已取消。'))
+  }
+
+  /** Removes one turn from the timeline and the model history, and drops the
+   *  SDK session so the trimmed history replays into a fresh one — a deleted
+   *  turn must not survive inside the old session. Refused while the target
+   *  turn is the one still running. */
+  deleteTurn(userEntryId: string): void {
+    const index = this.state.timeline.findIndex((entry) => entry.id === userEntryId && entry.kind === 'user')
+    if (index < 0) throw new Error('这轮对话已经找不到了。')
+    let end = index + 1
+    while (end < this.state.timeline.length && this.state.timeline[end].kind !== 'user') end += 1
+    if (end >= this.state.timeline.length && this.isRunning()) {
+      throw new Error('这一轮还在运行，结束后才能删除。')
+    }
+    const next = deleteTurnEntries(this.state.timeline, this.history, userEntryId)
+    this.state.timeline = next.timeline
+    this.history.splice(0, this.history.length, ...next.history)
+    // Deletions have no delta form: republish the timeline in full.
+    this.state.timelineRevision += 1
+    this.timelineDirty.clear()
+    this.timelineSentRevision = -1
+    this.sdkSessionId = null
+    this.emit()
   }
 
   private isBusy(): boolean {

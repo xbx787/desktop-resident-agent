@@ -41,3 +41,11 @@
 .tab-context-menu button.is-danger:hover:not(:disabled) { color: #ffccd2; background: rgba(240, 126, 144, .16); }
 .tab-context-menu button:disabled { opacity: .45; }
 .tab-context-menu button svg { flex: none; width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+
+/* The turn menu's own confirmation step: the item flips into an explanation
+   plus confirm/cancel before a whole turn is removed. */
+.turn-menu-confirm { display: grid; gap: 8px; padding: 7px 8px 3px; }
+.turn-menu-confirm > span { color: #f0c9cd; line-height: 1.45; }
+.turn-menu-confirm-actions { display: flex; justify-content: flex-end; gap: 4px; }
+.turn-menu-confirm-actions button { width: auto; min-height: 26px; padding: 3px 10px; }
+.turn-menu-confirm-actions button.is-danger { color: #ffc9cd; background: rgba(240, 126, 144, .14); }

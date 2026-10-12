@@ -26,22 +26,44 @@ export type TimelineGroup =
  * Nothing is folded into one big "thinking + execution" module — assistant text
  * between work items is the visible divider between segments.
  */
+type TurnGroup = Extract<TimelineGroup, { kind: 'turn' }>
+
+/**
+ * Groups by user message, with one guard against interrupt skew: a broken-off
+ * turn drains late — its remaining entries reach the store *after* the next
+ * user line is already written (the user's line is instant; model output
+ * lags). An entry therefore belongs to the newest turn whose user message was
+ * sent at or before its own timestamp, not merely to the nearest one by array
+ * position. Entries with unusable timestamps keep the old positional rule.
+ */
 export function groupTimeline(entries: TimelineEntry[]): TimelineGroup[] {
   const groups: TimelineGroup[] = []
-  let user: TimelineEntry | null = null
-  let items: TimelineEntry[] = []
+  const turns: TurnGroup[] = []
+  let current: TurnGroup | undefined
+  let currentMs = Number.NEGATIVE_INFINITY
   for (const entry of entries) {
     if (entry.kind === 'user') {
-      if (user) groups.push({ kind: 'turn', user, items })
-      user = entry
-      items = []
-    } else if (user) {
-      items.push(entry)
-    } else {
-      groups.push({ kind: 'single', entry })
+      const turn: TurnGroup = { kind: 'turn', user: entry, items: [] }
+      turns.push(turn)
+      groups.push(turn)
+      current = turn
+      const sent = Date.parse(entry.time)
+      currentMs = Number.isFinite(sent) ? sent : Number.NEGATIVE_INFINITY
+      continue
     }
+    let owner = current
+    const ms = Date.parse(entry.time)
+    if (Number.isFinite(ms) && current && ms < currentMs) {
+      owner = undefined
+      for (const turn of turns) {
+        const sent = Date.parse(turn.user.time)
+        if (Number.isFinite(sent) && sent <= ms) owner = turn
+      }
+      owner ??= current
+    }
+    if (owner) owner.items.push(entry)
+    else groups.push({ kind: 'single', entry })
   }
-  if (user) groups.push({ kind: 'turn', user, items })
   return groups
 }
 

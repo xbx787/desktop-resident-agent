@@ -304,7 +304,7 @@
 .panel-event.is-run .panel-event-body { display: grid; gap: 10px; }
 /* The reply pieces carry no bullet: a dot per paragraph read as a list of
    unrelated items — the final answer most of all. The pieces just flow. */
-.panel-avatar-img { width: 39px; height: 39px; border-radius: 13.5px; object-fit: cover; }
+.panel-avatar-img { width: 39px; height: 39px; border: 1px solid rgba(190, 213, 253, .35); border-radius: 13.5px; object-fit: cover; }
 .panel-event-glyph {
   display: grid;
   place-items: center;

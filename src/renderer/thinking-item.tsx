@@ -1,5 +1,6 @@
 import { memo, useEffect, useState } from 'react'
 import type { TimelineEntry } from '../shared/contracts'
+import { formatDuration } from './duration'
 import { MessageMarkdown } from './message-markdown'
 
 /** Seconds a thinking block has been running; null when the timestamps are unusable. */
@@ -12,10 +13,7 @@ export function thinkingElapsedSeconds(entry: Pick<TimelineEntry, 'time' | 'ende
 }
 
 export function thinkingDurationText(seconds: number): string {
-  if (seconds < 60) return `${seconds} 秒`
-  const minutes = Math.floor(seconds / 60)
-  const rest = seconds % 60
-  return rest ? `${minutes} 分 ${rest} 秒` : `${minutes} 分`
+  return formatDuration(seconds)
 }
 
 function ThoughtIcon() {
@@ -26,7 +24,7 @@ function ThoughtIcon() {
  * One thinking block, rendered like the tool rows: a summary you click open
  * (collapsed by default). While the model is still thinking the elapsed
  * seconds tick in real time on the summary and the text grows with the stream
- * behind a click; once the block closes it folds and freezes at "已思考 N 秒".
+ * behind a click; once the block closes it folds and freezes at its mm:ss.
  */
 export const ThinkingItem = memo(function ThinkingItem({ entry, running }: { entry: TimelineEntry; running: boolean }) {
   const streaming = running && !entry.endedAt

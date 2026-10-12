@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest'
 import type { TimelineEntry } from '../src/shared/contracts'
 import { groupTimeline, tailWindow, type TimelineGroup } from '../src/renderer/timeline-groups'
 
-const entry = (kind: TimelineEntry['kind'], text: string): TimelineEntry => ({ id: `${kind}:${text}`, time: '2026-10-09T00:00:00.000Z', kind, text })
+const BASE = Date.parse('2026-10-09T00:00:00.000Z')
+let sequence = 0
+const entry = (kind: TimelineEntry['kind'], text: string): TimelineEntry =>
+  ({ id: `${kind}:${text}`, time: new Date(BASE + (sequence++) * 1000).toISOString(), kind, text })
+const at = (kind: TimelineEntry['kind'], text: string, seconds: number): TimelineEntry =>
+  ({ id: `${kind}:${text}`, time: new Date(BASE + seconds * 1000).toISOString(), kind, text })
 
 describe('groupTimeline', () => {
   it('keeps thinking, tools and the model’s own sentences in chronological order', () => {
@@ -40,6 +45,21 @@ describe('groupTimeline', () => {
     const turn = groups[0]
     if (turn.kind !== 'turn') throw new Error('expected a turn group')
     expect(turn.items).toEqual([])
+  })
+
+  it('returns an interrupted turn’s late entries to their own user message', () => {
+    const groups = groupTimeline([
+      at('user', 'first', 0),
+      at('thinking', 'first turn thought', 2),
+      at('user', 'second', 4),                  // sent while the first turn was still running
+      at('assistant', 'first turn answer', 3),  // drains late, after 'second' was written
+      at('thinking', 'second turn thought', 5)
+    ])
+    expect(groups).toHaveLength(2)
+    const [first, second] = groups
+    if (first.kind !== 'turn' || second.kind !== 'turn') throw new Error('expected turn groups')
+    expect(first.items.map((item) => item.text)).toEqual(['first turn thought', 'first turn answer'])
+    expect(second.items.map((item) => item.text)).toEqual(['second turn thought'])
   })
 })
 
