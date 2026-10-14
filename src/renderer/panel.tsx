@@ -82,6 +82,10 @@ function ConversationsIcon() {
   return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5h12M4 10h12M4 15h8" /></svg>;
 }
 
+function SelectIcon() {
+  return <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.5" y="4" width="11" height="11" rx="2" /><path d="m6.5 9.4 2.3 2.2 3.6-3.8M16.5 7v9" /></svg>;
+}
+
 function BackIcon() {
   return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m11.8 4.5-5.5 5.5 5.5 5.5M6.8 10h9" /></svg>;
 }
@@ -413,7 +417,12 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   // state, the wrapper starts the animation that keeps the drawer mounted
   // until it has slid away.
   function setLibraryOpen(open: boolean) {
-    if (!open) drawerExit.beginClose();
+    if (!open) {
+      drawerExit.beginClose();
+      setMultiSelect(false);
+      setSelectedSessionIds(new Set());
+      setBatchDeleteConfirm(false);
+    }
     setLibraryOpenRaw(open);
   }
   // The drawer's distance from the workspace's bottom edge — the composer
@@ -426,6 +435,13 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   }>({ key: '', status: 'idle', results: [] });
   const [libraryError, setLibraryError] = useState<string | null>(null);
   const [libraryBusy, setLibraryBusy] = useState(false);
+  const [multiSelect, setMultiSelect] = useState(false);
+  const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
+  const [batchDeleteConfirm, setBatchDeleteConfirm] = useState(false);
+  const multiSelectRef = useRef(multiSelect);
+  multiSelectRef.current = multiSelect;
+  const batchDeleteConfirmRef = useRef(batchDeleteConfirm);
+  batchDeleteConfirmRef.current = batchDeleteConfirm;
   const [compactBusy, setCompactBusy] = useState(false);
   const [renameId, setRenameId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
@@ -532,7 +548,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     []
   );
   const libraryRevision = JSON.stringify(library?.conversations.map((item) => [
-    item.id, item.title, item.archivedAt, item.updatedAt, item.messageCount
+    item.id, item.title, item.archivedAt, item.pinnedAt, item.updatedAt, item.messageCount
   ]) ?? []);
   const librarySearchKey = JSON.stringify([libraryQuery.trim(), libraryArchived, libraryRevision]);
   const sendingCurrent = sendingConversationIds.has(library?.activeConversationId ?? null);
@@ -1250,6 +1266,50 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     if (accepted) onSuccess?.();
   }
 
+  function clearSelection(): void {
+    setSelectedSessionIds(new Set());
+    setBatchDeleteConfirm(false);
+  }
+
+  function toggleSelected(id: string): void {
+    if (!selectedSessionIds.has(id) && selectedSessionIds.size >= 100) {
+      setLibraryError('一次最多选择 100 个会话。');
+      return;
+    }
+    setMultiSelect(true);
+    setBatchDeleteConfirm(false);
+    setSelectedSessionIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function batchManage(action: 'archive' | 'restore' | 'delete' | 'pin' | 'unpin', ids: string[]): Promise<void> {
+    if (libraryBusy || ids.length === 0) return;
+    let outcomes: Array<{ id: string; status: 'updated' | 'skipped'; reason?: string }> = [];
+    await libraryAction(async (bridge) => {
+      outcomes = (await bridge.batchManageConversations(action, ids)).outcomes;
+    }, () => {
+      const updated = outcomes.filter((item) => item.status === 'updated');
+      const unresolved = outcomes.filter((item) => item.status === 'skipped' && ['busy', 'archived'].includes(item.reason ?? ''));
+      const missing = outcomes.filter((item) => item.status === 'skipped' && item.reason === 'not_found');
+      const resolved = new Set(outcomes.filter((item) => item.status === 'updated' || !unresolved.includes(item)).map((item) => item.id));
+      setSelectedSessionIds((current) => new Set([...current].filter((id) => !resolved.has(id))));
+      if (action === 'delete') for (const item of updated) composerStash.current.delete(item.id);
+      if (unresolved.length === 0) {
+        setMultiSelect(false);
+        clearSelection();
+        if (missing.length) setLibraryError(`${missing.length} 个会话已不存在，其余操作已完成。`);
+      } else {
+        const reasons = new Set(unresolved.map((item) => item.reason));
+        setLibraryError(`已处理 ${updated.length} 个，跳过 ${unresolved.length} 个${reasons.has('busy') ? '（会话仍在运行或排队）' : ''}${missing.length ? `；${missing.length} 个已不存在` : ''}。`);
+      }
+    });
+    setBatchDeleteConfirm(false);
+  }
+
   async function createConversation() {
     const currentId = activeConversationIdRef.current;
     stashComposerState(composerStash.current, currentId, composerStateRef.current.draft, composerStateRef.current.attachments);
@@ -1301,6 +1361,19 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const visibleConversations = searchActive
     ? searchStatus === 'done' ? librarySearch.results : []
     : library?.conversations.filter((item) => (item.archivedAt !== null) === libraryArchived) ?? [];
+  const selectedVisibleConversations = visibleConversations.filter((item) => selectedSessionIds.has(item.id));
+  const selectedVisibleIds = selectedVisibleConversations.map((item) => item.id);
+  const batchUnpin = selectedVisibleConversations.length > 0 && selectedVisibleConversations.every((item) => item.pinnedAt !== null);
+  const visibleSessionIds = visibleConversations.map((item) => item.id);
+  const visibleSessionKey = JSON.stringify(visibleSessionIds);
+  useEffect(() => {
+    if (searchStatus === 'loading') return;
+    const visible = new Set(visibleSessionIds);
+    setSelectedSessionIds((current) => {
+      const remaining = [...current].filter((id) => visible.has(id));
+      return remaining.length === current.size ? current : new Set(remaining);
+    });
+  }, [visibleSessionKey, searchStatus]);
   const displayedGroups: Array<{ key: string; label: string | null; conversations: ConversationSummary[] }> =
     libraryPaneDocked
       ? groupSessionSummaries(visibleConversations, libraryArchived, Date.now())
@@ -1510,14 +1583,17 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     return () => document.removeEventListener('pointerdown', closeOutside, true);
   }, [libraryOpen, libraryDocked]);
 
-  // Escape closes the library drawer — unless its own rename field or delete
-  // confirmation is up, which own the key first.
+  // Escape first dismisses a batch confirmation, then exits selection, then
+  // closes the drawer. The capture listener must handle each layer before the
+  // document-wide Esc-to-stop handler sees the key.
   useEffect(() => {
     if (!libraryOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing || renameId !== null || deleteId !== null) return;
       event.preventDefault();
       event.stopImmediatePropagation();
+      if (batchDeleteConfirmRef.current) { setBatchDeleteConfirm(false); return; }
+      if (multiSelectRef.current) { setMultiSelect(false); clearSelection(); return; }
       setLibraryOpen(false);
     };
     // Window capture runs before the document's Esc-to-stop listener.
@@ -1636,13 +1712,14 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
           <header className="panel-library-header">
             <button type="button" className="panel-library-icon panel-library-back" aria-label="返回对话" title="返回对话" onClick={() => setLibraryOpen(false)}><BackIcon /></button>
             <h2>会话</h2>
+            <button type="button" className="panel-library-icon panel-library-select" aria-label={multiSelect ? '退出多选' : '多选会话'} title={multiSelect ? '退出多选' : '多选会话'} aria-pressed={multiSelect} disabled={libraryBusy} onClick={() => { if (multiSelect) { setMultiSelect(false); clearSelection(); } else { setMultiSelect(true); setDeleteId(null); setRenameId(null); } }}><SelectIcon /></button>
             <button type="button" className="panel-library-icon panel-library-new" disabled={libraryBusy} aria-label="新建会话" title="新建会话" onClick={() => { void createConversation(); }}><PlusIcon /></button>
           </header>
           <div className="panel-library-tabs" role="tablist" aria-label="会话状态">
-            <button type="button" role="tab" aria-selected={!libraryArchived} onClick={() => setLibraryArchived(false)}>未归档</button>
-            <button type="button" role="tab" aria-selected={libraryArchived} onClick={() => setLibraryArchived(true)}>已归档</button>
+            <button type="button" role="tab" aria-selected={!libraryArchived} onClick={() => { setLibraryArchived(false); clearSelection(); }}>未归档</button>
+            <button type="button" role="tab" aria-selected={libraryArchived} onClick={() => { setLibraryArchived(true); clearSelection(); }}>已归档</button>
           </div>
-          <input className="panel-library-search" type="search" aria-label="搜索会话" placeholder="搜索会话与消息" value={libraryQuery} onChange={(event) => setLibraryQuery(event.target.value)} />
+          <input className="panel-library-search" type="search" aria-label="搜索会话" placeholder="搜索会话与消息" value={libraryQuery} onChange={(event) => { setLibraryQuery(event.target.value); clearSelection(); }} />
           {libraryError && <div className="panel-library-error" role="alert">{libraryError}</div>}
           <div className="panel-session-list" aria-label={libraryArchived ? '已归档会话' : '未归档会话'}>
             {searchStatus === 'loading' && <div className="panel-library-empty" role="status">正在搜索…</div>}
@@ -1650,28 +1727,42 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
             {visibleConversations.length === 0 && (searchStatus === 'done' || !searchActive) && <div className="panel-library-empty">{searchActive ? '没有找到会话' : libraryArchived ? '暂无归档会话' : '开始一个新对话'}</div>}
             {displayedGroups.map((group) => <div key={group.key} className="panel-library-group">
               {group.label && <div className="panel-library-group-heading">{group.label}</div>}
-              {group.conversations.map((item) => <div key={item.id} className={`panel-session${library?.activeConversationId === item.id ? ' is-current' : ''}`}>
-              {renameId === item.id ? <form className="panel-session-edit" onSubmit={(event) => { event.preventDefault(); void saveRename(item.id); }}>
+              {group.conversations.map((item) => <div key={item.id} className={`panel-session${library?.activeConversationId === item.id ? ' is-current' : ''}${selectedSessionIds.has(item.id) ? ' is-selected' : ''}`}>
+              {!multiSelect && renameId === item.id ? <form className="panel-session-edit" onSubmit={(event) => { event.preventDefault(); void saveRename(item.id); }}>
                 <input autoFocus aria-label="会话名称" maxLength={120} value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setRenameId(null); }} />
                 <button type="submit" disabled={libraryBusy}>保存</button><button type="button" onClick={() => setRenameId(null)}>取消</button>
-              </form> : deleteId === item.id ? <div className="panel-session-confirm">
+              </form> : !multiSelect && deleteId === item.id ? <div className="panel-session-confirm">
                 <span>永久删除“{item.title}”？</span>
                 <button type="button" disabled={libraryBusy} onClick={() => { void libraryAction((bridge) => bridge.deleteConversation(item.id), () => { composerStash.current.delete(item.id); setDeleteId(null); }); }}>确认删除</button>
                 <button type="button" onClick={() => setDeleteId(null)}>取消</button>
               </div> : <>
-                <button type="button" className="panel-session-main" disabled={libraryBusy} onClick={() => { void selectConversation(item); }}>
+                <button type="button" className={`panel-session-main${multiSelect ? ' is-selecting' : ''}`} disabled={libraryBusy} aria-pressed={multiSelect ? selectedSessionIds.has(item.id) : undefined} aria-label={multiSelect ? `${selectedSessionIds.has(item.id) ? '取消选择' : '选择'} ${item.title}` : undefined} onKeyDown={(event) => { if (event.altKey && event.key === 'Enter') { event.preventDefault(); toggleSelected(item.id); } }} onClick={(event) => { if (multiSelect || event.altKey) toggleSelected(item.id); else void selectConversation(item); }}>
+                  {multiSelect && <i className={`panel-session-check${selectedSessionIds.has(item.id) ? ' is-checked' : ''}`} aria-hidden="true">{selectedSessionIds.has(item.id) ? '✓' : ''}</i>}
                   <strong>{item.title}</strong><span>{item.preview || (item.archivedAt ? '点击恢复' : '暂无消息')}</span>
                 </button>
-                <div className="panel-session-actions">
+                {!multiSelect && <div className="panel-session-actions">
                   {!item.archivedAt && <button type="button" aria-label={item.pinnedAt ? '取消置顶' : '置顶会话'} title={item.pinnedAt ? '取消置顶' : '置顶会话'} disabled={libraryBusy} onClick={() => { void libraryAction((bridge) => bridge.setConversationPinned(item.id, !item.pinnedAt)); }}><PinIcon pinned={Boolean(item.pinnedAt)} /></button>}
                   <button type="button" aria-label={`重命名 ${item.title}`} title="重命名" onClick={() => { setRenameId(item.id); setRenameDraft(item.title); }}><EditIcon /></button>
                   <button type="button" aria-label={`${item.archivedAt ? '恢复' : '归档'} ${item.title}`} title={statusRunning(item) ? '这个会话还在运行，结束后才能归档' : item.archivedAt ? '恢复' : '归档'} disabled={libraryBusy || statusRunning(item)} onClick={() => { void libraryAction((bridge) => item.archivedAt ? bridge.restoreConversation(item.id) : bridge.archiveConversation(item.id)); }}><ArchiveIcon restore={Boolean(item.archivedAt)} /></button>
                   <button type="button" aria-label={`删除 ${item.title}`} title={statusRunning(item) ? '这个会话还在运行，结束后才能删除' : '删除'} disabled={libraryBusy || statusRunning(item)} onClick={() => setDeleteId(item.id)}><DeleteIcon /></button>
-                </div>
+                </div>}
               </>}
               </div>)}
             </div>)}
           </div>
+          {multiSelect && <div className="panel-library-batch" aria-label="批量会话操作">
+            {batchDeleteConfirm ? <>
+              <span className="panel-library-batch-confirm">永久删除 {selectedVisibleIds.length} 个会话？</span>
+              <button type="button" disabled={libraryBusy || selectedVisibleIds.length === 0} onClick={() => { void batchManage('delete', selectedVisibleIds); }}>删除</button>
+              <button type="button" onClick={() => setBatchDeleteConfirm(false)}>取消</button>
+            </> : <>
+              <span className="panel-library-batch-count">已选 {selectedVisibleIds.length}</span>
+              <button type="button" aria-label="全选当前列表" title="全选当前列表" disabled={libraryBusy || visibleSessionIds.length === 0} onClick={() => { setSelectedSessionIds(new Set(visibleSessionIds.slice(0, 100))); if (visibleSessionIds.length > 100) setLibraryError('一次最多选择前 100 个会话。'); }}><SelectIcon /></button>
+              {!libraryArchived && <button type="button" aria-label={batchUnpin ? '取消置顶已选会话' : '置顶已选会话'} title={batchUnpin ? '取消置顶已选会话' : '置顶已选会话'} disabled={libraryBusy || selectedVisibleIds.length === 0} onClick={() => { void batchManage(batchUnpin ? 'unpin' : 'pin', selectedVisibleIds); }}><PinIcon pinned={batchUnpin} /></button>}
+              <button type="button" aria-label={libraryArchived ? '恢复已选会话' : '归档已选会话'} title={libraryArchived ? '恢复已选会话' : '归档已选会话'} disabled={libraryBusy || selectedVisibleIds.length === 0} onClick={() => { void batchManage(libraryArchived ? 'restore' : 'archive', selectedVisibleIds); }}><ArchiveIcon restore={libraryArchived} /></button>
+              <button type="button" aria-label="删除已选会话" title="删除已选会话" disabled={libraryBusy || selectedVisibleIds.length === 0} onClick={() => setBatchDeleteConfirm(true)}><DeleteIcon /></button>
+            </>}
+          </div>}
         </aside>}
         <div className="panel-chat-main">
         {status !== 'idle' && (

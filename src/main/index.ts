@@ -7,7 +7,7 @@ import { isAskAnswers } from './ask-questions'
 import { ConversationController } from './conversation-controller'
 import { MemoryService, type MemoryProvider } from './memory-service'
 import { GrowthExperiments } from './growth-experiments'
-import { ConversationStore, isModelProfile } from './conversation-store'
+import { ConversationStore, isModelProfile, MAX_BATCH_CONVERSATIONS } from './conversation-store'
 import { electronSecretCodec, publicSettings, publicSnapshot, SecretProtectionUnavailableError } from './secret-storage'
 import { ClaudeAgentClient } from './claude-agent'
 import { linkClaudeUserResources } from './claude-resource-links'
@@ -711,6 +711,16 @@ function registerIpc(): void {
   ipcMain.handle('pet:delete-conversation', async (event, id: unknown) => {
     if (!trusted(event) || typeof id !== 'string') throw new Error('会话编号无效。')
     await activeController().deleteConversation(id)
+  })
+  ipcMain.handle('pet:batch-manage-conversations', (event, action: unknown, ids: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if ((action !== 'archive' && action !== 'restore' && action !== 'delete' &&
+         action !== 'pin' && action !== 'unpin') ||
+        !Array.isArray(ids) || ids.length > MAX_BATCH_CONVERSATIONS ||
+        ids.some((id) => typeof id !== 'string' || !id.trim() || id.length > 128)) {
+      throw new Error('批量会话请求无效。')
+    }
+    return activeController().batchManageConversations(action, ids as string[])
   })
   ipcMain.handle('pet:delete-turn', async (event, conversationId: unknown, userEntryId: unknown) => {
     if (!trusted(event) || typeof conversationId !== 'string' || typeof userEntryId !== 'string') throw new Error('删除请求无效。')

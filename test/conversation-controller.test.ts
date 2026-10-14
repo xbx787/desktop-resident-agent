@@ -38,6 +38,89 @@ async function until(check: () => boolean, label: string): Promise<void> {
 }
 
 describe('conversation controller', () => {
+  it('bulk updates idle sessions, preserves busy turns, and replaces an emptied active session', async () => {
+    const calls: Array<(reply: ModelReply) => void> = []
+    const model: ModelClient = { respond: () => new Promise((resolve) => { calls.push(resolve) }) }
+    const store = new ConversationStore(testRoot)
+    const active = await store.createConversation('运行中', 'live')
+    const archived = await store.createConversation('已归档', 'live')
+    const idle = await store.createConversation('可归档', 'live')
+    await store.archiveConversation(archived.id)
+    await store.setActiveConversation(active.id)
+    const controller = new ConversationController(store,
+      (onChange) => new AgentRuntime(new NoteStore(testRoot), model, onChange))
+    await controller.initialize()
+    await controller.sendMessage('仍在执行')
+    await until(() => calls.length === 1 && controller.displayedRuntime()!.isRunning(), 'live turn')
+
+    const result = await controller.batchManageConversations('archive',
+      [active.id, archived.id, idle.id, active.id, 'missing'])
+    expect(result.outcomes).toEqual([
+      { id: active.id, status: 'skipped', reason: 'busy' },
+      { id: archived.id, status: 'skipped', reason: 'already_archived' },
+      { id: idle.id, status: 'updated' },
+      { id: 'missing', status: 'skipped', reason: 'not_found' }
+    ])
+    expect(controller.getSnapshot().conversationLibrary.activeConversationId).toBe(active.id)
+    expect(controller.getSnapshot().conversationLibrary.conversations.find((item) => item.id === idle.id)?.archivedAt).not.toBeNull()
+    await expect(controller.sendMessage('不能发往已归档会话', [], 'queue', idle.id))
+      .rejects.toMatchObject({ code: 'ARCHIVED_CONVERSATION' })
+    expect((await controller.batchManageConversations('pin', [active.id])).outcomes).toEqual([
+      { id: active.id, status: 'updated' }
+    ])
+    expect(controller.displayedRuntime()!.isRunning()).toBe(true)
+
+    await controller.stop()
+    calls[0]({ text: '迟到答复' })
+    await until(() => controller.allConversationsIdle(), 'turn stopped')
+    expect((await controller.batchManageConversations('delete', [active.id])).outcomes).toEqual([
+      { id: active.id, status: 'updated' }
+    ])
+    const snapshot = controller.getSnapshot()
+    const replacement = snapshot.conversationLibrary.activeConversationId!
+    expect(replacement).not.toBe(active.id)
+    expect(snapshot.conversationId).toBe(replacement)
+    expect(snapshot.timeline).toEqual([])
+    expect((await store.getConversation(replacement))?.archivedAt).toBeNull()
+    expect((await store.getConversation(active.id))).toBeNull()
+  })
+
+  it('skips a conversation awaiting approval during a batch archive', async () => {
+    const store = new ConversationStore(testRoot)
+    const controller = new ConversationController(store,
+      (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))
+    await controller.initialize()
+    const id = controller.getSnapshot().conversationId!
+    await controller.setModelMode('demo')
+    await controller.sendMessage('记录：审批前先不要写入')
+    await until(() => controller.getSnapshot().taskStatus === 'awaiting_approval', 'approval state')
+    expect((await controller.batchManageConversations('archive', [id])).outcomes).toEqual([
+      { id, status: 'skipped', reason: 'busy' }
+    ])
+    expect((await store.getConversation(id))?.archivedAt).toBeNull()
+  })
+
+  it('keeps a stopped conversation with queued messages out of bulk deletion', async () => {
+    let finish!: (reply: ModelReply) => void
+    const model: ModelClient = { respond: () => new Promise((resolve) => { finish = resolve }) }
+    const store = new ConversationStore(testRoot)
+    const record = await store.createConversation('排队会话', 'live')
+    const controller = new ConversationController(store,
+      (onChange) => new AgentRuntime(new NoteStore(testRoot), model, onChange))
+    await controller.initialize()
+    await controller.sendMessage('先处理')
+    await until(() => Boolean(finish), 'first request')
+    await controller.sendMessage('后处理')
+    await controller.stop()
+    expect(controller.getSnapshot().pendingMessages.map((message) => message.text)).toEqual(['后处理'])
+    expect((await controller.batchManageConversations('delete', [record.id])).outcomes).toEqual([
+      { id: record.id, status: 'skipped', reason: 'busy' }
+    ])
+    expect((await store.getConversation(record.id))?.pendingMessages).toHaveLength(1)
+    finish({ text: '停止后返回' })
+    await until(() => !controller.displayedRuntime()!.isRunning(), 'stopped request')
+  })
+
   it('freezes a referenced conversation when queued and hides its snapshot from the renderer', async () => {
     const calls: Array<{ text: string; resolve: (reply: ModelReply) => void }> = []
     const model: ModelClient = { respond: history => new Promise((resolve) => {

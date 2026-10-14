@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { AppSnapshot, AskAnswers, ContextUsageSnapshot, ModelMode, ModelProfile, TimelineEntry, UserAttachment } from '../shared/contracts'
+import type { AppSnapshot, AskAnswers, ContextUsageSnapshot, ConversationBatchAction, ConversationBatchResult, ModelMode, ModelProfile, TimelineEntry, UserAttachment } from '../shared/contracts'
 import { deleteTurnEntries, type AgentRuntime } from './agent-runtime'
 import { attachmentContext, validAttachmentList } from './local-context'
 import { snapshotSessionMentions } from './session-context'
@@ -359,15 +359,20 @@ export class ConversationController {
       if (sourceRuntime.isRunning()) throw new ConversationStoreError('INVALID_INPUT', '引用会话仍在运行，请等它回复完成后再发送。')
       return { ...record, ...sourceRuntime.exportConversationState() }
     })
-    const runtime = await this.ensureRuntime(id)
-    if (runtime.getSnapshot().mode !== 'claude_code' && attachments.some((item) => item.path && !item.content)) {
-      throw new ConversationStoreError('INVALID_INPUT', '当前模型没有本地文件读取工具。请切换到 Claude Code 模式后再发送此文件。')
-    }
     const message: PendingMessage = {
       id: randomUUID(), text: clean, attachments: structuredClone(attachments), createdAt: new Date().toISOString(),
       ...(sessionContext ? { sessionContext } : {})
     }
     return this.serialize(async () => {
+      // A slow @ reference can finish after a bulk archive/delete. Check the
+      // destination inside the same controller operation that queues the turn.
+      const target = await this.store.getConversation(id)
+      if (!target) throw new ConversationStoreError('NOT_FOUND', '找不到这个会话。')
+      if (target.archivedAt !== null) throw new ConversationStoreError('ARCHIVED_CONVERSATION', '请先恢复归档会话。')
+      const runtime = await this.ensureRuntime(id, target)
+      if (runtime.getSnapshot().mode !== 'claude_code' && attachments.some((item) => item.path && !item.content)) {
+        throw new ConversationStoreError('INVALID_INPUT', '当前模型没有本地文件读取工具。请切换到 Claude Code 模式后再发送此文件。')
+      }
       const queue = this.queueOf(id)
       if (this.pausedQueues.has(id) || runtime.getQueuePauseReason()) {
         if (clean === '/goal clear' && runtime.getSnapshot().mode === 'claude_code') {
@@ -623,6 +628,31 @@ export class ConversationController {
         await this.refreshLibrary()
       }
       return structuredClone(this.library!)
+    })
+  }
+
+  async batchManageConversations(action: ConversationBatchAction, ids: string[]): Promise<ConversationBatchResult> {
+    await this.initialize()
+    return this.serialize(async () => {
+      const blocked = new Set<string>()
+      for (const [id, runtime] of this.runtimes) {
+        if (runtime.isRunning()) blocked.add(id)
+      }
+      for (const [id, queue] of this.pending) {
+        if (queue.length) blocked.add(id)
+      }
+      for (const id of this.drains.keys()) blocked.add(id)
+      const result = await this.store.batchManageConversations(action, ids, blocked)
+      for (const outcome of result.outcomes) {
+        if (outcome.status !== 'updated' || (action !== 'archive' && action !== 'delete')) continue
+        this.releaseRuntime(outcome.id)
+        this.pending.delete(outcome.id)
+      }
+      const state = await this.store.getState()
+      const nextId = state.activeConversationId
+      if (nextId && nextId !== this.activeId) await this.setDisplayed(nextId)
+      else await this.refreshLibrary()
+      return result
     })
   }
 

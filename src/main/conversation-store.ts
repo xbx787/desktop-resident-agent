@@ -5,12 +5,13 @@ import type { DialogueLine } from './deepseek'
 import { isEffortLevel } from '../shared/effort'
 import { containsSensitiveData } from './memory-service'
 import { protectProfiles, restoreProfiles, type SecretCodec } from './secret-storage'
-import type { AgentGoal, EffortLevel, ModelMode, ModelProfile, TaskStatus, TimelineEntry, UserAttachment, ConversationSettings } from '../shared/contracts'
+import type { AgentGoal, ConversationBatchAction, ConversationBatchResult, EffortLevel, ModelMode, ModelProfile, TaskStatus, TimelineEntry, UserAttachment, ConversationSettings } from '../shared/contracts'
 
 const DEFAULT_VISIBLE_TABS = 5
 const MAX_VISIBLE_TABS = 12
 const LEGACY_MAX_ACTIVE_LIMIT = 50
 const DEFAULT_TITLE = '新对话'
+export const MAX_BATCH_CONVERSATIONS = 100
 
 /** The store and the renderer share one definition of the settings shape;
  *  this re-export keeps the historical import path working. */
@@ -381,6 +382,26 @@ function selectFallback(library: PersistedLibrary): void {
     .sort(compareForList)[0]?.id ?? null
 }
 
+function addConversation(library: PersistedLibrary, title: string, mode: ModelMode): ConversationRecord {
+  const now = new Date().toISOString()
+  const record: ConversationRecord = {
+    id: randomUUID(), title, createdAt: now, updatedAt: now,
+    archivedAt: null, pinnedAt: null, mode, taskStatus: 'idle', timeline: [], history: [], pendingMessages: [], sdkSessionId: null, goal: null
+  }
+  library.conversations.push(record)
+  library.settings.tabOrder.unshift(record.id)
+  library.activeConversationId = record.id
+  return record
+}
+
+function normalizeBatchIds(ids: string[]): string[] {
+  if (!Array.isArray(ids) || ids.length > MAX_BATCH_CONVERSATIONS ||
+      ids.some((id) => typeof id !== 'string' || !id.trim() || id.length > 128)) {
+    throw new ConversationStoreError('INVALID_INPUT', `一次最多处理 ${MAX_BATCH_CONVERSATIONS} 个有效会话。`)
+  }
+  return [...new Set(ids)]
+}
+
 export class ConversationStore {
   readonly filePath: string
   private library: PersistedLibrary | null = null
@@ -481,18 +502,7 @@ export class ConversationStore {
   async createConversation(title = DEFAULT_TITLE, mode: ModelMode = 'demo'): Promise<ConversationRecord> {
     const clean = cleanTitle(title)
     if (!isMode(mode)) throw new ConversationStoreError('INVALID_INPUT', '不支持这个模型模式。')
-    return this.mutate((draft) => {
-      const now = new Date().toISOString()
-      const record: ConversationRecord = {
-        id: randomUUID(), title: clean, createdAt: now, updatedAt: now,
-        archivedAt: null, pinnedAt: null, mode, taskStatus: 'idle', timeline: [], history: [], pendingMessages: [], sdkSessionId: null, goal: null
-      }
-      draft.conversations.push(record)
-      // A new session is what the user is about to use — it leads the row.
-      draft.settings.tabOrder.unshift(record.id)
-      draft.activeConversationId = record.id
-      return record
-    })
+    return this.mutate((draft) => addConversation(draft, clean, mode))
   }
 
   setActiveConversation(id: string): Promise<ConversationRecord> {
@@ -579,6 +589,74 @@ export class ConversationStore {
       draft.settings.tabOrder = draft.settings.tabOrder.filter((candidate) => candidate !== id)
       if (draft.activeConversationId === id) selectFallback(draft)
       return stateOf(draft)
+    })
+  }
+
+  /** One persisted transaction for the whole selection. Runtime guards come
+   *  from the controller; the stored queue/status is checked again here so a
+   *  cold conversation cannot lose parked work. */
+  async batchManageConversations(
+    action: ConversationBatchAction,
+    ids: string[],
+    blockedIds: ReadonlySet<string> = new Set()
+  ): Promise<ConversationBatchResult> {
+    if (action !== 'archive' && action !== 'restore' && action !== 'delete' &&
+        action !== 'pin' && action !== 'unpin') {
+      throw new ConversationStoreError('INVALID_INPUT', '批量操作无效。')
+    }
+    const unique = normalizeBatchIds(ids)
+    if (!unique.length) return { action, outcomes: [] }
+    return this.mutate((draft) => {
+      const now = new Date().toISOString()
+      const oldActive = draft.conversations.find((record) => record.id === draft.activeConversationId)
+      const oldMode = oldActive?.mode ?? 'claude_code'
+      const outcomes: ConversationBatchResult['outcomes'] = []
+      const removed = new Set<string>()
+      for (const id of unique) {
+        const record = draft.conversations.find((candidate) => candidate.id === id)
+        if (!record) {
+          outcomes.push({ id, status: 'skipped', reason: 'not_found' })
+        } else if ((action === 'pin' || action === 'unpin') && record.archivedAt !== null) {
+          outcomes.push({ id, status: 'skipped', reason: 'archived' })
+        } else if (action === 'pin' && record.pinnedAt !== null) {
+          outcomes.push({ id, status: 'skipped', reason: 'already_pinned' })
+        } else if (action === 'unpin' && record.pinnedAt === null) {
+          outcomes.push({ id, status: 'skipped', reason: 'not_pinned' })
+        } else if (action !== 'pin' && action !== 'unpin' &&
+            (blockedIds.has(id) || record.pendingMessages.length > 0 ||
+            ['planning', 'awaiting_approval', 'executing', 'verifying'].includes(record.taskStatus))) {
+          outcomes.push({ id, status: 'skipped', reason: 'busy' })
+        } else if (action === 'archive' && record.archivedAt !== null) {
+          outcomes.push({ id, status: 'skipped', reason: 'already_archived' })
+        } else if (action === 'restore' && record.archivedAt === null) {
+          outcomes.push({ id, status: 'skipped', reason: 'not_archived' })
+        } else {
+          if (action === 'archive') {
+            record.archivedAt = now
+            record.updatedAt = now
+          } else if (action === 'restore') {
+            record.archivedAt = null
+            record.updatedAt = now
+          } else if (action === 'delete') {
+            removed.add(id)
+          } else {
+            record.pinnedAt = action === 'pin' ? now : null
+          }
+          outcomes.push({ id, status: 'updated' })
+        }
+      }
+      if (removed.size) {
+        draft.conversations = draft.conversations.filter((record) => !removed.has(record.id))
+        draft.settings.tabOrder = draft.settings.tabOrder.filter((id) => !removed.has(id))
+      }
+      if (draft.activeConversationId && !draft.conversations.some((record) =>
+        record.id === draft.activeConversationId && record.archivedAt === null)) selectFallback(draft)
+      if (!draft.activeConversationId && outcomes.some((outcome) => outcome.status === 'updated')) {
+        const firstRestored = action === 'restore' ? outcomes.find((outcome) => outcome.status === 'updated')?.id : null
+        if (firstRestored) draft.activeConversationId = firstRestored
+        else if (action === 'archive' || action === 'delete') addConversation(draft, DEFAULT_TITLE, oldMode)
+      }
+      return { action, outcomes }
     })
   }
 

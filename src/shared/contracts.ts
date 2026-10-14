@@ -163,6 +163,19 @@ export interface ConversationLibraryState {
   conversations: ConversationSummary[]
 }
 
+export type ConversationBatchAction = 'archive' | 'restore' | 'delete' | 'pin' | 'unpin'
+export type ConversationBatchSkipReason =
+  | 'not_found' | 'busy' | 'already_archived' | 'not_archived'
+  | 'archived' | 'already_pinned' | 'not_pinned'
+export interface ConversationBatchResult {
+  action: ConversationBatchAction
+  /** One outcome per distinct requested ID, in selection order. */
+  outcomes: Array<
+    { id: string; status: 'updated' } |
+    { id: string; status: 'skipped'; reason: ConversationBatchSkipReason }
+  >
+}
+
 export interface PendingMessage {
   id: string
   text: string
@@ -310,6 +323,8 @@ export interface PetAPI {
   archiveConversation(id: string): Promise<void>
   restoreConversation(id: string): Promise<void>
   deleteConversation(id: string): Promise<void>
+  /** Destructive actions are confirmed by the caller before this method is invoked. */
+  batchManageConversations(action: ConversationBatchAction, ids: string[]): Promise<ConversationBatchResult>
   deleteTurn(conversationId: string, userEntryId: string): Promise<void>
   getContextUsage(conversationId?: string): Promise<ContextUsageSnapshot>
   compactConversation(conversationId?: string): Promise<void>

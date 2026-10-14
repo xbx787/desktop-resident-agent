@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ConversationStore, ConversationStoreError } from '../src/main/conversation-store'
 
 const projectRoot = process.cwd()
@@ -21,6 +21,67 @@ afterEach(async () => {
 })
 
 describe('persistent conversation library', () => {
+  it('applies a mixed batch in one write and reports every distinct skipped ID', async () => {
+    const store = new ConversationStore(testRoot)
+    const first = await store.createConversation('第一段')
+    const parked = await store.createConversation('有待发消息')
+    const third = await store.createConversation('第三段')
+    await store.updateConversation(parked.id, { pendingMessages: [
+      { id: randomUUID(), text: '稍后发送', attachments: [], createdAt: new Date().toISOString() }
+    ] })
+    const write = vi.spyOn(store as unknown as { persist: (library: unknown) => Promise<void> }, 'persist')
+    const result = await store.batchManageConversations('archive', [first.id, parked.id, first.id, third.id, 'missing'])
+    expect(result.outcomes).toEqual([
+      { id: first.id, status: 'updated' },
+      { id: parked.id, status: 'skipped', reason: 'busy' },
+      { id: third.id, status: 'updated' },
+      { id: 'missing', status: 'skipped', reason: 'not_found' }
+    ])
+    expect(write).toHaveBeenCalledTimes(1)
+    expect((await new ConversationStore(testRoot).getState()).activeConversationId).toBe(parked.id)
+    expect((await store.batchManageConversations('pin', [parked.id, first.id])).outcomes).toEqual([
+      { id: parked.id, status: 'updated' },
+      { id: first.id, status: 'skipped', reason: 'archived' }
+    ])
+    expect((await store.batchManageConversations('pin', [parked.id])).outcomes).toEqual([
+      { id: parked.id, status: 'skipped', reason: 'already_pinned' }
+    ])
+    expect((await store.batchManageConversations('unpin', [parked.id])).outcomes).toEqual([
+      { id: parked.id, status: 'updated' }
+    ])
+    expect((await store.batchManageConversations('unpin', [parked.id])).outcomes).toEqual([
+      { id: parked.id, status: 'skipped', reason: 'not_pinned' }
+    ])
+    expect((await store.batchManageConversations('archive', [first.id])).outcomes).toEqual([
+      { id: first.id, status: 'skipped', reason: 'already_archived' }
+    ])
+    expect((await store.batchManageConversations('restore', [parked.id])).outcomes).toEqual([
+      { id: parked.id, status: 'skipped', reason: 'busy' }
+    ])
+    expect(await store.batchManageConversations('delete', [])).toEqual({ action: 'delete', outcomes: [] })
+    await expect(store.batchManageConversations('delete', Array(101).fill(first.id)))
+      .rejects.toMatchObject({ code: 'INVALID_INPUT' })
+  })
+
+  it('keeps disk and memory unchanged if a batch write fails, then accepts a retry', async () => {
+    const store = new ConversationStore(testRoot)
+    const first = await store.createConversation('保留一')
+    const second = await store.createConversation('保留二')
+    const before = await fs.readFile(store.filePath, 'utf8')
+    vi.spyOn(store as unknown as { persist: (library: unknown) => Promise<void> }, 'persist')
+      .mockRejectedValueOnce(new Error('disk unavailable'))
+    await expect(store.batchManageConversations('delete', [first.id, second.id])).rejects.toThrow('disk unavailable')
+    expect(await fs.readFile(store.filePath, 'utf8')).toBe(before)
+    expect((await store.getState()).conversations.map((item) => item.id).sort()).toEqual([first.id, second.id].sort())
+    const retry = await store.batchManageConversations('delete', [first.id, second.id])
+    expect(retry.outcomes).toEqual([
+      { id: first.id, status: 'updated' }, { id: second.id, status: 'updated' }
+    ])
+    const state = await new ConversationStore(testRoot).getState()
+    expect(state.conversations).toHaveLength(1)
+    expect(state.activeConversationId).toBe(state.conversations[0].id)
+  })
+
   it('persists bounded private session context only on user history lines', async () => {
     const store = new ConversationStore(testRoot)
     const session = await store.createConversation('引用目标')
