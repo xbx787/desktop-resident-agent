@@ -4,6 +4,9 @@ import type { AgentGoal, AskAnswers, AskQuestionRequest, EffortLevel, PlanApprov
 export interface DialogueLine {
   role: 'user' | 'assistant'
   content: string
+  /** Frozen @conversation data for this user message. Main-process only;
+   * model requests expand it into content, while the visible text stays clean. */
+  sessionContext?: string
 }
 
 export interface ModelReply {

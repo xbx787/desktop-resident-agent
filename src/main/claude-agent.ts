@@ -140,7 +140,9 @@ export function boundedConversation(history: DialogueLine[], budget = HISTORY_PR
   let index = history.length - 1
   for (; index >= 0; index -= 1) {
     const line = history[index]
-    const content = clipUtf8(line.content, 8_000)
+    // File expansion can precede a frozen @conversation snapshot. In a cold
+    // replay, trim that expansion first so the quoted conversation survives.
+    const content = replayLineContent(line)
     const cost = Buffer.byteLength(content, 'utf8') + 48
     if (used + cost > budget) {
       // The newest line alone overflows: compress it rather than refuse the turn.
@@ -168,6 +170,15 @@ export function boundedConversation(history: DialogueLine[], budget = HISTORY_PR
   }
   if (clipped > 0) lines.unshift({ role: 'user', content: `（更早的 ${clipped} 条消息因篇幅省略）` })
   return lines
+}
+
+function replayLineContent(line: DialogueLine): string {
+  const context = line.sessionContext
+  if (!context) return clipUtf8(line.content, 8_000)
+  const at = line.content.indexOf(context)
+  if (at < 0) return clipUtf8(line.content, 36 * 1024)
+  return clipUtf8(line.content.slice(0, at), 8_000) + context +
+    clipUtf8(line.content.slice(at + context.length), 1_800)
 }
 
 export class ClaudeAgentClient implements ModelClient {

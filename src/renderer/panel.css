@@ -454,6 +454,15 @@
 .panel-tool-kill:hover { color: #fff; background: rgba(240, 126, 144, .38); }
 .panel-tool-activity pre { margin: 0 0 8px; max-height: 180px; padding: 7px; overflow: auto; border-radius: 6px; color: #dfebff; background: rgba(5, 17, 43, .25); font: 11px/1.5 Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .panel-tool-empty { padding: 8px 1px 2px; color: #9bb0d7; }
+/* An expanded tool shows its result first; the full input stays one quiet row
+   until requested. Native details/summary supplies keyboard activation. */
+.panel-tool-input-details { margin: 2px 3px 6px 13px; border-top: 1px solid rgba(185, 210, 255, .11); }
+.panel-tool-activity .panel-tool-input-details > summary { display: flex; align-items: center; gap: 5px; min-height: 22px; color: #95acd4; font-size: 10px; outline-offset: 2px; }
+.panel-tool-input-details > summary::before { content: '›'; display: inline-block; color: #8facda; font-size: 16px; line-height: 1; transition: transform 140ms ease; }
+.panel-tool-input-details[open] > summary::before { transform: rotate(90deg); }
+.panel-tool-input-details > summary:hover, .panel-tool-input-details[open] > summary { color: #d6e4fc; }
+.panel-tool-activity pre.panel-tool-input-code { margin: 0 0 5px 0; max-height: 240px; padding: 8px; -webkit-user-select: text; user-select: text; cursor: text; }
+@media (prefers-reduced-motion: reduce) { .panel-tool-input-details > summary::before { transition: none; } }
 /* What a writing tool expands to: the change itself, line by line — additions on
    green, removals on red, unchanged lines kept as dim context between them. */
 .panel-tool-activity pre.panel-tool-diff-body { padding: 0; max-height: 260px; }

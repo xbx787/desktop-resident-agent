@@ -9,7 +9,7 @@ import { toolLabel } from '../shared/tool-labels';
 import { AttachmentPreview, previewPlacement, type PreviewPlacement } from './attachment-preview';
 import { agentTasks } from './agent-tasks';
 import { splitAttachmentNote } from './attachment-note';
-import { ComposerSuggestions, detectComposerTrigger, fileMention, type ComposerSuggestion } from './composer-suggestions';
+import { ComposerSuggestions, detectComposerTrigger, fileMention, sessionSuggestionItems, workflowSuggestionItems, type ComposerSuggestion } from './composer-suggestions';
 import { pastedFileName, pastedFiles, restoreComposerState, stashComposerState, type StashedComposer } from './composer-drafts';
 import { GoalBanner } from './goal-banner';
 import { MessageMarkdown, writeClipboard } from './message-markdown';
@@ -27,6 +27,7 @@ import { ToolDiffBody } from './tool-diff-body';
 import { ToolIcon } from './tool-icons';
 import { toolArgumentPreview, toolPlanText } from './tool-arguments';
 import { toolDiffPreview } from './tool-diff';
+import { ToolInputDetails } from './tool-input-details';
 import { TurnStats } from './turn-stats';
 import { WorkingIndicator } from './working-indicator';
 import { TurnProcess, WorkCluster } from './work-cluster';
@@ -113,6 +114,23 @@ function ContextMeter({ usage, compacting, open, onToggle }: {
 }
 
 interface DroppedAttachment extends UserAttachment { id: string }
+
+/** A rejected submission goes back to the conversation it came from. Keep
+ * anything the owner typed or dropped while the IPC request was in flight. */
+function mergeComposerDraft(submitted: string, current: string): string {
+  if (!submitted) return current;
+  if (!current) return submitted;
+  return `${submitted.trimEnd()}\n\n${current}`;
+}
+
+function mergeComposerAttachments(submitted: DroppedAttachment[], current: DroppedAttachment[]): DroppedAttachment[] {
+  const merged = [...submitted];
+  for (const item of current) {
+    if (!merged.some((existing) => existing.id === item.id ||
+      (existing.name === item.name && existing.path === item.path && existing.content === item.content))) merged.push(item);
+  }
+  return merged;
+}
 
 const noopOpenImage = (): void => {};
 
@@ -225,10 +243,11 @@ export const TimelineItem = memo(function TimelineItem({ entry, running = false,
           {diff.removed > 0 && <span className="panel-tool-diff-del">−{diff.removed}</span>}
         </span>}
         <span className={`panel-tool-result is-${status}`} aria-hidden="true">{status === 'error' ? '×' : status === 'running' ? '…' : '✓'}</span>
-        {killable && <button type="button" className="panel-tool-kill" aria-label="中断这个命令" title="中断这个命令"
+        {killable && <button type="button" className="panel-tool-kill" aria-label="中断当前任务" title="中断当前任务"
           onClick={(event) => { event.preventDefault(); event.stopPropagation(); void petBridge().interruptTurn(); }}>×</button>}
       </summary>
       {toolOpened && body}
+      {toolOpened && <ToolInputDetails input={entry.tool?.input} />}
     </details>;
   }
   if (entry.kind === 'system') {
@@ -396,7 +415,9 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const [drawerBottom, setDrawerBottom] = useState<number | null>(null);
   const [libraryArchived, setLibraryArchived] = useState(false);
   const [libraryQuery, setLibraryQuery] = useState('');
-  const [libraryResults, setLibraryResults] = useState<ConversationSummary[]>([]);
+  const [librarySearch, setLibrarySearch] = useState<{
+    key: string; status: 'idle' | 'loading' | 'done' | 'error'; results: ConversationSummary[];
+  }>({ key: '', status: 'idle', results: [] });
   const [libraryError, setLibraryError] = useState<string | null>(null);
   const [libraryBusy, setLibraryBusy] = useState(false);
   const [compactBusy, setCompactBusy] = useState(false);
@@ -413,7 +434,8 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const [suggestionLoading, setSuggestionLoading] = useState(false);
   const [suggestionFailed, setSuggestionFailed] = useState(false);
   const [dismissedSuggestion, setDismissedSuggestion] = useState<string | null>(null);
-  const [busy, setBusy] = useState<'send' | 'approve' | 'reject' | 'stop' | null>(null);
+  const [busy, setBusy] = useState<'approve' | 'reject' | 'stop' | null>(null);
+  const [sendingConversationIds, setSendingConversationIds] = useState<Set<string | null>>(() => new Set());
   const composerExit = useExitAnimation(150);
   const [composerOpen, setComposerOpenRaw] = useState(false);
   function setComposerOpen(open: boolean) {
@@ -455,14 +477,21 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   openImageViewerRef.current = openImageViewer;
   const [quoteSelection, setQuoteSelection] = useState<{ text: string; x: number; y: number } | null>(null);
   const composerStash = useRef(new Map<string, StashedComposer<DroppedAttachment>>());
+  const goalPromptStash = useRef(new Map<string, boolean>());
+  const composerStateRef = useRef({ draft, attachments });
+  composerStateRef.current = { draft, attachments };
   const modelPickerRef = useRef<HTMLDivElement>(null);
   const effortMenuRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const composeTriggerRef = useRef<HTMLButtonElement>(null);
   const voiceManagerRef = useRef<VoiceManager | null>(null);
-  const submitLockRef = useRef(false);
+  const submitLockRef = useRef<Set<string | null>>(new Set());
   const workflowCacheRef = useRef<ClaudeWorkflowOption[] | null>(null);
   const library = snapshot?.conversationLibrary;
+  const activeConversationIdRef = useRef<string | null>(library?.activeConversationId ?? null);
+  useLayoutEffect(() => {
+    activeConversationIdRef.current = library?.activeConversationId ?? null;
+  }, [library?.activeConversationId]);
   const rowDisplay: RowDisplay = {
     showTimestamps: library?.settings.showMessageTimestamps ?? true,
     avatars: { user: library?.settings.userAvatar ?? null, assistant: library?.settings.assistantAvatar ?? null }
@@ -483,7 +512,11 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     (entry: TimelineEntry) => <RunParagraph entry={entry} onOpenImage={openImageViewerRef.current} />,
     []
   );
-  const libraryRevision = library?.conversations.map((item) => `${item.id}:${item.title}:${item.archivedAt ?? ''}`).join('|') ?? '';
+  const libraryRevision = JSON.stringify(library?.conversations.map((item) => [
+    item.id, item.title, item.archivedAt, item.updatedAt, item.messageCount
+  ]) ?? []);
+  const librarySearchKey = JSON.stringify([libraryQuery.trim(), libraryArchived, libraryRevision]);
+  const sendingCurrent = sendingConversationIds.has(library?.activeConversationId ?? null);
   const contextUsage = snapshot?.contextUsage;
   const contextCompacting = compactBusy || Boolean(snapshot?.contextCompacting);
   const recentSessions = (library?.conversations ?? []).filter((item) => !item.archivedAt);
@@ -532,7 +565,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   }, []);
 
   useEffect(() => {
-    if (!suggestionOpen || suggestionTrigger?.kind !== 'workflow') workflowCacheRef.current = null;
+    if (!suggestionOpen || (suggestionTrigger?.kind !== 'workflow' && suggestionTrigger?.kind !== 'skill')) workflowCacheRef.current = null;
   }, [suggestionOpen, suggestionTrigger?.kind]);
 
   useEffect(() => {
@@ -556,30 +589,32 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
       setSuggestionFailed(true);
       return;
     }
-    const query = suggestionTrigger.query.toLocaleLowerCase();
-    if (suggestionTrigger.kind === 'workflow') {
+    if (suggestionTrigger.kind === 'workflow' || suggestionTrigger.kind === 'skill') {
       const fetchOptions = workflowCacheRef.current
         ? Promise.resolve(workflowCacheRef.current)
         : bridge.listClaudeWorkflows().then((options) => { workflowCacheRef.current = options; return options; });
       void fetchOptions.then((options) => {
         if (cancelled) return;
-        setSuggestionItems(options.filter((option) => option.name.replace(/^\/+/, '').toLocaleLowerCase().includes(query)).slice(0, 50).map((option) => ({
-          id: `${option.kind}:${option.source}:${option.name}`,
-          label: `/${option.name.replace(/^\/+/, '')}`,
-          detail: `${option.kind === 'skill' ? '技能' : '命令'}，${option.source === 'project' ? '项目' : String(option.source) === 'builtin' ? '内置' : '用户'}${option.description ? `，${option.description}` : ''}`,
-          insertText: `/${option.name.replace(/^\/+/, '')}`,
-        })));
+        setSuggestionItems(workflowSuggestionItems(options, suggestionTrigger));
       }).catch(() => { if (!cancelled) { setSuggestionItems([]); setSuggestionFailed(true); } }).finally(() => { if (!cancelled) setSuggestionLoading(false); });
     } else {
+      const sessions = sessionSuggestionItems(library?.conversations ?? [], suggestionTrigger.query, library?.activeConversationId ?? null);
+      setSuggestionItems(sessions);
       timer = window.setTimeout(() => {
         void bridge.searchWorkspaceFiles(suggestionTrigger.query).then((files) => {
           if (cancelled) return;
-          setSuggestionItems(files.slice(0, 8).map((file) => ({ id: file.relativePath, label: file.name, detail: file.relativePath, insertText: fileMention(file.relativePath) })));
-        }).catch(() => { if (!cancelled) { setSuggestionItems([]); setSuggestionFailed(true); } }).finally(() => { if (!cancelled) setSuggestionLoading(false); });
+          const fileItems = files.slice(0, 8).map((file) => ({
+            id: file.relativePath,
+            label: file.name,
+            detail: `${file.kind === 'directory' ? '目录' : '文件'}，${file.relativePath}`,
+            insertText: fileMention(file.relativePath)
+          }));
+          setSuggestionItems([...sessions, ...fileItems].slice(0, 8));
+        }).catch(() => { if (!cancelled) { setSuggestionItems(sessions); setSuggestionFailed(true); } }).finally(() => { if (!cancelled) setSuggestionLoading(false); });
       }, 120);
     }
     return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer); };
-  }, [suggestionKey, suggestionOpen]);
+  }, [suggestionKey, suggestionOpen, libraryRevision]);
 
   useEffect(() => {
     if (!sessionMenuOpen) return;
@@ -692,21 +727,25 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   }, [snapshot?.taskMetrics?.finishedAt, snapshot?.mode]);
 
   useEffect(() => {
-    if (!libraryOpen || !libraryQuery.trim()) return;
+    if (!libraryOpen || !libraryQuery.trim()) {
+      setLibrarySearch((current) => current.status === 'idle' ? current : { key: '', status: 'idle', results: [] });
+      return;
+    }
     let cancelled = false;
+    setLibrarySearch({ key: librarySearchKey, status: 'loading', results: [] });
     const timer = window.setTimeout(() => {
       try {
         void petBridge().searchConversations(libraryQuery, libraryArchived).then((results) => {
-          if (!cancelled) { setLibraryResults(results); setLibraryError(null); }
-        }).catch((cause: unknown) => {
-          if (!cancelled) setLibraryError(cause instanceof Error ? cause.message : String(cause));
+          if (!cancelled) setLibrarySearch({ key: librarySearchKey, status: 'done', results });
+        }).catch(() => {
+          if (!cancelled) setLibrarySearch({ key: librarySearchKey, status: 'error', results: [] });
         });
-      } catch (cause) {
-        if (!cancelled) setLibraryError(cause instanceof Error ? cause.message : String(cause));
+      } catch {
+        if (!cancelled) setLibrarySearch({ key: librarySearchKey, status: 'error', results: [] });
       }
     }, 150);
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [libraryOpen, libraryQuery, libraryArchived, libraryRevision]);
+  }, [libraryOpen, librarySearchKey]);
 
   // While the library drawer is open its lower edge tracks the composer's top
   // edge: the dock's distance from the workspace's bottom is re-measured
@@ -803,17 +842,63 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     return () => cancelAnimationFrame(frame);
   }, [visible, composerOpen, snapshot?.timeline.length, newestText, snapshot?.proposal?.id]);
 
+  function restoreRejectedSubmission(originId: string | null, sentDraft: string,
+    sentAttachments: DroppedAttachment[], goal = false): void {
+    const stillHere = activeConversationIdRef.current === originId;
+    const current = stillHere ? composerStateRef.current : restoreComposerState(composerStash.current, originId);
+    const restored = {
+      draft: mergeComposerDraft(sentDraft, current.draft),
+      attachments: mergeComposerAttachments(sentAttachments, current.attachments)
+    };
+    if (originId) {
+      stashComposerState(composerStash.current, originId, restored.draft, restored.attachments);
+      if (goal) goalPromptStash.current.set(originId, true);
+    }
+    if (!stillHere) return;
+    composerStateRef.current = restored;
+    setDraft(restored.draft);
+    setAttachments(restored.attachments);
+    if (restored.attachments.length > 5) setAttachmentError('已保留全部附件；一次最多发送 5 个，请先移除多余附件。');
+    if (goal) setGoalPrompting(true);
+    setComposerOpen(true);
+  }
+
+  function beginSubmission(conversationId: string | null): boolean {
+    if (submitLockRef.current.has(conversationId)) return false;
+    submitLockRef.current.add(conversationId);
+    setSendingConversationIds(new Set(submitLockRef.current));
+    return true;
+  }
+
+  function endSubmission(conversationId: string | null): void {
+    submitLockRef.current.delete(conversationId);
+    setSendingConversationIds(new Set(submitLockRef.current));
+  }
+
   async function send(strategy: 'queue' | 'steer' = 'queue') {
     if (goalPrompting) {
       const goal = draft.trim();
-      if (!goal || submitLockRef.current || contextCompacting) return;
+      const originId = activeConversationIdRef.current;
+      if (!goal || submitLockRef.current.has(originId) || contextCompacting) return;
+      const sentDraft = draft;
+      if (originId) {
+        stashComposerState(composerStash.current, originId, '', attachments);
+        goalPromptStash.current.set(originId, false);
+      }
+      composerStateRef.current = { draft: '', attachments };
       setDraft('');
       setGoalPrompting(false);
-      await sendGoal(`/goal ${goal}`);
+      const accepted = await sendGoal(`/goal ${goal}`, originId);
+      if (!accepted) restoreRejectedSubmission(originId, sentDraft, [], true);
       return;
     }
     const message = draft.trim() || (attachments.length ? '请阅读附件并帮助我。' : '');
-    if (!message || submitLockRef.current || contextCompacting) return;
+    const originId = activeConversationIdRef.current;
+    if (!message || submitLockRef.current.has(originId) || contextCompacting) return;
+    if (attachments.length > 5) {
+      setAttachmentError('一次最多发送 5 个附件，请先移除多余附件。');
+      return;
+    }
     const attachmentSize = attachments.reduce((sum, item) => sum + item.content.length + (item.path?.length ?? 0) + item.name.length + 100, 0);
     if (message.length + attachmentSize > 8_000) {
       setAttachmentError('消息与附件内容合计不能超过 8000 字，请移除较大的文件。');
@@ -823,23 +908,21 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     const sentDraft = draft;
     const sentAttachments = attachments;
     const payload = attachments.map(({ name, content, path }) => ({ name, content, path }));
-    submitLockRef.current = true;
-    setBusy('send');
+    if (!beginSubmission(originId)) return;
+    if (originId) stashComposerState(composerStash.current, originId, '', []);
+    composerStateRef.current = { draft: '', attachments: [] };
     setDraft('');
     setAttachments([]);
     setAttachmentError(null);
     let accepted = false;
     try {
-      accepted = await run((bridge) => bridge.sendMessage(message, payload, strategy));
+      accepted = await run((bridge) => bridge.sendMessage(message, payload, strategy, originId ?? undefined));
+    } catch (cause) {
+      setAttachmentError(cause instanceof Error ? cause.message : '发送失败，草稿已恢复。');
     } finally {
-      submitLockRef.current = false;
-      setBusy((current) => current === 'send' ? null : current);
+      endSubmission(originId);
     }
-    if (!accepted) {
-      setDraft((current) => current || sentDraft);
-      setAttachments((current) => current.length ? current : sentAttachments);
-      setComposerOpen(true);
-    }
+    if (!accepted) restoreRejectedSubmission(originId, sentDraft, sentAttachments);
   }
 
   function acceptSuggestion(item: ComposerSuggestion) {
@@ -928,17 +1011,17 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
 
   /** Goal mode is the CLI's own /goal: the command starts the stop-hook loop,
    *  /goal clear ends it. The composer draft is left untouched. */
-  async function sendGoal(text: string) {
-    if (!snapshot || !text.trim() || submitLockRef.current) return;
-    submitLockRef.current = true;
-    setBusy('send');
+  async function sendGoal(text: string, conversationId: string | null = activeConversationIdRef.current): Promise<boolean> {
+    if (!snapshot || !text.trim() || !beginSubmission(conversationId)) return false;
     try {
       const activeTurn = ['planning', 'awaiting_approval', 'executing', 'verifying'].includes(snapshot.taskStatus);
       const strategy = text.trim() === '/goal clear' && activeTurn ? 'steer' : 'queue';
-      await run((bridge) => bridge.sendMessage(text, [], strategy));
+      return await run((bridge) => bridge.sendMessage(text, [], strategy, conversationId ?? undefined));
+    } catch (cause) {
+      setAttachmentError(cause instanceof Error ? cause.message : '目标发送失败，内容已恢复。');
+      return false;
     } finally {
-      submitLockRef.current = false;
-      setBusy((current) => current === 'send' ? null : current);
+      endSubmission(conversationId);
     }
   }
 
@@ -981,14 +1064,14 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
 
   async function decide(approved: boolean) {
     const id = snapshot?.proposal?.id;
-    if (!id || busy) return;
+    if (!id || busy || sendingCurrent) return;
     setBusy(approved ? 'approve' : 'reject');
     await run((bridge) => approved ? bridge.approveAction(id) : bridge.rejectAction(id));
     setBusy(null);
   }
 
   async function stop() {
-    if (busy && busy !== 'send') return;
+    if (busy) return;
     setBusy('stop');
     voiceManagerRef.current?.stopSpeaking();
     await run((bridge) => bridge.stop());
@@ -1149,29 +1232,40 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   }
 
   async function createConversation() {
-    stashComposerState(composerStash.current, library?.activeConversationId, draft, attachments);
+    const currentId = activeConversationIdRef.current;
+    stashComposerState(composerStash.current, currentId, composerStateRef.current.draft, composerStateRef.current.attachments);
+    if (currentId) goalPromptStash.current.set(currentId, goalPrompting);
     await libraryAction((bridge) => bridge.createConversation(), () => {
+      activeConversationIdRef.current = null;
       setLibraryOpen(false);
+      composerStateRef.current = { draft: '', attachments: [] };
       setDraft('');
       setAttachments([]);
+      setGoalPrompting(false);
       setComposerOpen(true);
     });
   }
 
   async function selectConversation(item: ConversationSummary) {
-    stashComposerState(composerStash.current, library?.activeConversationId, draft, attachments);
+    const currentId = activeConversationIdRef.current;
+    stashComposerState(composerStash.current, currentId, composerStateRef.current.draft, composerStateRef.current.attachments);
+    if (currentId) goalPromptStash.current.set(currentId, goalPrompting);
     const operation = item.archivedAt === null
       ? (bridge: PetAPI) => bridge.selectConversation(item.id)
       : (bridge: PetAPI) => bridge.restoreConversation(item.id);
     await libraryAction(operation, () => {
+      activeConversationIdRef.current = item.id;
       setLibraryOpen(false);
       setSessionMenuOpen(false);
       const saved = restoreComposerState(composerStash.current, item.id);
+      composerStateRef.current = saved;
       setDraft(saved.draft);
       setAttachments(saved.attachments);
       setCaretIndex(saved.draft.length);
-      setAttachmentError(null);
-      setComposerOpen(Boolean(saved.draft || saved.attachments.length));
+      setAttachmentError(saved.attachments.length > 5 ? '已保留全部附件；一次最多发送 5 个，请先移除多余附件。' : null);
+      const goalDraftOpen = goalPromptStash.current.get(item.id) ?? false;
+      setGoalPrompting(goalDraftOpen);
+      setComposerOpen(Boolean(saved.draft || saved.attachments.length || goalDraftOpen));
     });
   }
 
@@ -1181,8 +1275,12 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     await libraryAction((bridge) => bridge.renameConversation(id, title), () => setRenameId(null));
   }
 
-  const visibleConversations = libraryQuery.trim()
-    ? libraryResults
+  const searchActive = Boolean(libraryQuery.trim());
+  const searchStatus = searchActive
+    ? librarySearch.key === librarySearchKey ? librarySearch.status : 'loading'
+    : 'idle';
+  const visibleConversations = searchActive
+    ? searchStatus === 'done' ? librarySearch.results : []
     : library?.conversations.filter((item) => (item.archivedAt !== null) === libraryArchived) ?? [];
 
   const status = snapshot?.proposal ? 'awaiting_approval' : snapshot?.taskStatus ?? 'idle';
@@ -1193,7 +1291,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const active = ['planning', 'awaiting_approval', 'executing', 'verifying'].includes(status);
   const statusLive = status === 'planning' || status === 'executing' || status === 'verifying';
   const queuedCount = snapshot?.pendingMessages?.length ?? 0;
-  const empty = !libraryOpen && busy !== 'send' && !error && !voiceError && status === 'idle' && !snapshot?.currentTask && !snapshot?.timeline.length && !snapshot?.proposal && queuedCount === 0;
+  const empty = !libraryOpen && !sendingCurrent && !error && !voiceError && status === 'idle' && !snapshot?.currentTask && !snapshot?.timeline.length && !snapshot?.proposal && queuedCount === 0;
   // With no conversation left the bubble keeps its full shape: the ball form
   // has no tab strip and no room for the "+", and starting fresh is exactly
   // what the owner wants to do next.
@@ -1563,11 +1661,11 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
                 <TurnStats entries={group.items} metrics={index === latestTurnIndex ? snapshot?.taskMetrics : undefined} running={index === latestTurnIndex && active} />
               </div>;
             })}
-            <WorkingIndicator sending={busy === 'send'} thinking={liveThinking} status={status} tool={runningTool} startedAt={snapshot?.taskMetrics?.startedAt} />
+            <WorkingIndicator sending={sendingCurrent} thinking={liveThinking} status={status} tool={runningTool} startedAt={snapshot?.taskMetrics?.startedAt} />
             {snapshot?.proposal && (
               <ApprovalCard
                 proposal={snapshot.proposal}
-                busy={Boolean(busy)}
+                busy={Boolean(busy) || sendingCurrent}
                 onApprove={() => { void decide(true); }}
                 onReject={() => { void decide(false); }}
               />
@@ -1635,7 +1733,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
             />
           ) : composerOpen || composerExit.closing ? (
           <form className={`panel-composer${composerOpen ? '' : ' is-closing'}`} ref={composerRef} onAnimationEnd={composerExit.endClose} onSubmit={(event) => { event.preventDefault(); void send('queue'); }} onKeyDown={(event) => {
-              if (event.key === 'Escape') {
+              if (event.key === 'Escape' && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
                 event.preventDefault();
                 event.stopPropagation();
                 if (modelPickerOpen) setModelPickerOpen(false);
@@ -1767,8 +1865,8 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
                     <button type="button" className="panel-compact-button" disabled={contextCompacting || !snapshot || snapshot.mode === 'demo'} onClick={() => { void compactContext(); }}>{contextCompacting ? '压缩中…' : '压缩上下文'}</button>
                   </div>
                 </div>
-                <button type={active && !draft.trim() && !attachments.length ? 'button' : 'submit'} className={`panel-send${busy === 'send' ? ' is-sending' : ''}`} disabled={(!active && !draft.trim() && !attachments.length) || Boolean(busy) || !snapshot || (contextCompacting && !(active && !draft.trim() && !attachments.length))} aria-label={goalPrompting ? '设定目标' : busy === 'send' ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务' : active ? '排队发送消息' : '发送消息'} title={goalPrompting ? '回车设定目标' : busy === 'send' ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务' : active ? snapshot?.mode === 'claude_code' ? 'Enter 排队发送，Ctrl+Enter 插队发送' : 'Enter 排队发送，Ctrl+Enter 优先排队' : '发送消息'} onClick={active && !draft.trim() && !attachments.length ? () => { void stop(); } : undefined}>
-                  {busy === 'send' ? <span className="panel-send-spinner" aria-hidden="true" /> : active && !draft.trim() && !attachments.length ? <span className="panel-stop-square" /> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11m-5-5 5 5-5 5" /></svg>}
+                <button type={active && !draft.trim() && !attachments.length ? 'button' : 'submit'} className={`panel-send${sendingCurrent ? ' is-sending' : ''}`} disabled={(!active && !draft.trim() && !attachments.length) || Boolean(busy) || sendingCurrent || !snapshot || (contextCompacting && !(active && !draft.trim() && !attachments.length))} aria-label={goalPrompting ? '设定目标' : sendingCurrent ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务' : active ? '排队发送消息' : '发送消息'} title={goalPrompting ? '回车设定目标' : sendingCurrent ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务' : active ? snapshot?.mode === 'claude_code' ? 'Enter 排队发送，Ctrl+Enter 插队发送' : 'Enter 排队发送，Ctrl+Enter 优先排队' : '发送消息'} onClick={active && !draft.trim() && !attachments.length ? () => { void stop(); } : undefined}>
+                  {sendingCurrent ? <span className="panel-send-spinner" aria-hidden="true" /> : active && !draft.trim() && !attachments.length ? <span className="panel-stop-square" /> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11m-5-5 5 5-5 5" /></svg>}
                 </button>
               </div>
             </form>
@@ -1785,13 +1883,15 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
             <button type="button" className="panel-library-icon panel-library-new" disabled={libraryBusy} aria-label="新建会话" title="新建会话" onClick={() => { void createConversation(); }}><PlusIcon /></button>
           </header>
           <div className="panel-library-tabs" role="tablist" aria-label="会话状态">
-            <button type="button" role="tab" aria-selected={!libraryArchived} onClick={() => { setLibraryArchived(false); setLibraryResults([]); }}>未归档</button>
-            <button type="button" role="tab" aria-selected={libraryArchived} onClick={() => { setLibraryArchived(true); setLibraryResults([]); }}>已归档</button>
+            <button type="button" role="tab" aria-selected={!libraryArchived} onClick={() => setLibraryArchived(false)}>未归档</button>
+            <button type="button" role="tab" aria-selected={libraryArchived} onClick={() => setLibraryArchived(true)}>已归档</button>
           </div>
-          <input className="panel-library-search" type="search" aria-label="搜索会话" placeholder="搜索会话与消息" value={libraryQuery} onChange={(event) => { setLibraryQuery(event.target.value); setLibraryResults([]); }} />
+          <input className="panel-library-search" type="search" aria-label="搜索会话" placeholder="搜索会话与消息" value={libraryQuery} onChange={(event) => setLibraryQuery(event.target.value)} />
           {libraryError && <div className="panel-library-error" role="alert">{libraryError}</div>}
           <div className="panel-session-list" aria-label={libraryArchived ? '已归档会话' : '未归档会话'}>
-            {visibleConversations.length === 0 && <div className="panel-library-empty">{libraryQuery ? '没有找到会话' : libraryArchived ? '暂无归档会话' : '开始一个新对话'}</div>}
+            {searchStatus === 'loading' && <div className="panel-library-empty" role="status">正在搜索…</div>}
+            {searchStatus === 'error' && <div className="panel-library-empty" role="alert">搜索失败，请重新输入或切换分类后重试。</div>}
+            {visibleConversations.length === 0 && (searchStatus === 'done' || !searchActive) && <div className="panel-library-empty">{searchActive ? '没有找到会话' : libraryArchived ? '暂无归档会话' : '开始一个新对话'}</div>}
             {visibleConversations.map((item) => <div key={item.id} className={`panel-session${library?.activeConversationId === item.id ? ' is-current' : ''}`}>
               {renameId === item.id ? <form className="panel-session-edit" onSubmit={(event) => { event.preventDefault(); void saveRename(item.id); }}>
                 <input autoFocus aria-label="会话名称" maxLength={120} value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setRenameId(null); }} />

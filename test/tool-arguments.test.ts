@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { toolArgumentPreview, toolPlanText } from '../src/renderer/tool-arguments'
+import { toolArgumentDetails, toolArgumentPreview, toolPlanText } from '../src/renderer/tool-arguments'
 
 describe('toolArgumentPreview', () => {
   it('picks the field that names the object of the call', () => {
@@ -24,6 +24,15 @@ describe('toolArgumentPreview', () => {
 
   it('previews the plan itself, not just the file fields', () => {
     expect(toolArgumentPreview('{"plan":"1. 先看日志\\n2. 再改代码"}')).toBe('1. 先看日志 2. 再改代码')
+  })
+})
+
+describe('toolArgumentDetails', () => {
+  it('keeps every input field and line break in the expanded view', () => {
+    expect(toolArgumentDetails('{"command":"cd src\\nls -la","description":"查看源码"}'))
+      .toBe('{\n  "command": "cd src\\nls -la",\n  "description": "查看源码"\n}')
+    expect(toolArgumentDetails('first\nsecond')).toBe('first\nsecond')
+    expect(toolArgumentDetails(undefined)).toBe('')
   })
 })
 

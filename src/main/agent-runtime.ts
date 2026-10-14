@@ -280,7 +280,7 @@ export class AgentRuntime {
   }
 
   /** Adds guidance to the active SDK turn at its next native execution boundary. */
-  async steerMessage(rawText: string, attachments: UserAttachment[] = []): Promise<boolean> {
+  async steerMessage(rawText: string, attachments: UserAttachment[] = [], sessionContext = ''): Promise<boolean> {
     if (!this.isBusy() || this.state.mode !== 'claude_code') return false
     if (!validAttachmentList(attachments)) return false
     const text = rawText.trim()
@@ -292,9 +292,9 @@ export class AgentRuntime {
     const expandedText = this.workspaceRoot
       ? await expandFileMentions(text, this.workspaceRoot, { maxFileBytes: 32 * 1024, maxTotalBytes: 48 * 1024 })
       : { prompt: text }
-    const expandedPrompt = [expandedText.prompt, context].filter(Boolean).join('\n\n')
+    const expandedPrompt = [expandedText.prompt, context, sessionContext].filter(Boolean).join('\n\n')
     if (!await model.steer(expandedPrompt)) return false
-    this.history.push({ role: 'user', content: prompt })
+    this.history.push({ role: 'user', content: prompt, ...(sessionContext ? { sessionContext } : {}) })
     this.add('user', attachments.length ? `${text || '请阅读附件并帮助我。'}\n附件：${attachments.map(({ name }) => name).join('、')}` : text, messageImages(attachments))
     return true
   }
@@ -351,7 +351,7 @@ export class AgentRuntime {
     }
   }
 
-  async sendMessage(rawText: string, attachments: UserAttachment[] = []): Promise<void> {
+  async sendMessage(rawText: string, attachments: UserAttachment[] = [], sessionContext = ''): Promise<void> {
     const text = rawText.trim()
     if (!validAttachmentList(attachments)) {
       this.add('system', '附件数量或大小超过限制。')
@@ -382,7 +382,7 @@ export class AgentRuntime {
     this.state.taskMetrics = { startedAt: new Date().toISOString() }
     this.state.taskStatus = 'planning'
     this.state.avatarState = 'thinking'
-    this.history.push({ role: 'user', content: prompt })
+    this.history.push({ role: 'user', content: prompt, ...(sessionContext ? { sessionContext } : {}) })
     this.add('user', attachments.length ? `${text || '请阅读附件并帮助我。'}\n附件：${attachments.map(({ name }) => name).join('、')}` : text, messageImages(attachments))
 
     if (!this.model) {
@@ -403,16 +403,25 @@ export class AgentRuntime {
     let thinkingEntryId: string | undefined
     let thinkingSegment: number | undefined
     try {
-      const modelHistory = [...this.history]
+      // Persist the frozen source separately from visible user text. Rebuild
+      // the model's transcript on every turn, including after app restart.
+      // DeepSeek's own last-20-line window naturally ages old references out.
+      const modelHistory = this.history.map((line) => ({
+        ...line,
+        content: line.sessionContext ? `${line.content}\n\n${line.sessionContext}` : line.content
+      }))
       if (this.workspaceRoot) {
         const expanded = await expandFileMentions(text, this.workspaceRoot, { maxFileBytes: 32 * 1024, maxTotalBytes: 48 * 1024 })
-        modelHistory[modelHistory.length - 1] = { role: 'user', content: [expanded.prompt, context].filter(Boolean).join('\n\n') }
+        modelHistory[modelHistory.length - 1] = {
+          ...modelHistory[modelHistory.length - 1],
+          content: [expanded.prompt, context, sessionContext].filter(Boolean).join('\n\n')
+        }
       }
       if (this.memoryContextProvider) {
         const memory = await this.memoryContextProvider().catch(() => '')
         if (memory) {
           const last = modelHistory[modelHistory.length - 1]
-          modelHistory[modelHistory.length - 1] = { role: 'user', content: `${last.content}\n\n<user_memory>\n${memory}\n</user_memory>` }
+          modelHistory[modelHistory.length - 1] = { ...last, content: `${last.content}\n\n<user_memory>\n${memory}\n</user_memory>` }
         }
       }
       if (abort.signal.aborted || currentGeneration !== this.generation) return

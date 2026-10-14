@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { AppSnapshot, AskAnswers, ContextUsageSnapshot, ModelMode, ModelProfile, TimelineEntry, UserAttachment } from '../shared/contracts'
 import { deleteTurnEntries, type AgentRuntime } from './agent-runtime'
 import { attachmentContext, validAttachmentList } from './local-context'
+import { snapshotSessionMentions } from './session-context'
 import {
   ConversationStore,
   ConversationStoreError,
@@ -43,6 +44,13 @@ function validateMessage(text: string, attachments: UserAttachment[]): string {
     throw new ConversationStoreError('INVALID_INPUT', '消息不能为空，且单条消息最多 8000 字。')
   }
   return clean
+}
+
+/** The renderer needs the queue controls, never another conversation's frozen
+ * source text that was captured for a model request. */
+function visiblePending(message: PendingMessage): PendingMessage {
+  const { sessionContext: _context, ...visible } = message
+  return structuredClone(visible)
 }
 
 /**
@@ -198,7 +206,7 @@ export class ConversationController {
         ...runtime.getSnapshot(),
         conversationId: id,
         conversationLibrary: library,
-        pendingMessages: structuredClone(this.pending.get(id) ?? [])
+        pendingMessages: (this.pending.get(id) ?? []).map(visiblePending)
       }
     }
     // Cold conversation: served from its record, full timeline, idle.
@@ -213,7 +221,7 @@ export class ConversationController {
       claudeCodeReady: this.readiness.claudeCodeReady,
       conversationId: id,
       conversationLibrary: library,
-      pendingMessages: structuredClone(this.pending.get(id) ?? [])
+      pendingMessages: (this.pending.get(id) ?? []).map(visiblePending)
     }
   }
 
@@ -343,12 +351,21 @@ export class ConversationController {
       throw new ConversationStoreError('INVALID_INPUT', '不支持的发送方式。')
     }
     const clean = validateMessage(text, attachments)
+    const sessionContext = await snapshotSessionMentions(clean, id, async (sourceId) => {
+      const record = await this.store.getConversation(sourceId)
+      if (!record) return null
+      const sourceRuntime = this.runtimes.get(sourceId)
+      if (!sourceRuntime) return record
+      if (sourceRuntime.isRunning()) throw new ConversationStoreError('INVALID_INPUT', '引用会话仍在运行，请等它回复完成后再发送。')
+      return { ...record, ...sourceRuntime.exportConversationState() }
+    })
     const runtime = await this.ensureRuntime(id)
     if (runtime.getSnapshot().mode !== 'claude_code' && attachments.some((item) => item.path && !item.content)) {
       throw new ConversationStoreError('INVALID_INPUT', '当前模型没有本地文件读取工具。请切换到 Claude Code 模式后再发送此文件。')
     }
     const message: PendingMessage = {
-      id: randomUUID(), text: clean, attachments: structuredClone(attachments), createdAt: new Date().toISOString()
+      id: randomUUID(), text: clean, attachments: structuredClone(attachments), createdAt: new Date().toISOString(),
+      ...(sessionContext ? { sessionContext } : {})
     }
     return this.serialize(async () => {
       const queue = this.queueOf(id)
@@ -356,19 +373,19 @@ export class ConversationController {
         if (clean === '/goal clear' && runtime.getSnapshot().mode === 'claude_code') {
           // Allow a goal-clear command through without releasing older work.
           this.scheduleDrain(id, message, true)
-          return structuredClone(message)
+          return visiblePending(message)
         }
         this.pausedQueues.delete(id)
         runtime.resumeQueue()
         queue.unshift(message)
         await this.persistConversation(id)
         this.scheduleDrain(id)
-        return structuredClone(message)
+        return visiblePending(message)
       }
       if (strategy === 'steer') {
-        if (await runtime.steerMessage(message.text, message.attachments)) {
+        if (await runtime.steerMessage(message.text, message.attachments, message.sessionContext)) {
           await this.persistConversation(id)
-          return structuredClone(message)
+          return visiblePending(message)
         }
         // Native steering is only available inside an active Claude Code turn.
         // Otherwise place this guidance next, without stopping the turn or dropping queued work.
@@ -381,13 +398,13 @@ export class ConversationController {
         // its usual loop, so anything queued while this turn runs is picked
         // up the moment it ends.
         this.scheduleDrain(id, message)
-        return structuredClone(message)
+        return visiblePending(message)
       } else {
         queue.push(message)
       }
       await this.persistConversation(id)
       this.scheduleDrain(id)
-      return structuredClone(message)
+      return visiblePending(message)
     })
   }
 
@@ -442,7 +459,7 @@ export class ConversationController {
           ? (next.text.split(/\r?\n/u, 1)[0].trim() || `附件：${next.attachments[0]?.name ?? '对话'}`).slice(0, 60)
           : undefined
         const beforeCount = runtime.exportConversationState().timeline.length
-        const run = runtime.sendMessage(next.text, next.attachments)
+        const run = runtime.sendMessage(next.text, next.attachments, next.sessionContext)
         try {
           await this.persistConversation(id, title)
         } catch (error) {
@@ -520,7 +537,7 @@ export class ConversationController {
       const index = queue.findIndex((message) => message.id === id)
       const message = queue.splice(index, 1)[0]
       const runtime = this.runtimes.get(owner)
-      if (!runtime || !await runtime.steerMessage(message.text, message.attachments)) {
+      if (!runtime || !await runtime.steerMessage(message.text, message.attachments, message.sessionContext)) {
         queue.unshift(message)
       }
       await this.persistConversation(owner)

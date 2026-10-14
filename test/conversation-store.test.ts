@@ -21,6 +21,22 @@ afterEach(async () => {
 })
 
 describe('persistent conversation library', () => {
+  it('persists bounded private session context only on user history lines', async () => {
+    const store = new ConversationStore(testRoot)
+    const session = await store.createConversation('引用目标')
+    const context = 'x'.repeat(26 * 1024)
+    await store.updateConversation(session.id, {
+      history: [{ role: 'user', content: '可见问题', sessionContext: context }]
+    })
+    expect((await new ConversationStore(testRoot).getConversation(session.id))?.history[0].sessionContext).toBe(context)
+    await expect(store.updateConversation(session.id, {
+      history: [{ role: 'user', content: '可见问题', sessionContext: `${context}x` }]
+    })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    await expect(store.updateConversation(session.id, {
+      history: [{ role: 'assistant', content: '答复', sessionContext: '私有引用' }]
+    })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+  })
+
   it('keeps stable task statuses and marks abandoned running tasks as cancelled after restart', async () => {
     const store = new ConversationStore(testRoot)
     const finished = await store.createConversation('完成的任务')

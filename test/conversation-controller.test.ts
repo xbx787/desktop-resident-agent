@@ -7,6 +7,7 @@ import { ConversationController } from '../src/main/conversation-controller'
 import { ConversationStore } from '../src/main/conversation-store'
 import type { ModelClient, ModelReply } from '../src/main/deepseek'
 import type { ModelProfile } from '../src/shared/contracts'
+import { sessionMentionToken } from '../src/shared/session-mentions'
 import { NoteStore } from '../src/main/note-store'
 
 const projectRoot = process.cwd()
@@ -37,6 +38,120 @@ async function until(check: () => boolean, label: string): Promise<void> {
 }
 
 describe('conversation controller', () => {
+  it('freezes a referenced conversation when queued and hides its snapshot from the renderer', async () => {
+    const calls: Array<{ text: string; resolve: (reply: ModelReply) => void }> = []
+    const model: ModelClient = { respond: history => new Promise((resolve) => {
+      calls.push({ text: history.at(-1)!.content, resolve })
+    }) }
+    const store = new ConversationStore(testRoot)
+    const controller = new ConversationController(store,
+      onChange => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model))
+    await controller.initialize()
+    const sourceId = controller.getSnapshot().conversationLibrary.activeConversationId!
+    await controller.sendMessage('源问题')
+    await until(() => calls.length === 1, 'source request')
+    calls[0].resolve({ text: '原始最终答复' })
+    await until(() => controller.getSnapshot().taskStatus === 'done', 'source finished')
+
+    const target = await controller.createConversation('目标会话')
+    await controller.sendMessage('先处理这个任务')
+    await until(() => calls.length === 2, 'target running')
+    const token = sessionMentionToken('源会话', sourceId)
+    await controller.sendMessage(`请参考 ${token}`)
+    const queued = (await store.getConversation(target.id))!.pendingMessages[0]
+    expect(queued.sessionContext).toContain('原始最终答复')
+    expect(controller.getSnapshot().pendingMessages[0]).not.toHaveProperty('sessionContext')
+    const source = (await store.getConversation(sourceId))!
+    await store.updateConversation(sourceId, {
+      timeline: source.timeline.map(entry => entry.kind === 'assistant' ? { ...entry, text: '后来修改的答复' } : entry),
+      history: source.history.map(line => line.role === 'assistant' ? { ...line, content: '后来修改的答复' } : line)
+    })
+    calls[1].resolve({ text: '先前任务完成' })
+    await until(() => calls.length === 3, 'queued referenced request')
+    expect(calls[2].text).toContain('原始最终答复')
+    expect(calls[2].text).not.toContain('后来修改的答复')
+    calls[2].resolve({ text: '引用已处理' })
+    await until(() => controller.getSnapshot().taskStatus === 'done', 'reference turn finished')
+    const saved = (await store.getConversation(target.id))!
+    expect(saved.history.some(line => line.role === 'user' && line.content.includes(token))).toBe(true)
+    expect(saved.history.every(line => !line.content.includes('<referenced_conversations>'))).toBe(true)
+    expect(saved.history.find(line => line.role === 'user' && line.content.includes(token))?.sessionContext)
+      .toContain('原始最终答复')
+    expect(JSON.stringify(controller.getSnapshot())).not.toContain('<referenced_conversations>')
+  })
+
+  it('delivers a referenced conversation through native steering while keeping visible history clean', async () => {
+    const store = new ConversationStore(testRoot)
+    const source = await store.createConversation('源会话', 'claude_code')
+    await store.updateConversation(source.id, {
+      timeline: [
+        { id: randomUUID(), kind: 'user', time: new Date().toISOString(), text: '源问题' },
+        { id: randomUUID(), kind: 'assistant', time: new Date().toISOString(), text: '源最终答复' }
+      ],
+      history: [{ role: 'user', content: '源问题' }, { role: 'assistant', content: '源最终答复' }]
+    })
+    await store.createConversation('目标会话', 'claude_code')
+    let finish!: (reply: ModelReply) => void
+    const guidance: string[] = []
+    const model: ModelClient & { steer: (text: string) => boolean } = {
+      respond: () => new Promise(resolve => { finish = resolve }),
+      steer: text => { guidance.push(text); return true }
+    }
+    const controller = new ConversationController(store,
+      onChange => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model))
+    await controller.initialize()
+    await controller.sendMessage('正在进行的任务')
+    await until(() => Boolean(finish), 'active target turn')
+    const token = sessionMentionToken(source.title, source.id)
+    await controller.sendMessage(`请结合 ${token}`, [], 'steer')
+    expect(guidance).toHaveLength(1)
+    expect(guidance[0]).toContain('源最终答复')
+    expect(controller.displayedRuntime()!.exportConversationState().history.at(-1)?.content).toBe(`请结合 ${token}`)
+    expect(controller.displayedRuntime()!.exportConversationState().history.at(-1)?.sessionContext).toContain('源最终答复')
+    finish({ text: '完成' })
+    await until(() => controller.getSnapshot().taskStatus === 'done', 'steered turn finished')
+  })
+
+  it('replays a frozen reference on a DeepSeek follow-up after restart and source deletion', async () => {
+    const store = new ConversationStore(testRoot)
+    const source = await store.createConversation('源会话', 'live')
+    await store.updateConversation(source.id, {
+      timeline: [
+        { id: randomUUID(), kind: 'user', time: new Date().toISOString(), text: '源问题' },
+        { id: randomUUID(), kind: 'assistant', time: new Date().toISOString(), text: '冻结的源答复' }
+      ],
+      history: [{ role: 'user', content: '源问题' }, { role: 'assistant', content: '冻结的源答复' }],
+      taskStatus: 'done'
+    })
+    const target = await store.createConversation('目标会话', 'live')
+    const calls: Array<Array<{ role: string; content: string }>> = []
+    const model: ModelClient = { respond: async history => {
+      calls.push(structuredClone(history))
+      return { text: `目标答复 ${calls.length}` }
+    } }
+    const createController = (disk: ConversationStore) => new ConversationController(disk,
+      onChange => new AgentRuntime(new NoteStore(testRoot), model, onChange))
+    const first = createController(store)
+    await first.initialize()
+    const token = sessionMentionToken(source.title, source.id)
+    await first.sendMessage(`请参考 ${token}`)
+    await until(() => calls.length === 1 && first.getSnapshot().taskStatus === 'done', 'first reference reply')
+    const saved = (await store.getConversation(target.id))!
+    expect(saved.history[0].content).toBe(`请参考 ${token}`)
+    expect(saved.history[0].sessionContext).toContain('冻结的源答复')
+    await first.deleteConversation(source.id)
+
+    const reopened = createController(new ConversationStore(testRoot))
+    await reopened.initialize()
+    await reopened.sendMessage('刚才引用的结论是什么？')
+    await until(() => calls.length === 2 && reopened.getSnapshot().taskStatus === 'done', 'follow-up reply')
+    expect(calls[1][0].content).toContain('冻结的源答复')
+    expect(calls[1][0].content).toContain('<referenced_conversations>')
+    expect(calls[1].at(-1)?.content).toBe('刚才引用的结论是什么？')
+    expect(JSON.stringify(reopened.getSnapshot())).not.toContain('冻结的源答复')
+    expect(JSON.stringify(reopened.getSnapshot())).not.toContain('<referenced_conversations>')
+  })
+
   it('adds updated memory to the next queued model request without storing it in chat history', async () => {
     const calls: string[] = []
     const resolves: Array<(reply: ModelReply) => void> = []

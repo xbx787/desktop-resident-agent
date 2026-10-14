@@ -249,6 +249,8 @@ export type SlashUiAction = 'sessions' | 'model' | 'help'
 export interface WorkspaceFileOption {
   relativePath: string
   name: string
+  /** Older renderer mocks omit this; new search results distinguish folders. */
+  kind?: 'file' | 'directory'
 }
 
 export interface AppSnapshot {

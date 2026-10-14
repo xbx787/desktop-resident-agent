@@ -679,6 +679,20 @@ describe('bounded conversation packing', () => {
     expect(boundedConversation(history, 10_000)).toEqual(history)
   })
 
+  it('keeps a recent frozen reference intact when a cold SDK session replays history', () => {
+    const context = '引'.repeat(4_000)
+    const content = `引用问题\n\n${'文件内容'.repeat(8_000)}\n\n${context}`
+    const packed = boundedConversation([
+      { role: 'user', content, sessionContext: context },
+      line('assistant', '先前答复'),
+      line('user', '继续追问')
+    ])
+    expect(packed[0].content).toContain('引用问题')
+    expect(packed[0].content).toContain(context)
+    expect(packed[0].content.length).toBeLessThan(content.length)
+    expect(packed.at(-1)?.content).toBe('继续追问')
+  })
+
   it('compresses older lines to their opening before any of them is dropped', () => {
     const history = [
       line('user', '甲'.repeat(2_000)),

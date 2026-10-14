@@ -7,8 +7,8 @@ function flatten(value: string): string {
 
 /**
  * One readable line describing the object of a tool call — the command, the file,
- * the pattern — for the tool row's header. The full JSON stays available through
- * the row's tooltip; the body of the row shows only what came back.
+ * the pattern — for the tool row's header. The complete input is formatted
+ * separately in the expanded tool card.
  */
 /** The plan text of an ExitPlanMode call. It lives in the call's input, not in
  *  its output ("User approved…"), so the row body reads it from here. */
@@ -47,5 +47,17 @@ export function toolArgumentPreview(input: string | undefined): string {
   } catch {
     // Not JSON: the raw text is already the best description there is.
     return flatten(trimmed);
+  }
+}
+
+/** Preserve the complete call input while making structured arguments readable. */
+export function toolArgumentDetails(input: string | undefined): string {
+  const trimmed = input?.trim() ?? '';
+  if (!trimmed) return '';
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    return typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2);
+  } catch {
+    return trimmed;
   }
 }

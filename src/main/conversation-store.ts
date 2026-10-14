@@ -20,6 +20,8 @@ export interface PendingMessage {
   text: string
   attachments: UserAttachment[]
   createdAt: string
+  /** Frozen at submit time; only the main process uses this model context. */
+  sessionContext?: string
 }
 
 export interface ConversationRecord {
@@ -131,7 +133,9 @@ function isHistory(value: unknown): value is DialogueLine[] {
   return Array.isArray(value) && value.every((line) =>
     isObject(line) &&
     (line.role === 'user' || line.role === 'assistant') &&
-    typeof line.content === 'string'
+    typeof line.content === 'string' &&
+    (line.sessionContext === undefined || line.role === 'user' &&
+      typeof line.sessionContext === 'string' && Buffer.byteLength(line.sessionContext, 'utf8') <= 26 * 1024)
   )
 }
 
@@ -141,6 +145,7 @@ function isPendingMessages(value: unknown): value is PendingMessage[] {
     typeof message.id === 'string' && message.id.length > 0 &&
     typeof message.text === 'string' &&
     typeof message.createdAt === 'string' &&
+    (message.sessionContext === undefined || typeof message.sessionContext === 'string' && message.sessionContext.length <= 32_768) &&
     Array.isArray(message.attachments) && message.attachments.every((attachment: unknown) =>
       isObject(attachment) && typeof attachment.name === 'string' && typeof attachment.content === 'string' &&
       (attachment.path === undefined || typeof attachment.path === 'string'))

@@ -50,4 +50,24 @@ describe('DeepSeek Responses API adapter', () => {
       new DeepSeekClient('test-key').respond([{ role: 'user', content: 'hi' }], new AbortController().signal)
     ).rejects.toThrow('多项操作')
   })
+
+  it('keeps a frozen reference only while its user line remains inside the last 20 messages', async () => {
+    const mockFetch = vi.fn().mockImplementation(async () => new Response(JSON.stringify({
+      status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: '收到' }] }]
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', mockFetch)
+    const client = new DeepSeekClient('test-key')
+    const reference = { role: 'user' as const, content: '问题\n\n冻结的引用原文' }
+    const filler = Array.from({ length: 19 }, (_, index) => ({
+      role: index % 2 ? 'user' as const : 'assistant' as const,
+      content: `消息 ${index}`
+    }))
+    await client.respond([reference, ...filler], new AbortController().signal)
+    const within = JSON.parse(mockFetch.mock.calls[0][1].body as string)
+    expect(within.input[0].content).toContain('冻结的引用原文')
+    await client.respond([reference, ...filler, { role: 'user', content: '新的追问' }], new AbortController().signal)
+    const outside = JSON.parse(mockFetch.mock.calls[1][1].body as string)
+    expect(outside.input).toHaveLength(20)
+    expect(JSON.stringify(outside.input)).not.toContain('冻结的引用原文')
+  })
 })

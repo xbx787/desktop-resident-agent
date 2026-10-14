@@ -67,6 +67,31 @@ describe('local file context', () => {
     await expect(expandFileMentions('问问 @teammate', workspace)).resolves.toMatchObject({ references: [] })
   })
 
+  it('resolves directory mentions to a bounded inventory without reading every file body', async () => {
+    await write('workspace/docs/a.md', 'private body')
+    await write('workspace/docs/nested/b.md', 'another private body')
+    const result = await expandFileMentions('总结 @{docs}', workspace)
+    expect(result.references).toEqual([expect.objectContaining({ kind: 'directory', name: 'docs', path: await fs.realpath(path.join(workspace, 'docs')) })])
+    expect(result.prompt).toContain('文件 "a.md"')
+    expect(result.prompt).toContain('目录 "nested/"')
+    expect(result.prompt).toContain('文件 "nested/b.md"')
+    expect(result.prompt).not.toContain('private body')
+    await expect(expandFileMentions('@{docs}', workspace, { maxFileBytes: 8 })).rejects.toThrow('超过')
+  })
+
+  it('rejects directory links outside the workspace and omits linked children', async () => {
+    const outside = await write('outside/secret.txt', 'outside data')
+    await write('workspace/docs/safe.md', 'safe')
+    const external = path.dirname(outside)
+    await fs.symlink(external, path.join(workspace, 'linked'), process.platform === 'win32' ? 'junction' : 'dir')
+    await fs.symlink(external, path.join(workspace, 'docs', 'linked'), process.platform === 'win32' ? 'junction' : 'dir')
+    await expect(expandFileMentions('@{linked}', workspace)).rejects.toThrow('不能越过工作区')
+    const result = await expandFileMentions('@{docs}', workspace)
+    expect(result.prompt).not.toContain('secret.txt')
+    expect(result.prompt).not.toContain('outside data')
+    expect((await searchWorkspaceFiles(workspace, '')).some((item) => item.relativePath === 'linked')).toBe(false)
+  })
+
   it('reads selected files from outside the workspace only through the explicit selection API', async () => {
     const filePath = await write('selected.txt', 'selected text')
     expect(await readSelectedTextFile(filePath)).toEqual({ name: 'selected.txt', content: 'selected text' })
@@ -105,7 +130,7 @@ describe('local file context', () => {
     expect(await readImagePreview(testRoot)).toBeNull()
   })
 
-  it('searches only bounded workspace files and omits build/dependency directories', async () => {
+  it('searches bounded workspace files and folders while omitting build/dependency directories', async () => {
     await write('workspace/docs/notes.md', 'note')
     await write('workspace/docs/notes2.md', 'note')
     await write('workspace/node_modules/secret-notes.md', 'hidden')
@@ -114,7 +139,22 @@ describe('local file context', () => {
     expect(matches.map((match) => match.relativePath)).toEqual(expect.arrayContaining(['docs/notes.md', 'docs/notes2.md']))
     expect(matches.every((match) => !match.relativePath.includes('node_modules') && !match.relativePath.includes('release'))).toBe(true)
     expect(await searchWorkspaceFiles(workspace, 'secret')).toEqual([])
-    expect(await searchWorkspaceFiles(workspace, '')).toEqual([])
+    expect((await searchWorkspaceFiles(workspace, 'docs')).some((match) => match.relativePath === 'docs' && match.kind === 'directory')).toBe(true)
+    const recent = await searchWorkspaceFiles(workspace, '', 2)
+    expect(recent).toHaveLength(2)
+    expect(recent.every((match) => match.kind === 'file' || match.kind === 'directory')).toBe(true)
+    expect(recent.every((match) => !match.relativePath.includes('node_modules') && !match.relativePath.includes('release'))).toBe(true)
+  })
+
+  it('ranks a folder by recently edited files inside it when @ has no query', async () => {
+    await write('workspace/old/old.md', 'old')
+    await write('workspace/recent/new.md', 'new')
+    const oldDate = new Date(Date.now() - 86_400_000)
+    await fs.utimes(path.join(workspace, 'old', 'old.md'), oldDate, oldDate)
+    await fs.utimes(path.join(workspace, 'old'), oldDate, oldDate)
+    const matches = await searchWorkspaceFiles(workspace, '', 4)
+    expect(matches.find((item) => item.relativePath === 'recent')?.kind).toBe('directory')
+    expect(matches.findIndex((item) => item.relativePath === 'recent')).toBeLessThan(matches.findIndex((item) => item.relativePath === 'old'))
   })
 
   it('ranks a recently edited file first among equally good name matches', async () => {
