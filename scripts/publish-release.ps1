@@ -27,8 +27,19 @@ if ($LASTEXITCODE -ne 0 -or -not $repository.isPrivate) { throw 'GitHub reposito
 if ($LASTEXITCODE -ne 0) { throw 'Branch push failed.' }
 & git push origin $tag
 if ($LASTEXITCODE -ne 0) { throw 'Tag push failed.' }
-& gh release view $tag --json tagName 1>$null 2>$null
-if ($LASTEXITCODE -ne 0) {
+$previousErrorActionPreference = $ErrorActionPreference
+try {
+  # Windows PowerShell can turn gh's "release not found" stderr into a terminating error.
+  $ErrorActionPreference = 'Continue'
+  $releaseLookup = @(& gh release view $tag --json tagName 2>&1)
+  $releaseLookupExitCode = $LASTEXITCODE
+} finally {
+  $ErrorActionPreference = $previousErrorActionPreference
+}
+if ($releaseLookupExitCode -ne 0 -and (@($releaseLookup) -join "`n") -notmatch '(?i)\brelease not found\b') {
+  throw 'GitHub Release lookup failed.'
+}
+if ($releaseLookupExitCode -ne 0) {
   & gh release create $tag $zip $sum --title "$name" --notes-file $notes --verify-tag
   if ($LASTEXITCODE -ne 0) { throw 'GitHub Release creation failed.' }
 } else {
