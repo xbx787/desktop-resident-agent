@@ -181,6 +181,51 @@ describe('persistent conversation library', () => {
     expect((await new ConversationStore(testRoot).listConversations()).map((item) => item.id)).toEqual([second.id])
   })
 
+  it('previews the newest visible search hit without returning long or private content', async () => {
+    const store = new ConversationStore(testRoot)
+    const session = await store.createConversation('普通会话')
+    await store.updateConversation(session.id, {
+      timeline: [
+        { id: 'old', time: '10:00', kind: 'assistant', text: `${'前文'.repeat(100)}\n  规划旧方案` },
+        { id: 'new', time: '10:01', kind: 'user', text: `${'补充'.repeat(100)}\n  规划新方案，优先采用` },
+        { id: 'tool', time: '10:02', kind: 'tool', text: '内部任务标记 sk-aaaaaaaaaaaaaaaaaaaa' },
+        { id: 'last', time: '10:03', kind: 'assistant', text: '最新答复' }
+      ],
+      history: [
+        { role: 'user', content: `${'历史'.repeat(100)}\n  历史线索`, sessionContext: '私有引用内容' },
+        { role: 'assistant', content: '答复' }
+      ]
+    })
+
+    expect((await store.listConversations())[0].preview).toBe('最新答复')
+    const matched = (await store.listConversations({ query: '规划' }))[0].preview
+    expect(matched).toContain('规划新方案')
+    expect(matched).not.toContain('规划旧方案')
+    expect(matched).toMatch(/^…/u)
+    expect(matched.length).toBeLessThanOrEqual(160)
+    expect(matched).not.toMatch(/[\r\n]/u)
+
+    const historyMatch = (await store.listConversations({ query: '历史线索' }))[0].preview
+    expect(historyMatch).toContain('历史线索')
+    expect(historyMatch.length).toBeLessThanOrEqual(160)
+    expect(await store.listConversations({ query: '私有引用内容' })).toEqual([])
+    expect((await store.listConversations({ query: '内部任务标记' }))[0].preview).toBe('匹配了任务记录')
+    expect((await store.listConversations({ query: 'sk-aaaaaaaaaaaaaaaaaaaa' }))[0].preview).toBe('匹配了任务记录')
+  })
+
+  it('keeps the latest preview for title hits and hides sensitive older messages', async () => {
+    const store = new ConversationStore(testRoot)
+    const session = await store.createConversation('鲸鱼方案')
+    await store.updateConversation(session.id, {
+      timeline: [
+        { id: 'secret', time: '10:00', kind: 'user', text: '鲸鱼方案的密码是 sk-aaaaaaaaaaaaaaaaaaaa' },
+        { id: 'last', time: '10:01', kind: 'assistant', text: '最新可见内容' }
+      ]
+    })
+    expect((await store.listConversations({ query: '鲸鱼方案' }))[0].preview).toBe('最新可见内容')
+    expect((await store.listConversations({ query: '密码' }))[0].preview).toBe('匹配了含敏感信息的消息')
+  })
+
   it('stores complete model history and SDK context independently of a returned object', async () => {
     const store = new ConversationStore(testRoot)
     const session = await store.createConversation('技术实现', 'claude_code')

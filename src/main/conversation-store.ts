@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { DialogueLine } from './deepseek'
 import { isEffortLevel } from '../shared/effort'
+import { containsSensitiveData } from './memory-service'
 import { protectProfiles, restoreProfiles, type SecretCodec } from './secret-storage'
 import type { AgentGoal, EffortLevel, ModelMode, ModelProfile, TaskStatus, TimelineEntry, UserAttachment, ConversationSettings } from '../shared/contracts'
 
@@ -302,6 +303,42 @@ function compareForList(a: ConversationRecord, b: ConversationRecord): number {
   return Number(b.pinnedAt !== null) - Number(a.pinnedAt !== null) || compareByRecent(a, b)
 }
 
+const SUMMARY_PREVIEW_LENGTH = 160
+
+/** Search can reach old messages, but a result only needs a short, visible
+ *  excerpt. Never put tool/thinking text or the private sessionContext in it. */
+function matchingExcerpt(text: string, query: string): string {
+  if (containsSensitiveData(text)) return '匹配了含敏感信息的消息'
+  const clean = text.replace(/\s+/gu, ' ').trim()
+  const needle = query.replace(/\s+/gu, ' ').trim().toLocaleLowerCase()
+  const match = clean.toLocaleLowerCase().indexOf(needle)
+  const start = match < 0 ? 0 : Math.max(0, match - 40)
+  const body = clean.slice(start, start + SUMMARY_PREVIEW_LENGTH - 2)
+  return `${start > 0 ? '…' : ''}${body}${start + body.length < clean.length ? '…' : ''}`
+}
+
+function summaryPreview(record: ConversationRecord, query: string): string {
+  const latestVisible = [...record.timeline].reverse()
+    .find((entry) => entry.kind === 'user' || entry.kind === 'assistant')
+  const latestPreview = latestVisible?.text.slice(0, SUMMARY_PREVIEW_LENGTH) ?? ''
+  if (!query || record.title.toLocaleLowerCase().includes(query)) return latestPreview
+
+  // The timeline is the visible source of truth. History is a fallback for
+  // older imported messages that have no corresponding timeline entry.
+  for (let index = record.timeline.length - 1; index >= 0; index -= 1) {
+    const entry = record.timeline[index]
+    if ((entry.kind === 'user' || entry.kind === 'assistant') &&
+        entry.text.toLocaleLowerCase().includes(query)) return matchingExcerpt(entry.text, query)
+  }
+  for (let index = record.history.length - 1; index >= 0; index -= 1) {
+    const line = record.history[index]
+    if (line.content.toLocaleLowerCase().includes(query)) return matchingExcerpt(line.content, query)
+  }
+  // Existing search also indexes tool, thinking and system events; explain a
+  // hit without copying those private or potentially secret-bearing payloads.
+  return '匹配了任务记录'
+}
+
 function summaries(records: ConversationRecord[], options: ConversationSearchOptions = {}): ConversationSummary[] {
   const query = options.query?.trim().toLocaleLowerCase() ?? ''
   return records
@@ -320,7 +357,7 @@ function summaries(records: ConversationRecord[], options: ConversationSearchOpt
       mode: record.mode,
       taskStatus: record.taskStatus,
       messageCount: record.timeline.filter((entry) => entry.kind === 'user' || entry.kind === 'assistant').length,
-      preview: [...record.timeline].reverse().find((entry) => entry.kind === 'user' || entry.kind === 'assistant')?.text.slice(0, 160) ?? ''
+      preview: summaryPreview(record, query)
     }))
 }
 
