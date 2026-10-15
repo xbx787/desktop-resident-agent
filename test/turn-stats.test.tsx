@@ -102,10 +102,23 @@ describe('TurnStats', () => {
   })
 
   it('labels missing historic usage without fabricating zero tokens or zero cost', () => {
-    const html = renderToStaticMarkup(<TurnStats running={false} entries={[]} showMissingUsage />)
+    const reply: TimelineEntry = { id: 'a1', kind: 'assistant', time: '2026-10-10T10:00:06.000Z', text: '处理完了。' }
+    const html = renderToStaticMarkup(<TurnStats running={false} entries={[reply]} showMissingUsage />)
     expect(html).toContain('用量未记录')
     expect(html).not.toContain('0 token')
     expect(html).not.toContain('¥0')
+  })
+
+  it('draws no dot while a turn has no reply to land on', () => {
+    // 用户刚发下、还没回答的一轮：没有点、没有桥、没有「用量未记录」——孤点
+    // 带着一截桥悬在最后一句用户话下面，就是「一根线断成两节」那两节。
+    const user: TimelineEntry = { id: 'u1', kind: 'user', time: '2026-10-10T10:00:00.000Z', text: '新消息' }
+    expect(renderToStaticMarkup(<TurnStats running={false} entries={[user]} showMissingUsage />)).toBe('')
+    const counted = renderToStaticMarkup(<TurnStats running={false} metrics={metrics} entries={[user]} />)
+    expect(counted).not.toContain('panel-turn-stats-dot')
+    // 跑动中的轮仍有点：线还在走，终点在那里。
+    const live = renderToStaticMarkup(<TurnStats running entries={[user]} metrics={{ startedAt: new Date().toISOString(), usedTokens: 500 }} />)
+    expect(live).toContain('panel-turn-stats-dot')
   })
 
   it('keeps the verifiable transcript total without the estimate disclaimer', () => {

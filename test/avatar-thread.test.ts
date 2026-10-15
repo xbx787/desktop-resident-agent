@@ -32,4 +32,16 @@ describe('avatar thread geometry', () => {
     const bridgeLeft = Number((glyphWidth / 2 - 0.8).toFixed(1))
     expect(bridge).toContain(`left: ${bridgeLeft}px`)
   })
+
+  it('keeps the status dot and the working dots on the same axis as the thread', () => {
+    const axis = Number(rule('.panel-event-glyph').match(/width:\s*(\d+)px/)![1]) / 2
+    // 状态点：13px 内边距后，点（宽 7）的中心落在轴线上。
+    const statusDot = Number(rule('.panel-status i').match(/width:\s*(\d+)px/)![1])
+    const statusPad = Number(rule('.panel-status').match(/padding-left:\s*([\d.]+)px/)![1])
+    expect(statusPad + statusDot / 2).toBe(axis)
+    // 工作点：首点（宽 5）的中心同样落在轴线上。
+    const workDot = Number(rule('.panel-working-dots i').match(/width:\s*(\d+)px/)![1])
+    const workPad = Number(rule('.panel-working').match(/padding-left:\s*([\d.]+)px/)![1])
+    expect(workPad + workDot / 2).toBe(axis)
+  })
 })

@@ -101,7 +101,9 @@
   min-height: 34px;
   padding: 3px 15px 0;
 }
-.panel-status { display: inline-flex; align-items: center; gap: 7px; flex: none; color: #c5d6fb; font-size: 11px; white-space: nowrap; }
+/* 13px 左内边距把点（宽 7）的中心推到 16.5px —— 与头像下那条线、统计行的
+   点同一条铅垂线。状态点单独漂在行首时，用户看到的就是一根断开的歪线。 */
+.panel-status { display: inline-flex; align-items: center; gap: 7px; flex: none; padding-left: 13px; color: #c5d6fb; font-size: 11px; white-space: nowrap; }
 .panel-status i { width: 7px; height: 7px; border-radius: 50%; background: #9db9e9; }
 .panel-status-planning, .panel-status-executing, .panel-status-verifying { color: #f5d39b; }
 .panel-status-planning i, .panel-status-executing i, .panel-status-verifying i { background: #f3c36f; box-shadow: 0 0 8px rgba(243, 195, 111, .3); opacity: calc(1 - .45 * var(--panel-pulse-p, 0)); transform: scale(calc(1 - .15 * var(--panel-pulse-p, 0))); }
@@ -546,7 +548,9 @@
 .panel-cluster.is-turn-process > .panel-cluster-body::before { content: none; }
 .panel-cluster-body .panel-thought, .panel-cluster-body .panel-tool-activity { margin-left: 0; }
 /* Something is happening but nothing is streaming yet: say what, and for how long. */
-.panel-working { display: flex; align-items: center; gap: 9px; margin: 1px 0 15px; color: #9fb7df; font-size: 11px; }
+/* 首点（宽 5）的中心落在 16.5px 的同一条轴上（14 + 2.5）——和上面的状态点、
+   统计点一列。 */
+.panel-working { display: flex; align-items: center; gap: 9px; margin: 1px 0 15px; padding-left: 14px; color: #9fb7df; font-size: 11px; }
 .panel-working-dots { display: inline-flex; flex: none; gap: 3px; }
 /* 三个点各走各的相位（原 .18s/.36s 错峰的等价物），变量由 30fps 的计时器推进。 */
 .panel-working-dots i { width: 5px; height: 5px; border-radius: 50%; background: #7fd8ff; opacity: calc(.4 + .6 * var(--panel-bounce-p1, 1)); transform: translateY(calc(-3px * var(--panel-bounce-p1, 1))); }

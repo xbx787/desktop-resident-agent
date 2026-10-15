@@ -134,10 +134,14 @@ export function TurnStats({ entries, metrics, running, spentYuan, estimatedSpend
     ? Math.round((effectiveUsage.cacheRead / (effectiveUsage.input + effectiveUsage.cacheRead)) * 100)
     : null;
   const hasTip = formulaRows.length > 0 || spendTotal !== null || hitRate !== null || notes.length > 0;
-  const missingUsage = showMissingUsage && !running && !usage;
+  // 这一轮有没有落点：还在跑、或已经写出回复的轮才算。点是线的终点——用户
+  // 刚发下、还没回答的一轮连点都不该有，否则一个孤点带着一截桥悬在用户最后
+  // 一句话下面，「一根线断成两节」说的就是它。
+  const hasReply = running || entries.some((entry) => entry.kind === 'assistant');
+  const missingUsage = showMissingUsage && hasReply && !running && !usage;
   if (!toolCount && !elapsedLabel && !usage && !showSpend && !showEstimate && !missingUsage) return null;
   return <div className="panel-turn-stats" role="status">
-    <span className={`panel-turn-stats-dot${running ? ' is-running' : ' is-done'}`} aria-hidden="true" />
+    {hasReply && <span className={`panel-turn-stats-dot${running ? ' is-running' : ' is-done'}`} aria-hidden="true" />}
     {elapsedLabel && <span>用时 {elapsedLabel}</span>}
     {(usage || showSpend || showEstimate || missingUsage) && <span className="panel-turn-usage" tabIndex={0} title={hasTip ? undefined : missingUsage ? '旧会话可能没有保存本轮用量' : '本轮主模型消耗；不含子代理和辅助调用'}>
       {effectiveUsage ? `${compactTokens(effectiveUsage.total)} token${rateLabel ? `（${rateLabel}）` : ''}` : missingUsage ? '用量未记录' : yuanText(spentYuan ?? estimatedSpendYuan!)}
