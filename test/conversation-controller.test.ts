@@ -439,7 +439,7 @@ describe('conversation controller', () => {
     expect(calls[1].sdkSessionId).toBe('sdk-1')
     calls[1].resolve({ text: '第二条答复', sdkSessionId: 'sdk-1' })
     await until(() => controller.getSnapshot().timeline.some((item) => item.text === '第二条答复'), 'final reply')
-    await until(() => controller.getSnapshot().pendingMessages.length === 0, 'empty queue')
+    await until(() => controller.allConversationsIdle(), 'final reply persisted')
     const saved = await new ConversationStore(testRoot).getConversation(id)
     expect(saved?.history.map((item) => item.content)).toEqual(['第一条', '第一条答复', '第二条', '第二条答复'])
     expect(saved?.sdkSessionId).toBe('sdk-1')
@@ -528,6 +528,7 @@ describe('conversation controller', () => {
     expect(calls).toEqual(['第一条', '立刻执行这条', '旧排队消息'])
     finish.get('旧排队消息')!({ text: '队列答复' })
     await until(() => controller.getSnapshot().timeline.some((item) => item.text === '队列答复'), 'queued reply')
+    await until(() => controller.allConversationsIdle(), 'queued reply persisted')
     expect((await store.getConversation(id))?.pendingMessages).toEqual([])
     expect((await store.getConversation(id))?.history.map((item) => item.content)).toEqual([
       '第一条', '原答复', '立刻执行这条', '优先队列答复', '旧排队消息', '队列答复'
