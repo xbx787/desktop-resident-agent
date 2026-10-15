@@ -5,8 +5,8 @@
 //      cursor become rounded strokes on a calm palette and a soft blue halo.
 //   2. Click: the cursor now glides to the target (~8 steps x 8 ms) and a
 //      ripple expands from the click point on the control overlay.
-//   3. (The overlay itself — edge halo, notice bar, cursor glow — is upstream
-//      0.8.6+; nothing to patch there.)
+//   3. Notice copy: name Xiaojing in the takeover bar. The overlay itself is
+//      upstream 0.8.6+.
 //
 // Every hunk anchors on exact upstream text, is idempotent (a hunk whose
 // result is already present is skipped), and fails loudly when an upstream
@@ -76,8 +76,11 @@ for _index in range(_RIPPLE_FRAMES):
     _ripple_frame_bgra(_index, (255, 170, 55))`
       },
       {
-        old: `_NOTICE_TITLE = "AI is controlling this computer"`,
-        new: `_NOTICE_TITLE = "AI 正在控制这台电脑"`
+        old: [
+          `_NOTICE_TITLE = "AI is controlling this computer"`,
+          `_NOTICE_TITLE = "AI 正在控制这台电脑"`
+        ],
+        new: `_NOTICE_TITLE = "小鲸正在控制这台电脑"`
       },
       {
         old: `_NOTICE_HINT = f"Press {_NOTICE_SHORTCUT} to take over"`,
@@ -659,10 +662,12 @@ for (const { file, hunks } of PATCHES) {
   let dirty = false
   hunks.forEach((hunk, index) => {
     if (text.includes(hunk.new)) { skipped++; return }
-    if (!text.includes(hunk.old)) {
+    const anchors = Array.isArray(hunk.old) ? hunk.old : [hunk.old]
+    const anchor = anchors.find(old => text.includes(old))
+    if (!anchor) {
       throw new Error(`${file} hunk #${index + 1}: anchor not found — upstream text drifted, re-check the patch`)
     }
-    text = text.replace(hunk.old, hunk.new)
+    text = text.replace(anchor, hunk.new)
     dirty = true
     applied++
   })
