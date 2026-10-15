@@ -5,7 +5,7 @@ import type { DialogueLine } from './deepseek'
 import { isEffortLevel } from '../shared/effort'
 import { containsSensitiveData } from './memory-service'
 import { protectProfiles, restoreProfiles, type SecretCodec } from './secret-storage'
-import type { AgentGoal, ConversationBatchAction, ConversationBatchResult, EffortLevel, ModelMode, ModelProfile, TaskStatus, TimelineEntry, UserAttachment, ConversationSettings } from '../shared/contracts'
+import type { AgentGoal, ConversationBatchAction, ConversationBatchResult, ConversationLibraryState, ConversationSummary, EffortLevel, ModelMode, ModelProfile, TaskStatus, TimelineEntry, UserAttachment, ConversationSettings } from '../shared/contracts'
 
 const DEFAULT_VISIBLE_TABS = 5
 const MAX_VISIBLE_TABS = 12
@@ -13,9 +13,9 @@ const LEGACY_MAX_ACTIVE_LIMIT = 50
 const DEFAULT_TITLE = '新对话'
 export const MAX_BATCH_CONVERSATIONS = 100
 
-/** The store and the renderer share one definition of the settings shape;
- *  this re-export keeps the historical import path working. */
-export type { ConversationSettings }
+/** The store and the renderer share one definition of these shapes; the
+ *  re-exports keep the historical import paths working. */
+export type { ConversationLibraryState, ConversationSettings, ConversationSummary }
 
 export interface PendingMessage {
   id: string
@@ -40,26 +40,13 @@ export interface ConversationRecord {
   pendingMessages: PendingMessage[]
   sdkSessionId: string | null
   goal?: AgentGoal | null
+  /** Running cost of the conversation in yuan (see AppSnapshot.conversationSpentYuan). */
+  spentYuan?: number
+  /** When the conversation last saw real message activity. Listing order and
+   *  date grouping key off this, so renaming or pinning never moves a row.
+   *  Absent on older records — readers fall back to updatedAt. */
+  lastActivityAt?: string
   compactionSummary?: string
-}
-
-export interface ConversationSummary {
-  id: string
-  title: string
-  createdAt: string
-  updatedAt: string
-  archivedAt: string | null
-  pinnedAt: string | null
-  mode: ModelMode
-  taskStatus: TaskStatus
-  messageCount: number
-  preview: string
-}
-
-export interface ConversationLibraryState {
-  settings: ConversationSettings
-  activeConversationId: string | null
-  conversations: ConversationSummary[]
 }
 
 export interface ConversationPatch {
@@ -72,6 +59,7 @@ export interface ConversationPatch {
   sdkSessionId?: string | null
   goal?: AgentGoal | null
   compactionSummary?: string | null
+  spentYuan?: number
 }
 
 export interface ConversationSearchOptions {
@@ -240,6 +228,84 @@ function readExtendedSettings(settings: Record<string, unknown>): Pick<Conversat
   }
 }
 
+/** One conversation per file. `library.json` keeps the settings and a light
+ *  index (the list metadata), so a single damaged record costs one
+ *  conversation instead of the whole library, and writes only touch the
+ *  records whose content actually changed. */
+function recordDigest(text: string): string {
+  // FNV-1a: cheap, and only ever compared against another digest.
+  let hash = 0x811c9dc5
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(16)
+}
+
+function metaOf(record: ConversationRecord): ConversationSummary {
+  const meta: ConversationSummary = {
+    id: record.id, title: record.title, createdAt: record.createdAt, updatedAt: record.updatedAt,
+    lastActivityAt: record.lastActivityAt ?? record.updatedAt, archivedAt: record.archivedAt,
+    pinnedAt: record.pinnedAt, mode: record.mode, taskStatus: record.taskStatus,
+    messageCount: record.timeline.filter((entry) => entry.kind === 'user' || entry.kind === 'assistant').length,
+    preview: record.timeline.length ? summaryPreview(record, []) : ''
+  }
+  return meta
+}
+
+/** The index alone carries list metadata; a record file that is missing or
+ *  damaged leaves this bare shell so the row stays visible and openable. */
+function shellOf(meta: ConversationSummary): ConversationRecord {
+  return {
+    id: meta.id, title: meta.title, createdAt: meta.createdAt, updatedAt: meta.updatedAt,
+    lastActivityAt: meta.lastActivityAt, archivedAt: meta.archivedAt, pinnedAt: meta.pinnedAt,
+    mode: meta.mode, taskStatus: meta.taskStatus, timeline: [], history: [],
+    pendingMessages: [], sdkSessionId: null, goal: null
+  }
+}
+
+function isMeta(value: unknown): value is ConversationSummary {
+  if (!isObject(value)) return false
+  return typeof value.id === 'string' && typeof value.title === 'string' &&
+    typeof value.createdAt === 'string' && typeof value.updatedAt === 'string' &&
+    typeof value.lastActivityAt === 'string' && isMode(value.mode) && isTaskStatus(value.taskStatus)
+}
+
+/** A v3 index: settings, one active pointer, and one meta per conversation. */
+function parseIndex(raw: string): { settings: ConversationSettings; activeConversationId: string | null; metas: ConversationSummary[] } | null {
+  let value: unknown
+  try {
+    value = JSON.parse(raw)
+  } catch {
+    throw new ConversationStoreError('CORRUPT_DATA', '会话库 JSON 无法解析，原文件已保留。')
+  }
+  if (!isObject(value) || value.version !== 3 || !isObject(value.settings) ||
+      !Array.isArray(value.conversations) || !value.conversations.every(isMeta) ||
+      !(value.activeConversationId === null || typeof value.activeConversationId === 'string')) {
+    return null
+  }
+  const settings = value.settings
+  if (!Number.isInteger(settings.visibleConversationTabs) || !isAutoArchiveDays(settings.autoArchiveAfterDays)) {
+    return null
+  }
+  return {
+    settings: {
+      visibleConversationTabs: Number(settings.visibleConversationTabs),
+      autoArchiveAfterDays: settings.autoArchiveAfterDays,
+      effort: isEffortLevel(settings.effort) ? settings.effort : 'max',
+      ...readExtendedSettings(settings)
+    },
+    activeConversationId: value.activeConversationId,
+    metas: value.conversations as ConversationSummary[]
+  }
+}
+
+/** Fills the gaps a legacy record may have (field added after it was written). */
+function completeRecord(record: LegacyConversationRecord): ConversationRecord {
+  return { ...record, pinnedAt: record.pinnedAt ?? null,
+    pendingMessages: record.pendingMessages ?? [], taskStatus: restoredTaskStatus(record.taskStatus), goal: record.goal ?? null }
+}
+
 function parseLibrary(raw: string): { library: PersistedLibrary; migrated: boolean } {
   let value: unknown
   try {
@@ -277,8 +343,7 @@ function parseLibrary(raw: string): { library: PersistedLibrary; migrated: boole
         : { visibleConversationTabs: Number(settings.visibleConversationTabs), autoArchiveAfterDays: settings.autoArchiveAfterDays as ConversationSettings['autoArchiveAfterDays'],
             effort: isEffortLevel(settings.effort) ? settings.effort : 'max', ...readExtendedSettings(settings) },
       activeConversationId: value.activeConversationId as string | null,
-      conversations: records.map((record) => ({ ...record, pinnedAt: record.pinnedAt ?? null,
-        pendingMessages: record.pendingMessages ?? [], taskStatus: restoredTaskStatus(record.taskStatus), goal: record.goal ?? null }))
+      conversations: records.map(completeRecord)
     },
     migrated: oldFormat || !isEffortLevel(settings.effort) || !Array.isArray(settings.tabOrder) || settings.goalMaxIterations === undefined || settings.goalMaxMinutes === undefined || settings.memoryEnabled === undefined || records.some((record) => record.pendingMessages === undefined || record.goal === undefined ||
       record.pinnedAt === undefined || record.taskStatus !== restoredTaskStatus(record.taskStatus))
@@ -294,7 +359,9 @@ function cleanTitle(title: string): string {
 }
 
 function compareByRecent(a: ConversationRecord, b: ConversationRecord): number {
-  return b.updatedAt.localeCompare(a.updatedAt) || b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)
+  const left = b.lastActivityAt ?? b.updatedAt
+  const right = a.lastActivityAt ?? a.updatedAt
+  return left.localeCompare(right) || b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)
 }
 
 function compareForList(a: ConversationRecord, b: ConversationRecord): number {
@@ -308,6 +375,18 @@ const SUMMARY_PREVIEW_LENGTH = 160
 
 /** Search can reach old messages, but a result only needs a short, visible
  *  excerpt. Never put tool/thinking text or the private sessionContext in it. */
+function searchTerms(query: string): string[] {
+  return query.split(/\s+/u).map((term) => term.toLocaleLowerCase()).filter(Boolean)
+}
+
+/** Every term must appear somewhere in the text: "范围 格式" finds a message
+ *  that has both words anywhere, instead of demanding them adjacent. */
+function matchesTerms(text: string, terms: readonly string[]): boolean {
+  if (!terms.length) return true
+  const lower = text.toLocaleLowerCase()
+  return terms.every((term) => lower.includes(term))
+}
+
 function matchingExcerpt(text: string, query: string): string {
   if (containsSensitiveData(text)) return '匹配了含敏感信息的消息'
   const clean = text.replace(/\s+/gu, ' ').trim()
@@ -318,47 +397,48 @@ function matchingExcerpt(text: string, query: string): string {
   return `${start > 0 ? '…' : ''}${body}${start + body.length < clean.length ? '…' : ''}`
 }
 
-function summaryPreview(record: ConversationRecord, query: string): string {
+function summaryPreview(record: ConversationRecord, terms: readonly string[]): string {
   const latestVisible = [...record.timeline].reverse()
     .find((entry) => entry.kind === 'user' || entry.kind === 'assistant')
   const latestPreview = latestVisible?.text.slice(0, SUMMARY_PREVIEW_LENGTH) ?? ''
-  if (!query || record.title.toLocaleLowerCase().includes(query)) return latestPreview
+  if (!terms.length || matchesTerms(record.title, terms)) return latestPreview
 
   // The timeline is the visible source of truth. History is a fallback for
   // older imported messages that have no corresponding timeline entry.
   for (let index = record.timeline.length - 1; index >= 0; index -= 1) {
     const entry = record.timeline[index]
     if ((entry.kind === 'user' || entry.kind === 'assistant') &&
-        entry.text.toLocaleLowerCase().includes(query)) return matchingExcerpt(entry.text, query)
+        matchesTerms(entry.text, terms)) return matchingExcerpt(entry.text, terms[0])
   }
   for (let index = record.history.length - 1; index >= 0; index -= 1) {
     const line = record.history[index]
-    if (line.content.toLocaleLowerCase().includes(query)) return matchingExcerpt(line.content, query)
+    if (matchesTerms(line.content, terms)) return matchingExcerpt(line.content, terms[0])
   }
-  // Existing search also indexes tool, thinking and system events; explain a
-  // hit without copying those private or potentially secret-bearing payloads.
-  return '匹配了任务记录'
+  // The search also indexes tool, thinking and system events; say where the
+  // hit is without copying those private or potentially secret-bearing payloads.
+  return '匹配了过程记录（思考或工具）'
 }
 
 function summaries(records: ConversationRecord[], options: ConversationSearchOptions = {}): ConversationSummary[] {
-  const query = options.query?.trim().toLocaleLowerCase() ?? ''
+  const terms = searchTerms(options.query ?? '')
   return records
     .filter((record) => options.archived === undefined || (record.archivedAt !== null) === options.archived)
-    .filter((record) => !query || record.title.toLocaleLowerCase().includes(query) ||
-      record.timeline.some((entry) => entry.text.toLocaleLowerCase().includes(query)) ||
-      record.history.some((line) => line.content.toLocaleLowerCase().includes(query)))
+    .filter((record) => !terms.length || matchesTerms(record.title, terms) ||
+      record.timeline.some((entry) => matchesTerms(entry.text, terms)) ||
+      record.history.some((line) => matchesTerms(line.content, terms)))
     .sort(compareForList)
     .map((record) => ({
       id: record.id,
       title: record.title,
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
+      lastActivityAt: record.lastActivityAt ?? record.updatedAt,
       archivedAt: record.archivedAt,
       pinnedAt: record.pinnedAt,
       mode: record.mode,
       taskStatus: record.taskStatus,
       messageCount: record.timeline.filter((entry) => entry.kind === 'user' || entry.kind === 'assistant').length,
-      preview: summaryPreview(record, query)
+      preview: summaryPreview(record, terms)
     }))
 }
 
@@ -385,7 +465,7 @@ function selectFallback(library: PersistedLibrary): void {
 function addConversation(library: PersistedLibrary, title: string, mode: ModelMode): ConversationRecord {
   const now = new Date().toISOString()
   const record: ConversationRecord = {
-    id: randomUUID(), title, createdAt: now, updatedAt: now,
+    id: randomUUID(), title, createdAt: now, updatedAt: now, lastActivityAt: now,
     archivedAt: null, pinnedAt: null, mode, taskStatus: 'idle', timeline: [], history: [], pendingMessages: [], sdkSessionId: null, goal: null
   }
   library.conversations.push(record)
@@ -407,6 +487,8 @@ export class ConversationStore {
   private library: PersistedLibrary | null = null
   private initialization: Promise<void> | null = null
   private queue: Promise<void> = Promise.resolve()
+  /** Content digest of each record as last written, keyed by id. */
+  private recordDigests = new Map<string, string>()
 
   constructor(dataRoot: string, private readonly secretCodec?: SecretCodec) {
     this.filePath = path.join(path.resolve(dataRoot), 'conversations', 'library.json')
@@ -422,49 +504,121 @@ export class ConversationStore {
     return this.initialization
   }
 
-  private async load(): Promise<void> {
-    await fs.mkdir(path.dirname(this.filePath), { recursive: true })
-    try {
-      const parsed = parseLibrary(await fs.readFile(this.filePath, 'utf8'))
-      const restored = this.secretCodec
-        ? restoreProfiles(parsed.library.settings.modelProfiles, this.secretCodec)
-        : { profiles: parsed.library.settings.modelProfiles, changed: false }
-      parsed.library.settings.modelProfiles = restored.profiles
-      if (parsed.migrated || restored.changed) await this.persist(parsed.library)
-      this.library = parsed.library
-    } catch (error) {
-      if (!isObject(error) || error.code !== 'ENOENT') throw error
-      const initial: PersistedLibrary = {
-        version: 2,
-        settings: { visibleConversationTabs: DEFAULT_VISIBLE_TABS, autoArchiveAfterDays: 0, effort: 'max',
-          modelProfiles: [], activeModelProfileId: null, enableAutoTitleGeneration: true, showMessageTimestamps: true,
-          userName: '主人', assistantName: '小鲸', userAvatar: null, assistantAvatar: null, tabOrder: [],
-          goalMaxIterations: 30, goalMaxMinutes: 180, memoryEnabled: true },
-        activeConversationId: null,
-        conversations: []
-      }
-      await this.persist(initial)
-      this.library = initial
-    }
+  private get recordDir(): string {
+    return path.join(path.dirname(this.filePath), 'records')
   }
 
-  private async persist(library: PersistedLibrary): Promise<void> {
-    const temporary = path.join(path.dirname(this.filePath), `.library.${process.pid}.${randomUUID()}.tmp`)
+  private recordPath(id: string): string {
+    return path.join(this.recordDir, `${id}.json`)
+  }
+
+  /** Temp file in the target's own directory, fsync, rename over. */
+  private async writeAtomic(target: string, text: string): Promise<void> {
+    const temporary = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.${randomUUID()}.tmp`)
     try {
-      const diskLibrary = structuredClone(library)
-      if (this.secretCodec) diskLibrary.settings.modelProfiles = protectProfiles(diskLibrary.settings.modelProfiles, this.secretCodec)
       const file = await fs.open(temporary, 'wx')
       try {
-        await file.writeFile(JSON.stringify(diskLibrary, null, 2) + '\n', 'utf8')
+        await file.writeFile(text, 'utf8')
         await file.sync()
       } finally {
         await file.close()
       }
-      await fs.rename(temporary, this.filePath)
+      await fs.rename(temporary, target)
     } catch (error) {
       await fs.rm(temporary, { force: true }).catch(() => undefined)
       throw error
     }
+  }
+
+  private async load(): Promise<void> {
+    const dir = path.dirname(this.filePath)
+    await fs.mkdir(dir, { recursive: true })
+    let settings: ConversationSettings | undefined
+    let activeConversationId: string | null = null
+    let conversations: ConversationRecord[] = []
+    let migrating = false
+    let raw: string | undefined
+    try {
+      raw = await fs.readFile(this.filePath, 'utf8')
+    } catch (error) {
+      if (!isObject(error) || error.code !== 'ENOENT') throw error
+    }
+
+    if (raw !== undefined) {
+      const index = parseIndex(raw)
+      if (index) {
+        settings = index.settings
+        activeConversationId = index.activeConversationId
+        const loaded = new Map<string, ConversationRecord>()
+        for (const meta of index.metas) {
+          // A missing or damaged record leaves its list row visible as a shell
+          // instead of taking the rest of the library down with it.
+          try {
+            const parsed: unknown = JSON.parse(await fs.readFile(this.recordPath(meta.id), 'utf8'))
+            loaded.set(meta.id, isRecord(parsed) ? completeRecord(parsed) : shellOf(meta))
+          } catch {
+            loaded.set(meta.id, shellOf(meta))
+          }
+        }
+        conversations = index.metas.map((meta) => loaded.get(meta.id) ?? shellOf(meta))
+      } else {
+        // A v1/v2 single-file library: split it below, keeping a copy of the
+        // original beside it.
+        const parsed = parseLibrary(raw)
+        settings = parsed.library.settings
+        activeConversationId = parsed.library.activeConversationId
+        conversations = parsed.library.conversations
+        migrating = true
+      }
+    }
+
+    if (!settings) {
+      settings = { visibleConversationTabs: DEFAULT_VISIBLE_TABS, autoArchiveAfterDays: 0, effort: 'max',
+        modelProfiles: [], activeModelProfileId: null, enableAutoTitleGeneration: true, showMessageTimestamps: true,
+        userName: '主人', assistantName: '小鲸', userAvatar: null, assistantAvatar: null, tabOrder: [],
+        goalMaxIterations: 30, goalMaxMinutes: 180, memoryEnabled: true }
+      migrating = true
+    }
+
+    const restored = this.secretCodec
+      ? restoreProfiles(settings.modelProfiles, this.secretCodec)
+      : { profiles: settings.modelProfiles, changed: false }
+    settings.modelProfiles = restored.profiles
+    const library: PersistedLibrary = { version: 2, settings, activeConversationId, conversations }
+
+    if (migrating || restored.changed) {
+      if (migrating && raw !== undefined) {
+        await fs.copyFile(this.filePath, path.join(dir, 'library.v2.bak.json')).catch(() => undefined)
+      }
+      await this.persist(library)
+    }
+    this.library = library
+  }
+
+  private async persist(library: PersistedLibrary): Promise<void> {
+    await fs.mkdir(this.recordDir, { recursive: true })
+    const diskSettings = structuredClone(library.settings)
+    if (this.secretCodec) diskSettings.modelProfiles = protectProfiles(diskSettings.modelProfiles, this.secretCodec)
+    await this.writeAtomic(this.filePath, JSON.stringify({
+      version: 3,
+      settings: diskSettings,
+      activeConversationId: library.activeConversationId,
+      conversations: library.conversations.map(metaOf)
+    }, null, 2) + '\n')
+
+    // Only the records whose content actually changed get rewritten.
+    const next = new Map<string, string>()
+    for (const record of library.conversations) {
+      const json = JSON.stringify(record, null, 2) + '\n'
+      const digest = recordDigest(json)
+      next.set(record.id, digest)
+      if (this.recordDigests.get(record.id) === digest) continue
+      await this.writeAtomic(this.recordPath(record.id), json)
+    }
+    for (const id of this.recordDigests.keys()) {
+      if (!next.has(id)) await fs.rm(this.recordPath(id), { force: true }).catch(() => undefined)
+    }
+    this.recordDigests = next
   }
 
   private async mutate<T>(change: (draft: PersistedLibrary) => T): Promise<T> {
@@ -503,6 +657,50 @@ export class ConversationStore {
     const clean = cleanTitle(title)
     if (!isMode(mode)) throw new ConversationStoreError('INVALID_INPUT', '不支持这个模型模式。')
     return this.mutate((draft) => addConversation(draft, clean, mode))
+  }
+
+  /** Copy only a settled, final reply. The expected entry ID is checked in
+   *  the same write transaction as the new record, so a stale UI cannot fork
+   *  a different turn. Model history stays in the main process. */
+  forkConversation(sourceId: string, expectedAssistantEntryId: string): Promise<ConversationRecord> {
+    if (typeof sourceId !== 'string' || !sourceId.trim() || sourceId.length > 128 ||
+        typeof expectedAssistantEntryId !== 'string' || !expectedAssistantEntryId.trim() ||
+        expectedAssistantEntryId.length > 128) {
+      throw new ConversationStoreError('INVALID_INPUT', '会话或回复编号无效。')
+    }
+    return this.mutate((draft) => {
+      const source = findRecord(draft, sourceId)
+      if (source.archivedAt !== null) {
+        throw new ConversationStoreError('ARCHIVED_CONVERSATION', '请先恢复归档会话。')
+      }
+      if (source.taskStatus !== 'done' || source.pendingMessages.length > 0) {
+        throw new ConversationStoreError('INVALID_INPUT', '请等源会话完成回复并处理待发送消息。')
+      }
+      let lastUser = -1
+      let lastAssistant = -1
+      source.timeline.forEach((entry, index) => {
+        if (entry.kind === 'user') lastUser = index
+        if (entry.kind === 'assistant') lastAssistant = index
+      })
+      const reply = source.timeline[lastAssistant]
+      if (lastUser < 0 || lastAssistant <= lastUser ||
+          reply?.id !== expectedAssistantEntryId || !reply.text.trim() ||
+          source.history.at(-1)?.role !== 'assistant' || !source.history.at(-1)?.content.trim()) {
+        throw new ConversationStoreError('INVALID_INPUT', '源会话的最新完整回复已变化，请刷新后重试。')
+      }
+      const now = new Date().toISOString()
+      const record: ConversationRecord = {
+        id: randomUUID(), title: cleanTitle(`${source.title.slice(0, 116).replace(/[\uD800-\uDBFF]$/u, '')} 的续聊`),
+        createdAt: now, updatedAt: now, lastActivityAt: now, archivedAt: null, pinnedAt: null,
+        mode: source.mode, taskStatus: 'idle',
+        timeline: structuredClone(source.timeline), history: structuredClone(source.history),
+        pendingMessages: [], sdkSessionId: null, goal: null
+      }
+      draft.conversations.push(record)
+      draft.settings.tabOrder.unshift(record.id)
+      draft.activeConversationId = record.id
+      return record
+    })
   }
 
   setActiveConversation(id: string): Promise<ConversationRecord> {
@@ -550,11 +748,14 @@ export class ConversationStore {
       if (changes.taskStatus !== undefined) record.taskStatus = changes.taskStatus
       if (changes.timeline !== undefined) record.timeline = changes.timeline
       if (changes.history !== undefined) record.history = changes.history
+      // Only content counts as activity; a rename or a pin must not reorder the list.
+      if (changes.timeline !== undefined || changes.history !== undefined) record.lastActivityAt = new Date().toISOString()
       if (changes.pendingMessages !== undefined) record.pendingMessages = changes.pendingMessages
       if (changes.sdkSessionId !== undefined) record.sdkSessionId = changes.sdkSessionId
       if (changes.goal !== undefined) record.goal = changes.goal
       if (changes.compactionSummary === null) delete record.compactionSummary
       else if (changes.compactionSummary !== undefined) record.compactionSummary = changes.compactionSummary
+      if (changes.spentYuan !== undefined) record.spentYuan = changes.spentYuan
       record.updatedAt = new Date().toISOString()
       return record
     })
@@ -783,8 +984,8 @@ export class ConversationStore {
       for (const record of draft.conversations) {
         if (record.archivedAt !== null || record.pinnedAt !== null ||
             record.id === draft.activeConversationId || record.pendingMessages.length > 0) continue
-        const updated = Date.parse(record.updatedAt)
-        if (Number.isFinite(updated) && updated < cutoff) record.archivedAt = now.toISOString()
+        const active = Date.parse(record.lastActivityAt ?? record.updatedAt)
+        if (Number.isFinite(active) && active < cutoff) record.archivedAt = now.toISOString()
       }
       return stateOf(draft)
     })

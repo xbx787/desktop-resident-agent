@@ -20,7 +20,94 @@ afterEach(async () => {
   await fs.rm(testRoot, { recursive: true, force: true })
 })
 
+/** Where one conversation's own file lives (v3 layout). */
+function recordFile(root: string, id: string): string {
+  return path.join(root, 'conversations', 'records', `${id}.json`)
+}
+
 describe('persistent conversation library', () => {
+  it('forks one completed reply atomically into an independent cold conversation', async () => {
+    const store = new ConversationStore(testRoot)
+    const source = await store.createConversation('原会话', 'claude_code')
+    const user = { id: randomUUID(), kind: 'user' as const, time: new Date().toISOString(), text: '请解释' }
+    const reply = { id: randomUUID(), kind: 'assistant' as const, time: new Date().toISOString(), text: '这是答案' }
+    await store.updateConversation(source.id, {
+      taskStatus: 'done', timeline: [user, reply],
+      history: [{ role: 'user', content: '请解释', sessionContext: '只供主进程使用的引用' },
+        { role: 'assistant', content: '这是答案' }],
+      sdkSessionId: 'original-sdk-session', compactionSummary: '旧会话摘要'
+    })
+    const sourceBefore = await store.getConversation(source.id)
+    const write = vi.spyOn(store as unknown as { persist: (library: unknown) => Promise<void> }, 'persist')
+    const child = await store.forkConversation(source.id, reply.id)
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(child.id).not.toBe(source.id)
+    expect(child.title).toBe('原会话 的续聊')
+    expect(child.mode).toBe('claude_code')
+    expect(child.taskStatus).toBe('idle')
+    expect(child.sdkSessionId).toBeNull()
+    expect(child.pendingMessages).toEqual([])
+    expect(child.goal).toBeNull()
+    expect(child.archivedAt).toBeNull()
+    expect(child.pinnedAt).toBeNull()
+    expect(child).not.toHaveProperty('compactionSummary')
+    expect(child.timeline).toEqual(sourceBefore?.timeline)
+    expect(child.history).toEqual(sourceBefore?.history)
+    expect(child.history[0].sessionContext).toBe('只供主进程使用的引用')
+    expect(await store.getConversation(source.id)).toEqual(sourceBefore)
+    const reopened = new ConversationStore(testRoot)
+    expect((await reopened.getState()).activeConversationId).toBe(child.id)
+    expect((await reopened.getState()).settings.tabOrder[0]).toBe(child.id)
+    expect((await reopened.getConversation(child.id))?.history).toEqual(sourceBefore?.history)
+    await store.updateConversation(child.id, { history: [...child.history, { role: 'user', content: '继续' }] })
+    expect((await store.getConversation(source.id))?.history).toEqual(sourceBefore?.history)
+    await store.deleteConversation(source.id)
+    expect((await new ConversationStore(testRoot).getConversation(child.id))?.timeline).toEqual(child.timeline)
+  })
+
+  it('rejects unfinished, archived, queued, stale and empty replies without creating a child', async () => {
+    const store = new ConversationStore(testRoot)
+    const source = await store.createConversation('原会话')
+    const user = { id: randomUUID(), kind: 'user' as const, time: new Date().toISOString(), text: '问题' }
+    const reply = { id: randomUUID(), kind: 'assistant' as const, time: new Date().toISOString(), text: '答案' }
+    await store.updateConversation(source.id, { timeline: [user, reply],
+      history: [{ role: 'user', content: '问题' }, { role: 'assistant', content: '答案' }] })
+    for (const taskStatus of ['idle', 'failed', 'cancelled', 'awaiting_approval'] as const) {
+      await store.updateConversation(source.id, { taskStatus })
+      await expect(store.forkConversation(source.id, reply.id)).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    }
+    await store.updateConversation(source.id, { taskStatus: 'done', pendingMessages: [
+      { id: randomUUID(), text: '尚未发送', attachments: [], createdAt: new Date().toISOString() }
+    ] })
+    await expect(store.forkConversation(source.id, reply.id)).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    await store.updateConversation(source.id, { pendingMessages: [] })
+    await expect(store.forkConversation(source.id, 'stale-reply')).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    await store.updateConversation(source.id, { timeline: [user, { ...reply, text: ' ' }] })
+    await expect(store.forkConversation(source.id, reply.id)).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    await store.updateConversation(source.id, { timeline: [user, reply], history: [{ role: 'user', content: '问题' }] })
+    await expect(store.forkConversation(source.id, reply.id)).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    await store.archiveConversation(source.id)
+    await expect(store.forkConversation(source.id, reply.id)).rejects.toMatchObject({ code: 'ARCHIVED_CONVERSATION' })
+    expect((await new ConversationStore(testRoot).getState()).conversations).toHaveLength(1)
+  })
+
+  it('leaves no child or changed active tab when a fork write fails', async () => {
+    const store = new ConversationStore(testRoot)
+    const source = await store.createConversation('原会话')
+    const user = { id: randomUUID(), kind: 'user' as const, time: new Date().toISOString(), text: '问题' }
+    const reply = { id: randomUUID(), kind: 'assistant' as const, time: new Date().toISOString(), text: '答案' }
+    await store.updateConversation(source.id, { taskStatus: 'done', timeline: [user, reply],
+      history: [{ role: 'user', content: '问题' }, { role: 'assistant', content: '答案' }] })
+    const before = await fs.readFile(store.filePath, 'utf8')
+    vi.spyOn(store as unknown as { persist: (library: unknown) => Promise<void> }, 'persist')
+      .mockRejectedValueOnce(new Error('disk unavailable'))
+    await expect(store.forkConversation(source.id, reply.id)).rejects.toThrow('disk unavailable')
+    expect(await fs.readFile(store.filePath, 'utf8')).toBe(before)
+    expect((await store.getState()).conversations).toHaveLength(1)
+    const child = await store.forkConversation(source.id, reply.id)
+    expect((await new ConversationStore(testRoot).getState()).activeConversationId).toBe(child.id)
+  })
+
   it('applies a mixed batch in one write and reports every distinct skipped ID', async () => {
     const store = new ConversationStore(testRoot)
     const first = await store.createConversation('第一段')
@@ -111,8 +198,7 @@ describe('persistent conversation library', () => {
     expect(summaries.find((item) => item.id === finished.id)?.taskStatus).toBe('done')
     expect(summaries.find((item) => item.id === interrupted.id)?.taskStatus).toBe('cancelled')
     expect((await reopened.getConversation(interrupted.id))?.taskStatus).toBe('cancelled')
-    expect(JSON.parse(await fs.readFile(store.filePath, 'utf8')).conversations
-      .find((item: { id: string }) => item.id === interrupted.id).taskStatus).toBe('cancelled')
+    expect(JSON.parse(await fs.readFile(recordFile(testRoot, interrupted.id), 'utf8')).taskStatus).toBe('executing')
     await expect(reopened.updateConversation(interrupted.id, { taskStatus: 'unexpected' as never }))
       .rejects.toMatchObject({ code: 'INVALID_INPUT' })
   })
@@ -140,7 +226,7 @@ describe('persistent conversation library', () => {
     expect((await reopened.getConversation(created[0].id))?.history[0].content).toBe('保存这段上下文')
     expect((await reopened.listConversations()).length).toBe(19)
     expect((await reopened.getConversation(additional.id))?.title).toBe('新增会话')
-    expect(await fs.readdir(path.dirname(store.filePath))).toEqual(['library.json'])
+    expect((await fs.readdir(path.dirname(store.filePath))).sort()).toEqual(['library.json', 'records'])
   })
 
   it('changes only the visible tab count without removing or blocking conversations', async () => {
@@ -167,9 +253,14 @@ describe('persistent conversation library', () => {
       pendingMessages: [{ id: 'pending', text: '继续执行', attachments: [], createdAt: '2026-10-01T00:00:00.000Z' }],
       sdkSessionId: 'sdk-session', history: [{ role: 'user', content: '历史内容' }]
     })
-    const legacy = JSON.parse(await fs.readFile(old.filePath, 'utf8'))
-    legacy.version = 1
-    legacy.settings = { maxActiveConversations: 5 }
+    // Hand-build a v1 single-file library out of the full records, the way an
+    // old install would have looked.
+    const fullRecords = []
+    for (const session of created) {
+      fullRecords.push(JSON.parse(await fs.readFile(recordFile(testRoot, session.id), 'utf8')))
+    }
+    const legacy = { version: 1, settings: { maxActiveConversations: 5 },
+      activeConversationId: created.at(-1)!.id, conversations: fullRecords }
     for (const record of legacy.conversations) delete record.pinnedAt
     await fs.writeFile(old.filePath, JSON.stringify(legacy), 'utf8')
 
@@ -188,9 +279,11 @@ describe('persistent conversation library', () => {
     expect((await migrated.getConversation(created[0].id))?.sdkSessionId).toBe('sdk-session')
     expect((await migrated.getConversation(created[0].id))?.history[0].content).toBe('历史内容')
     const onDisk = JSON.parse(await fs.readFile(old.filePath, 'utf8'))
-    expect(onDisk.version).toBe(2)
+    expect(onDisk.version).toBe(3)
     expect(onDisk.conversations).toHaveLength(8)
-    expect(onDisk.conversations[0].pinnedAt).toBeNull()
+    expect(JSON.parse(await fs.readFile(recordFile(testRoot, created[0].id), 'utf8')).pinnedAt).toBeNull()
+    // The old single file stays beside it as a backup.
+    expect(await fs.stat(path.join(testRoot, 'conversations', 'library.v2.bak.json')).then(() => true)).toBe(true)
     await migrated.createConversation('迁移后继续创建')
     expect((await migrated.listConversations()).length).toBe(9)
   })
@@ -206,9 +299,11 @@ describe('persistent conversation library', () => {
       { id: 'pending', text: '继续执行', attachments: [], createdAt: '2026-10-01T00:00:00.000Z' }
     ] })
     await store.updateSettings({ autoArchiveAfterDays: 7 })
-    const file = JSON.parse(await fs.readFile(store.filePath, 'utf8'))
-    for (const record of file.conversations) record.updatedAt = '2026-09-01T00:00:00.000Z'
-    await fs.writeFile(store.filePath, JSON.stringify(file), 'utf8')
+    for (const session of [stale, pinned, pending, current]) {
+      const file = JSON.parse(await fs.readFile(recordFile(testRoot, session.id), 'utf8'))
+      file.lastActivityAt = '2026-09-01T00:00:00.000Z'
+      await fs.writeFile(recordFile(testRoot, session.id), JSON.stringify(file), 'utf8')
+    }
 
     const reopened = new ConversationStore(testRoot)
     const result = await reopened.archiveInactiveConversations(new Date('2026-10-08T00:00:00.000Z'))
@@ -270,8 +365,8 @@ describe('persistent conversation library', () => {
     expect(historyMatch).toContain('历史线索')
     expect(historyMatch.length).toBeLessThanOrEqual(160)
     expect(await store.listConversations({ query: '私有引用内容' })).toEqual([])
-    expect((await store.listConversations({ query: '内部任务标记' }))[0].preview).toBe('匹配了任务记录')
-    expect((await store.listConversations({ query: 'sk-aaaaaaaaaaaaaaaaaaaa' }))[0].preview).toBe('匹配了任务记录')
+    expect((await store.listConversations({ query: '内部任务标记' }))[0].preview).toBe('匹配了过程记录（思考或工具）')
+    expect((await store.listConversations({ query: 'sk-aaaaaaaaaaaaaaaaaaaa' }))[0].preview).toBe('匹配了过程记录（思考或工具）')
   })
 
   it('keeps the latest preview for title hits and hides sensitive older messages', async () => {
@@ -328,12 +423,11 @@ describe('persistent conversation library', () => {
     pendingMessages[0].text = '调用方改动'
     expect((await new ConversationStore(testRoot).getConversation(session.id))?.pendingMessages[0].text).toBe('下一条发送')
 
-    const oldFormat = JSON.parse(await fs.readFile(store.filePath, 'utf8'))
-    delete oldFormat.conversations[0].pendingMessages
-    await fs.writeFile(store.filePath, JSON.stringify(oldFormat), 'utf8')
+    const oldFormat = JSON.parse(await fs.readFile(recordFile(testRoot, session.id), 'utf8'))
+    delete oldFormat.pendingMessages
+    await fs.writeFile(recordFile(testRoot, session.id), JSON.stringify(oldFormat), 'utf8')
     const migrated = new ConversationStore(testRoot)
     expect((await migrated.getConversation(session.id))?.pendingMessages).toEqual([])
-    expect(JSON.parse(await fs.readFile(store.filePath, 'utf8')).conversations[0].pendingMessages).toEqual([])
   })
 
   it('preserves an invalid existing library instead of silently replacing it', async () => {
@@ -342,5 +436,76 @@ describe('persistent conversation library', () => {
     await fs.writeFile(store.filePath, '{"version":1,"conversations":', 'utf8')
     await expect(store.initialize()).rejects.toBeInstanceOf(ConversationStoreError)
     expect(await fs.readFile(store.filePath, 'utf8')).toBe('{"version":1,"conversations":')
+  })
+})
+
+describe('accrued conversation spend', () => {
+  it('survives a reload instead of resetting with the process', async () => {
+    const store = new ConversationStore(testRoot)
+    const record = await store.createConversation('花了钱的会话', 'claude_code')
+    await store.updateConversation(record.id, { spentYuan: 0.4212 })
+    // A fresh store reads the same file the way a restart would.
+    const reopened = new ConversationStore(testRoot)
+    expect((await reopened.getConversation(record.id))?.spentYuan).toBeCloseTo(0.4212, 6)
+  })
+})
+
+describe('listing order follows activity, not edits', () => {
+  it('keeps a session in place when it is renamed', async () => {
+    const store = new ConversationStore(testRoot)
+    const first = await store.createConversation('一', 'claude_code')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    await store.createConversation('二', 'claude_code')
+    const before = (await store.getState()).conversations.map((item) => item.id)
+    await store.updateConversation(before[1], { title: '改了名的' })
+    const after = (await store.getState()).conversations.map((item) => item.id)
+    expect(after).toEqual(before)
+    expect(first.id).toBe(before[1])
+  })
+
+  it('moves a session to the front when a message lands in it', async () => {
+    const store = new ConversationStore(testRoot)
+    const older = await store.createConversation('旧的', 'claude_code')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    await store.createConversation('新的', 'claude_code')
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    await store.updateConversation(older.id, {
+      timeline: [{ id: 'note', kind: 'system', text: '干过活', time: new Date().toISOString() }]
+    })
+    const after = (await store.getState()).conversations.map((item) => item.id)
+    expect(after[0]).toBe(older.id)
+  })
+})
+
+describe('search matches every word', () => {
+  it('finds a message that has both words anywhere, in any order', async () => {
+    const store = new ConversationStore(testRoot)
+    const record = await store.createConversation('格式修正', 'claude_code')
+    await store.updateConversation(record.id, {
+      timeline: [{ id: 'u', kind: 'user', text: '先看范围，再改格式。', time: new Date().toISOString() }]
+    })
+    expect((await store.listConversations({ query: '范围 格式' })).map((item) => item.id)).toEqual([record.id])
+    expect((await store.listConversations({ query: '格式 范围' })).map((item) => item.id)).toEqual([record.id])
+    expect(await store.listConversations({ query: '范围 页码' })).toEqual([])
+  })
+})
+
+describe('per-conversation storage', () => {
+  it('isolates a damaged record so the rest of the library survives', async () => {
+    const store = new ConversationStore(testRoot)
+    const healthy = await store.createConversation('健康的', 'claude_code')
+    const broken = await store.createConversation('坏掉的', 'claude_code')
+    await store.updateConversation(healthy.id, {
+      timeline: [{ id: 't', kind: 'user', text: '内容', time: new Date().toISOString() }]
+    })
+    await fs.writeFile(recordFile(testRoot, broken.id), '{ not json at all', 'utf8')
+
+    const reopened = new ConversationStore(testRoot)
+    const state = await reopened.getState()
+    // Both rows stay in the list; only the damaged one loses its content.
+    expect(state.conversations.map((item) => item.id).sort()).toEqual([healthy.id, broken.id].sort())
+    expect((await reopened.getConversation(healthy.id))?.timeline).toHaveLength(1)
+    expect((await reopened.getConversation(broken.id))?.timeline).toEqual([])
+    expect((await reopened.getConversation(broken.id))?.title).toBe('坏掉的')
   })
 })

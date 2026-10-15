@@ -19,7 +19,7 @@ const settings: ConversationSettings = {
 }
 
 function conversation(id: string, title: string, messageCount: number): ConversationSummary {
-  return { id, title, createdAt: '2026-10-13T00:00:00Z', updatedAt: '2026-10-13T01:00:00Z',
+  return { id, title, createdAt: '2026-10-13T00:00:00Z', updatedAt: '2026-10-13T01:00:00Z', lastActivityAt: '2026-10-13T01:00:00Z',
     archivedAt: null, pinnedAt: null, mode: 'claude_code', taskStatus: 'idle', messageCount, preview: '' }
 }
 

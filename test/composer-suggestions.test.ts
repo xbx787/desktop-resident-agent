@@ -56,7 +56,7 @@ describe('composer trigger detection', () => {
     ];
     const summaries = ids.map((id, index): ConversationSummary => ({
       id, title: ['当前会话', '项目计划', '旧项目计划'][index],
-      createdAt: '2026-10-13T00:00:00Z', updatedAt: `2026-10-13T0${index}:00:00Z`,
+      createdAt: '2026-10-13T00:00:00Z', updatedAt: `2026-10-13T0${index}:00:00Z`, lastActivityAt: `2026-10-13T0${index}:00:00Z`,
       archivedAt: index === 2 ? '2026-10-13T03:00:00Z' : null,
       pinnedAt: null, mode: 'claude_code', taskStatus: 'idle', messageCount: index === 0 ? 1 : 4, preview: ''
     }));

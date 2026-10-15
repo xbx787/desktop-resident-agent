@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { isImageAttachmentName } from '../shared/image-preview'
 import { petBridge } from './pet-state'
-import type { AttachmentNote } from './attachment-note'
+import { fileBadge, type AttachmentNote } from './attachment-note'
 import type { TimelineEntry } from '../shared/contracts'
 
 /** Read once per key and keep it (null marks a failed read): switching
@@ -88,7 +88,15 @@ export function EventImages({ note, prompt, images, onOpen }: {
     <p>{prompt}</p>
     {remainder && <div className="panel-event-attachments">
       <span className="panel-event-attachment-line" aria-hidden="true" />
-      <span className="panel-event-attachment-label">附件 {remainder}</span>
+      <div className="panel-event-file-list" aria-label={`附件 ${remainder}`}>
+        {remainder.split('、').map((name) => {
+          const badge = fileBadge(name)
+          return <span key={name} className="panel-event-file" title={name}>
+            <i aria-hidden="true">{badge.kind}</i>
+            <span>{badge.stem}</span>
+          </span>
+        })}
+      </div>
     </div>}
   </>
 }

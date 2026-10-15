@@ -93,6 +93,24 @@ function countedUsage(usage: { input_tokens?: unknown; output_tokens?: unknown;
   }
 }
 
+/** Two accountings into one: the result summary is the fuller bill, but on
+ *  this backend it has carried `output_tokens: 0` while the per-message
+ *  measurements were exact — a bucket the summary reports as zero falls back
+ *  to the measured value, and the total is recomputed from the four buckets
+ *  so it never disagrees with the rows the panel shows. */
+function mergeUsage(summary: TaskUsage | undefined, measured: TaskUsage): TaskUsage | undefined {
+  if (!summary) return measured.total ? measured : undefined
+  if (!measured.total) return summary
+  const input = summary.input || measured.input
+  const output = summary.output || measured.output
+  const cacheRead = summary.cacheRead || measured.cacheRead
+  const cacheCreate = summary.cacheCreate || measured.cacheCreate
+  return {
+    total: (input ?? 0) + (output ?? 0) + (cacheRead ?? 0) + (cacheCreate ?? 0),
+    input, output, cacheRead, cacheCreate
+  }
+}
+
 function emptyUsage(): TaskUsage {
   return { total: 0, input: 0, output: 0, cacheRead: 0, cacheCreate: 0 }
 }
@@ -739,7 +757,7 @@ export class ClaudeAgentClient implements ModelClient {
     // assistant usage and leave the value unknown when neither source exists.
     const measuredUsage = resultUsage && resultUsage.total === 0 && (message.subtype !== 'success' || message.is_error)
       ? (currentUsage.total ? currentUsage : undefined)
-      : resultUsage ?? (currentUsage.total ? currentUsage : undefined)
+      : mergeUsage(resultUsage, currentUsage)
     if (measuredUsage !== undefined) {
       turn.completedUsage = addUsage(turn.completedUsage, measuredUsage)
       turn.onTaskUsage?.(turn.completedUsage)

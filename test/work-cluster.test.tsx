@@ -59,7 +59,7 @@ describe('WorkCluster', () => {
     // One timer on the row — the thinking seconds live on the rows inside
     // (and in the hover title), never beside the elapsed time.
     expect(html).not.toContain('<span>思考 00:12</span>')
-    expect(html).toContain('<span>用时 00:12</span>')
+    expect(html).toContain('<span>00:12</span>')
     // The tool breakdown moved off the row: it is the hover title now.
     expect(html).toContain('title="思考 00:12，1 项操作，执行命令 ×1，用时 00:12"')
     expect(html).not.toContain('<span>1 项操作</span>')
@@ -108,7 +108,7 @@ describe('TurnProcess', () => {
     // Closed by default — the reader sees the outcome, not the process.
     expect(html).not.toMatch(/<details[^>]*\sopen/)
     // The row states the whole stretch, alive and visible.
-    expect(html).toContain('<span>用时 00:52</span>')
+    expect(html).toContain('<span>00:52</span>')
     expect(html).toContain('title="思考 00:24，1 项操作，执行命令 ×1，用时 00:52"')
     // Opening it lays the same pieces back out: the work cluster and the note.
     expect(html).toContain('panel-cluster-summary')

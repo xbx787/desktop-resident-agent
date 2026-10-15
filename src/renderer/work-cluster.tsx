@@ -41,12 +41,12 @@ export function workFacts(items: TimelineEntry[], nowMs: number, running: boolea
   return { steps: items.length, toolCount: tools.length, toolSummary: toolSummaryOf(tools), thinkingSeconds, elapsedSeconds }
 }
 
-/** The header's one phrase: how long the stretch took. Thinking time is
- *  deliberately absent — every thinking row inside shows its own seconds once
- *  the cluster opens, and two timers side by side read as one too many. The
- *  tool breakdown likewise lives only in the hover title. */
+/** The header's one phrase: how long the stretch took, as a bare clock. The
+ *  turn's own footer says "用时 XX" — the stretch's number deliberately reads
+ *  differently, and the full story (thinking, tools, elapsed) stays in the
+ *  hover title. */
 export function workFactsParts(facts: WorkFacts): string[] {
-  return facts.elapsedSeconds === null ? [] : [`用时 ${clockText(facts.elapsedSeconds)}`]
+  return facts.elapsedSeconds === null ? [] : [clockText(facts.elapsedSeconds)]
 }
 
 /** Everything the header knows, tool breakdown included — the hover title and

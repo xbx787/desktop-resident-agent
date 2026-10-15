@@ -149,6 +149,9 @@ export interface ConversationSummary {
   title: string
   createdAt: string
   updatedAt: string
+  /** Last real message activity; listing order and date groups use this so a
+   *  rename or pin does not move the row. Older records fall back to updatedAt. */
+  lastActivityAt: string
   archivedAt: string | null
   pinnedAt: string | null
   mode: ModelMode
@@ -289,6 +292,9 @@ export interface AppSnapshot {
   contextUsage?: ContextUsageSnapshot
   contextCompacting?: boolean
   taskMetrics?: TaskMetrics
+  /** What this conversation has cost so far, in yuan, priced by the DeepSeek
+   *  peak/off-peak tier each turn settled in. */
+  conversationSpentYuan?: number
   effort?: EffortLevel
   /** Planned-first mode: the session researches and proposes, then implements. */
   planMode?: boolean
@@ -316,6 +322,9 @@ export interface PetAPI {
   preparePastedFile(request: { name: string; data: string }): Promise<UserAttachment>
   readImagePreview(filePath: string): Promise<string | null>
   createConversation(title?: string): Promise<void>
+  /** Copy the settled latest reply into an independent conversation. Returns
+   *  only the new ID; its private model history never enters the renderer. */
+  forkConversation(sourceConversationId: string, expectedAssistantEntryId: string): Promise<string>
   selectConversation(id: string): Promise<void>
   renameConversation(id: string, title: string): Promise<void>
   setConversationPinned(id: string, pinned: boolean): Promise<void>
@@ -353,6 +362,8 @@ export interface PetAPI {
   onPanelOpen(callback: (open: boolean) => void): () => void
   showContextMenu(): Promise<void>
   setBalanceOpen(open: boolean): Promise<void>
+  /** Flips the balance card from the main process, where the real state lives. */
+  toggleBalance(): Promise<void>
   onBalanceOpen(callback: (open: boolean) => void): () => void
   getBalance(): Promise<BalanceSnapshot>
   openExternal(url: string): Promise<void>

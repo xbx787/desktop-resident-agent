@@ -46,7 +46,7 @@ export function groupSessionSummaries(
   )
   for (const item of summaries) {
     if ((item.archivedAt !== null) !== archived) continue
-    const time = parseTime(archived ? item.archivedAt : item.updatedAt)
+    const time = parseTime(archived ? item.archivedAt : item.lastActivityAt)
     const key = !archived && item.pinnedAt !== null ? 'pinned' : timeGroup(time, now)
     buckets.get(key)!.push(item)
   }
@@ -55,8 +55,8 @@ export function groupSessionSummaries(
     const conversations = buckets.get(key)!
     if (conversations.length === 0) return []
     conversations.sort((left, right) => {
-      const leftTime = parseTime(archived ? left.archivedAt : left.updatedAt) ?? -Infinity
-      const rightTime = parseTime(archived ? right.archivedAt : right.updatedAt) ?? -Infinity
+      const leftTime = parseTime(archived ? left.archivedAt : left.lastActivityAt) ?? -Infinity
+      const rightTime = parseTime(archived ? right.archivedAt : right.lastActivityAt) ?? -Infinity
       return rightTime - leftTime || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
     })
     return [{ key, label, conversations }]

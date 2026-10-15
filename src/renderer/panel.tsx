@@ -8,7 +8,7 @@ import { formatSelectionQuote } from './message-quote';
 import { toolLabel } from '../shared/tool-labels';
 import { AttachmentPreview, previewPlacement, type PreviewPlacement } from './attachment-preview';
 import { agentTasks } from './agent-tasks';
-import { splitAttachmentNote } from './attachment-note';
+import { fileBadge, splitAttachmentNote } from './attachment-note';
 import { ComposerSuggestions, detectComposerTrigger, fileMention, sessionSuggestionItems, workflowSuggestionItems, type ComposerSuggestion } from './composer-suggestions';
 import { pastedFileName, pastedFiles, restoreComposerState, stashComposerState, type StashedComposer } from './composer-drafts';
 import { GoalBanner } from './goal-banner';
@@ -86,6 +86,10 @@ function SelectIcon() {
   return <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.5" y="4" width="11" height="11" rx="2" /><path d="m6.5 9.4 2.3 2.2 3.6-3.8M16.5 7v9" /></svg>;
 }
 
+function ForkIcon() {
+  return <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="4" r="1.7" /><circle cx="15" cy="5" r="1.7" /><circle cx="15" cy="16" r="1.7" /><path d="M5 5.7v5a5 5 0 0 0 5 5h3.3M15 6.7v3a5 5 0 0 1-5 5" /></svg>;
+}
+
 function BackIcon() {
   return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="m11.8 4.5-5.5 5.5 5.5 5.5M6.8 10h9" /></svg>;
 }
@@ -155,6 +159,16 @@ function timeText(iso: string): string {
   const parsed = new Date(iso);
   return Number.isNaN(parsed.valueOf()) ? iso : parsed.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
+
+/** "10-13 12:30" — short, absolute, the way a row's info line reads it. */
+function stampText(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.valueOf())) return '—';
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
+}
+
+const modeLabels: Record<ModelMode, string> = { demo: '演示模式', live: 'DeepSeek 直连', claude_code: 'Claude Code + DeepSeek' };
 
 /** First line of a user message, trimmed for the turn menu's title. */
 function turnMenuTitle(entry: TimelineEntry): string {
@@ -350,9 +364,26 @@ function ApprovalCard({ proposal, busy, onApprove, onReject }: {
   );
 }
 
-function fitEditorHeight(editor: HTMLTextAreaElement): number {
+/** One line at 13px × 1.45 plus the 4px of padding — the floor the editor may
+ *  never go under, so the placeholder is always whole. */
+export const EDITOR_ONE_LINE = 23;
+/** Eight lines, then the editor scrolls. */
+export const EDITOR_MAX_HEIGHT = 155;
+
+/** Keeps a measured height sane: never a sliver (a zero-height pass squeezed
+ *  the placeholder out and the box then stayed collapsed), never past eight
+ *  lines. */
+export function clampEditorHeight(measured: number): number {
+  return Math.min(EDITOR_MAX_HEIGHT, Math.max(EDITOR_ONE_LINE, measured));
+}
+
+/** The editor's content height, or null when the measurement means nothing —
+ *  a hidden panel or a zero-width pass reports 0, and writing that back froze
+ *  the composer at a sliver until something else happened to re-measure it. */
+function fitEditorHeight(editor: HTMLTextAreaElement): number | null {
+  if (editor.clientWidth === 0) return null;
   editor.style.height = 'auto';
-  const nextHeight = Math.min(94, editor.scrollHeight);
+  const nextHeight = clampEditorHeight(editor.scrollHeight);
   editor.style.height = `${nextHeight}px`;
   return nextHeight;
 }
@@ -411,8 +442,10 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const [libraryOpen, setLibraryOpenRaw] = useState(false);
   // The 534px expanded bubble can hold a 190px library and a 320px chat.
   // Smaller displays keep the overlay drawer so the composer remains usable.
-  const libraryDocked = expanded && bubbleWidth >= 510;
-  const libraryPaneDocked = libraryDocked && (libraryOpen || drawerExit.closing);
+  // Date headings ("今天/昨天/更早") only pay off in the wide shape. The drawer
+  // itself is always a floating pane over the bubble — never a column that
+  // squeezes the conversation beside it.
+  const libraryGrouped = expanded && bubbleWidth >= 510 && (libraryOpen || drawerExit.closing);
   // Closing plays the drawer's exit animation first: the raw setter flips the
   // state, the wrapper starts the animation that keeps the drawer mounted
   // until it has slid away.
@@ -464,8 +497,10 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     if (!open) composerExit.beginClose();
     setComposerOpenRaw(open);
   }
-  // One-line fallback until fitEditorHeight measures the editor (13px * 1.45 line height + 4px padding).
-  const [composerHeight, setComposerHeight] = useState(23);
+  // One-line fallback until fitEditorHeight measures the editor; the same
+  // floor clampEditorHeight enforces, so a failed measurement can never
+  // shrink the box below a readable line.
+  const [composerHeight, setComposerHeight] = useState(EDITOR_ONE_LINE);
   const [attachments, setAttachments] = useState<DroppedAttachment[]>([]);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   // Hover previews of image chips: data URLs land here keyed by file path, so a
@@ -787,7 +822,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   // whenever either box resizes, so the drawer follows the composer through
   // collapses, expansions, and every added line.
   useLayoutEffect(() => {
-    if (!libraryOpen || libraryDocked) {
+    if (!libraryOpen) {
       // Closing: keep the frozen offset so the exit plays where it was.
       if (!drawerExit.closing) setDrawerBottom(null);
       return;
@@ -802,7 +837,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     observer.observe(workspace);
     observer.observe(dock);
     return () => observer.disconnect();
-  }, [libraryOpen, drawerExit.closing, libraryDocked]);
+  }, [libraryOpen, drawerExit.closing]);
 
   useEffect(() => {
     if (!voiceError) return
@@ -1316,12 +1351,33 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     if (currentId) goalPromptStash.current.set(currentId, goalPrompting);
     await libraryAction((bridge) => bridge.createConversation(), () => {
       activeConversationIdRef.current = null;
-      if (!libraryDocked) setLibraryOpen(false);
+      setLibraryOpen(false);
       composerStateRef.current = { draft: '', attachments: [] };
       setDraft('');
       setAttachments([]);
       setGoalPrompting(false);
       setComposerOpen(true);
+    });
+  }
+
+  async function forkFromReply(replyId: string): Promise<void> {
+    const sourceId = activeConversationIdRef.current;
+    if (!sourceId || libraryBusy) return;
+    let childId: string | null = null;
+    await libraryAction(async (bridge) => { childId = await bridge.forkConversation(sourceId, replyId); }, () => {
+      if (!childId) return;
+      stashComposerState(composerStash.current, sourceId, composerStateRef.current.draft, composerStateRef.current.attachments);
+      goalPromptStash.current.set(sourceId, goalPrompting);
+      activeConversationIdRef.current = childId;
+      const saved = restoreComposerState(composerStash.current, childId);
+      composerStateRef.current = saved;
+      setDraft(saved.draft);
+      setAttachments(saved.attachments);
+      setCaretIndex(saved.draft.length);
+      setAttachmentError(null);
+      setGoalPrompting(false);
+      setComposerOpen(true);
+      setLibraryOpen(false);
     });
   }
 
@@ -1334,7 +1390,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
       : (bridge: PetAPI) => bridge.restoreConversation(item.id);
     await libraryAction(operation, () => {
       activeConversationIdRef.current = item.id;
-      if (!libraryDocked) setLibraryOpen(false);
+      setLibraryOpen(false);
       setSessionMenuOpen(false);
       const saved = restoreComposerState(composerStash.current, item.id);
       composerStateRef.current = saved;
@@ -1375,7 +1431,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     });
   }, [visibleSessionKey, searchStatus]);
   const displayedGroups: Array<{ key: string; label: string | null; conversations: ConversationSummary[] }> =
-    libraryPaneDocked
+    libraryGrouped
       ? groupSessionSummaries(visibleConversations, libraryArchived, Date.now())
       : [{ key: 'all', label: null, conversations: visibleConversations }];
 
@@ -1473,6 +1529,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     const editor = editorRef.current;
     if (!composerOpen || !editor) return;
     const nextHeight = fitEditorHeight(editor);
+    if (nextHeight === null) return;
     setComposerHeight((current) => current === nextHeight ? current : nextHeight);
   }, [draft, composerOpen, expanded, compactEmpty]);
 
@@ -1484,6 +1541,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
       if (editor.clientWidth === width) return;
       width = editor.clientWidth;
       const nextHeight = fitEditorHeight(editor);
+      if (nextHeight === null) return;
       setComposerHeight((current) => current === nextHeight ? current : nextHeight);
     });
     observer.observe(editor);
@@ -1567,12 +1625,25 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     composerWasOpenRef.current = composerOpen;
   }, [composerOpen, composerExit.closing]);
 
+  // A click anywhere outside the rename row gives up on it — the same as
+  // pressing 取消, without needing to aim at the button.
+  useEffect(() => {
+    if (renameId === null) return;
+    const closeOutside = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target || target.closest('.panel-session-edit')) return;
+      setRenameId(null);
+    };
+    document.addEventListener('pointerdown', closeOutside, true);
+    return () => document.removeEventListener('pointerdown', closeOutside, true);
+  }, [renameId]);
+
   // Clicking outside the open library drawer puts it away — the conversation
   // beside it is the obvious target, so a plain click there should just work.
   // The buttons that open the drawer toggle it themselves, so they are left
   // alone to avoid closing and reopening in one gesture.
   useEffect(() => {
-    if (!libraryOpen || libraryDocked) return;
+    if (!libraryOpen) return;
     const closeOutside = (event: PointerEvent) => {
       const target = event.target as HTMLElement | null;
       if (!target || target.closest('.panel-library-drawer')) return;
@@ -1581,7 +1652,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     };
     document.addEventListener('pointerdown', closeOutside, true);
     return () => document.removeEventListener('pointerdown', closeOutside, true);
-  }, [libraryOpen, libraryDocked]);
+  }, [libraryOpen]);
 
   // Escape first dismisses a batch confirmation, then exits selection, then
   // closes the drawer. The capture listener must handle each layer before the
@@ -1651,10 +1722,10 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const plan = snapshot?.plan ?? null;
 
   return (
-    <section className={`panel-bubble${compactEmpty ? ' is-empty' : ''}${expanded ? ' is-expanded' : ''}${libraryPaneDocked ? ' is-library-docked' : ''}${composerOpen || composerExit.closing || ask || plan ? ' is-composing' : ''}${attachments.length ? ' has-attachments' : ''}${modelPickerOpen ? ' is-choosing-model' : ''}`} style={compactEmpty && (composerOpen || composerExit.closing) ? { height: compactComposerHeight } : undefined} aria-label="交互气泡" hidden={!visible} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => {
+    <section className={`panel-bubble${compactEmpty ? ' is-empty' : ''}${expanded ? ' is-expanded' : ''}${composerOpen || composerExit.closing || ask || plan ? ' is-composing' : ''}${attachments.length ? ' has-attachments' : ''}${modelPickerOpen ? ' is-choosing-model' : ''}`} style={compactEmpty && (composerOpen || composerExit.closing) ? { height: compactComposerHeight } : undefined} aria-label="交互气泡" hidden={!visible} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => {
       if (!event.dataTransfer.files.length) return;
       event.preventDefault();
-      if (libraryOpen && (!libraryDocked || (event.target as HTMLElement).closest('.panel-library-drawer'))) return;
+      if (libraryOpen) return;
       setComposerOpen(true);
       void addFiles(Array.from(event.dataTransfer.files));
     }}>
@@ -1708,7 +1779,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
           </nav>
         </header>}
         <div className="panel-chat-body">
-        {(libraryOpen || drawerExit.closing) && (libraryPaneDocked || drawerBottom !== null) && <aside className={`panel-library-drawer${libraryOpen ? '' : ' is-closing'}`} style={libraryPaneDocked ? undefined : { bottom: drawerBottom ?? 0 }} aria-label="会话列表" onAnimationEnd={drawerExit.endClose}>
+        {(libraryOpen || drawerExit.closing) && drawerBottom !== null && <aside className={`panel-library-drawer${libraryOpen ? '' : ' is-closing'}`} style={{ bottom: drawerBottom ?? 0 }} aria-label="会话列表" onAnimationEnd={drawerExit.endClose}>
           <header className="panel-library-header">
             <button type="button" className="panel-library-icon panel-library-back" aria-label="返回对话" title="返回对话" onClick={() => setLibraryOpen(false)}><BackIcon /></button>
             <h2>会话</h2>
@@ -1730,7 +1801,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
               {group.conversations.map((item) => <div key={item.id} className={`panel-session${library?.activeConversationId === item.id ? ' is-current' : ''}${selectedSessionIds.has(item.id) ? ' is-selected' : ''}`}>
               {!multiSelect && renameId === item.id ? <form className="panel-session-edit" onSubmit={(event) => { event.preventDefault(); void saveRename(item.id); }}>
                 <input autoFocus aria-label="会话名称" maxLength={120} value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setRenameId(null); }} />
-                <button type="submit" disabled={libraryBusy}>保存</button><button type="button" onClick={() => setRenameId(null)}>取消</button>
+                <button type="submit" className="panel-session-save" aria-label="保存名称" title="保存名称" disabled={libraryBusy}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m4.8 10.6 3.4 3.4 7-7.4" /></svg></button><button type="button" onClick={() => setRenameId(null)}>取消</button>
               </form> : !multiSelect && deleteId === item.id ? <div className="panel-session-confirm">
                 <span>永久删除“{item.title}”？</span>
                 <button type="button" disabled={libraryBusy} onClick={() => { void libraryAction((bridge) => bridge.deleteConversation(item.id), () => { composerStash.current.delete(item.id); setDeleteId(null); }); }}>确认删除</button>
@@ -1745,6 +1816,12 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
                   <button type="button" aria-label={`重命名 ${item.title}`} title="重命名" onClick={() => { setRenameId(item.id); setRenameDraft(item.title); }}><EditIcon /></button>
                   <button type="button" aria-label={`${item.archivedAt ? '恢复' : '归档'} ${item.title}`} title={statusRunning(item) ? '这个会话还在运行，结束后才能归档' : item.archivedAt ? '恢复' : '归档'} disabled={libraryBusy || statusRunning(item)} onClick={() => { void libraryAction((bridge) => item.archivedAt ? bridge.restoreConversation(item.id) : bridge.archiveConversation(item.id)); }}><ArchiveIcon restore={Boolean(item.archivedAt)} /></button>
                   <button type="button" aria-label={`删除 ${item.title}`} title={statusRunning(item) ? '这个会话还在运行，结束后才能删除' : '删除'} disabled={libraryBusy || statusRunning(item)} onClick={() => setDeleteId(item.id)}><DeleteIcon /></button>
+                </div>}
+                {!multiSelect && <div className="panel-session-meta" aria-hidden="true">
+                  <span>{modeLabels[item.mode]}</span>
+                  <span>创建 {stampText(item.createdAt)}</span>
+                  <span>活动 {stampText(item.lastActivityAt)}</span>
+                  <span>{item.messageCount} 条消息</span>
                 </div>}
               </>}
               </div>)}
@@ -1772,7 +1849,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
         )}
 
         <div className="panel-feed-wrap" ref={feedWrapRef}>
-          <TimelineNav marks={navMarkList} onJump={jumpToEntry} windowSize={expanded && !libraryPaneDocked ? NAV_WINDOW_WIDE : NAV_WINDOW_COMPACT} />
+          <TimelineNav marks={navMarkList} onJump={jumpToEntry} windowSize={expanded ? NAV_WINDOW_WIDE : NAV_WINDOW_COMPACT} />
           <div className="panel-feed" ref={feedRef} aria-label="对话与任务时间线" onScroll={(event) => {
             const feed = event.currentTarget;
             const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 48;
@@ -1794,6 +1871,13 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
               // pieces listed beneath like an unordered list — so alignment is
               // structural, and none of the pieces become rail marks.
               const firstReplyId = group.items.find((item) => item.kind === 'assistant')?.id;
+              // "Latest reply" is the turn's final entry itself: a mid-turn
+              // sentence or a tool call after it means the answer is not
+              // complete yet — there is nothing settled to fork from.
+              const lastEntry = group.items[group.items.length - 1];
+              const latestReplyId = lastEntry?.kind === 'assistant' && lastEntry.text.trim() ? lastEntry.id : undefined;
+              const canFork = index === latestTurnIndex && status === 'done' && !sendingCurrent && queuedCount === 0 &&
+                !snapshot?.proposal && Boolean(library?.activeConversationId && latestReplyId);
               const runAnchor = group.items[0];
               return <div className="panel-turn" key={group.user.id}>
                 <TimelineItem entry={group.user} display={rowDisplay} onAvatarMenu={(event) => showTurnMenu(event, group.user.id, turnMenuTitle(group.user), isLiveTurn)} />
@@ -1813,9 +1897,12 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
                           running={isLiveTurn && segmentIndex === tail.length - 1}
                           renderEntry={renderEntry}
                         />)}
+                    {canFork && latestReplyId && <div className="panel-reply-actions">
+                      <button type="button" className="panel-fork-action" aria-label="从最新回复复制会话续聊" aria-description="复制对话记录，模型会重新读取部分历史，不会回滚电脑文件" title="复制对话记录续聊；模型会重新读取部分历史，不会回滚文件" disabled={libraryBusy} onClick={() => { void forkFromReply(latestReplyId); }}><ForkIcon /></button>
+                    </div>}
                   </div>
                 </article>}
-                <TurnStats entries={group.items} metrics={index === latestTurnIndex ? snapshot?.taskMetrics : undefined} running={index === latestTurnIndex && active} />
+                <TurnStats entries={group.items} metrics={index === latestTurnIndex ? snapshot?.taskMetrics : undefined} running={index === latestTurnIndex && active} spentYuan={snapshot?.conversationSpentYuan} />
               </div>;
             })}
             <WorkingIndicator sending={sendingCurrent} thinking={liveThinking} status={status} tool={runningTool} startedAt={snapshot?.taskMetrics?.startedAt} />
@@ -1901,13 +1988,14 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
               {suggestionOpen && suggestionTrigger && <ComposerSuggestions kind={suggestionTrigger.kind} query={suggestionTrigger.query} items={suggestionItems} selectedIndex={suggestionSelected} loading={suggestionLoading} failed={suggestionFailed} onSelect={acceptSuggestion} />}
               {attachments.length > 0 && <div className="panel-attachments" aria-label="已添加附件"
                 onMouseLeave={() => setPreviewCard(null)} onBlur={() => setPreviewCard(null)}>
-                {attachments.map((attachment) => <span key={attachment.id} className="panel-attachment-chip" title={attachment.name}
+                {attachments.map((attachment) => { const badge = fileBadge(attachment.name); return <span key={attachment.id} className="panel-attachment-chip" title={attachment.name}
                   onMouseEnter={(event) => showAttachmentPreview(attachment, event.currentTarget)}
                   onFocus={(event) => showAttachmentPreview(attachment, event.currentTarget)}
                   onClick={(event) => { if (!(event.target as HTMLElement).closest('button')) void openAttachmentImage(attachment); }}>
-                  <span>{attachment.name}</span>
+                  <i aria-hidden="true">{badge.kind}</i>
+                  <span>{badge.stem}</span>
                   <button type="button" aria-label={`移除 ${attachment.name}`} onClick={() => setAttachments((current) => current.filter((item) => item.id !== attachment.id))}>×</button>
-                </span>)}
+                </span>})}
               </div>}
               {previewCard && attachmentPreviews[previewCard.path] && attachments.some((item) => item.path === previewCard.path) &&
                 <AttachmentPreview placement={previewCard.placement} name={previewCard.name} src={attachmentPreviews[previewCard.path]} />}

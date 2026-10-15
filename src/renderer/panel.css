@@ -41,7 +41,9 @@
 .panel-window-action svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .panel-bubble.is-empty::after { right: calc(50% - 6.5px); }
 .panel-bubble.is-empty.is-composing::after { right: 74px; }
-.panel-bubble.is-empty .panel-feed { display: none; }
+/* The wrap itself goes: hidden feed alone still held flex space and pushed
+   the composer to the very bottom of the small bubble. */
+.panel-bubble.is-empty .panel-feed-wrap { display: none; }
 .panel-bubble.is-empty .panel-compose-dock { flex: 1; min-height: 0; align-items: center; justify-content: center; padding: 8px; }
 .panel-bubble.is-empty.is-composing .panel-compose-dock { padding: 40px 12px 10px; }
 .panel-bubble.is-empty .panel-workspace { border-radius: inherit; }
@@ -196,7 +198,7 @@
 .panel-tasks.is-working .panel-tasks-icon { stroke: #f0c47b; }
 /* One label, one voice: same size and weight as the counts beside it — only the
    name is a shade brighter than the numbers. */
-.panel-tasks-title { flex: none; color: #c3d4f2; }
+.panel-tasks-title { flex: none; color: #c3d4f2; font-size: 12px; }
 .panel-tasks-counts { display: flex; gap: 9px; min-width: 0; overflow: hidden; color: #93aad4; }
 .panel-tasks-counts > span { white-space: nowrap; }
 .panel-tasks-chevron { margin-left: auto; flex: none; width: 12px; height: 12px; fill: none; stroke: #90aad8; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; transition: transform .18s ease; transform: rotate(180deg); }
@@ -216,7 +218,7 @@
    the conversation and composer stay in place. Its lower edge is pinned to
    the composer's top edge (inline `bottom`, measured live from the dock), so
    the input never ends up buried under the list. */
-.panel-library-drawer { position: absolute; z-index: 7; top: 0; left: 0; display: flex; flex-direction: column; width: min(280px, calc(100% - 56px)); min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid rgba(190, 212, 255, .26); border-radius: 0 14px 14px 0; background: linear-gradient(155deg, rgba(36, 61, 116, .99), rgba(14, 29, 65, .99)); box-shadow: 12px 0 30px rgba(4, 12, 33, .42); animation: panel-drawer-in .21s cubic-bezier(.22, .75, .25, 1) both; }
+.panel-library-drawer { position: absolute; z-index: 7; top: 0; left: 0; display: flex; flex-direction: column; width: min(320px, calc(100% - 56px)); min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid rgba(190, 212, 255, .26); border-radius: 0 14px 14px 0; background: linear-gradient(155deg, rgba(36, 61, 116, .99), rgba(14, 29, 65, .99)); box-shadow: 12px 0 30px rgba(4, 12, 33, .42); animation: panel-drawer-in .21s cubic-bezier(.22, .75, .25, 1) both; }
 .panel-library-drawer.is-closing { pointer-events: none; animation: panel-drawer-out .19s cubic-bezier(.55, 0, .85, .4) both; }
 .panel-library-header { display: flex; align-items: center; gap: 6px; flex: none; height: 43px; padding: 7px 9px 4px 11px; }
 .panel-library-header h2 { flex: 1; margin: 0; color: #f0f5ff; font-size: 13px; font-weight: 600; }
@@ -253,8 +255,17 @@
 .panel-session-actions button { display: grid; place-items: center; width: 26px; height: 26px; min-height: 26px; padding: 0; background: transparent; }
 .panel-session-actions button svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .panel-session-edit, .panel-session-confirm { flex: 1 0 100%; padding: 1px 3px 4px; }
+/* The row's own second line, shown on hover or focus: mode, birth, last
+   activity and size — the facts you otherwise had to open the session for.
+   In-flow rather than a floating tip: the drawer clips its overflow. */
+.panel-session-meta { display: none; flex: 1 0 100%; flex-wrap: wrap; gap: 4px 10px; padding: 0 5px 3px; color: #8fa5cd; font-size: 10px; }
+.panel-session:hover .panel-session-meta, .panel-session:focus-within .panel-session-meta { display: flex; }
 .panel-session-actions button:hover:not(:disabled), .panel-session-edit button:hover, .panel-session-confirm button:hover { background: rgba(169, 198, 255, .22); }
 .panel-session-edit input { flex: 1; min-width: 0; height: 26px; padding: 0 6px; border: 1px solid rgba(190, 213, 253, .35); border-radius: 6px; color: #f0f5ff; background: rgba(10, 24, 58, .45); font: inherit; font-size: 11px; }
+/* The save action is a check, not a word: the row stays one line and reads
+   the same as the ✕-less rows beside it. */
+.panel-session-edit button.panel-session-save { display: grid; place-items: center; width: 26px; min-height: 26px; padding: 0; }
+.panel-session-edit button.panel-session-save svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .panel-session-confirm { justify-content: flex-end; }
 .panel-session-confirm span { flex: 1; color: #f4d5d7; font-size: 10px; }
 .panel-library-hint { flex: none; margin: 0; padding: 7px 12px 10px; color: #b4c9ee; font-size: 10px; line-height: 1.35; }
@@ -267,17 +278,6 @@
 .panel-library-batch button:hover:not(:disabled) { background: rgba(178, 203, 251, .17); }
 .panel-library-batch button:disabled { opacity: .45; }
 .panel-library-batch button svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-.panel-bubble.is-library-docked .panel-library-drawer {
-  position: relative; top: auto; left: auto; bottom: auto; flex: 0 0 190px;
-  width: 190px; height: 100%; border-radius: 0; box-shadow: none;
-  background: rgba(19, 38, 81, .86);
-}
-.panel-bubble.is-library-docked .panel-session { position: relative; }
-.panel-bubble.is-library-docked .panel-session-main { flex-basis: 100%; }
-.panel-bubble.is-library-docked .panel-session-actions {
-  position: absolute; right: 3px; bottom: 3px; gap: 0; border-radius: 7px;
-  background: rgba(20, 40, 84, .97);
-}
 .panel-quick-tabs { display: flex; align-items: end; gap: 3px; flex: 1; min-width: 0; height: 35px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .panel-quick-tabs::-webkit-scrollbar { display: none; }
 .panel-quick-tab { display: flex; align-items: center; justify-content: center; gap: 5px; flex: 1 1 70px; min-width: 0; max-width: 150px; height: 31px; padding: 0 8px; overflow: hidden; border: 1px solid transparent; border-bottom: 0; border-radius: 9px 9px 0 0; color: #aebfe0; background: rgba(155, 190, 252, .055); font-size: 11px !important; white-space: nowrap; touch-action: none; }
@@ -321,7 +321,7 @@
    every one-line message — the user bubble included — was stretched to match.
    It runs to the block's own bottom edge so the stats row's bridge can pick
    it up without a seam. */
-.panel-event-avatar::after { content: ''; position: absolute; top: 40px; bottom: 0; left: calc(50% - 0.8px); width: 1.6px; border-radius: 1px; background: linear-gradient(180deg, rgba(150, 178, 226, .32), rgba(150, 178, 226, .08)); }
+.panel-event-avatar::after { content: ''; position: absolute; top: 40px; bottom: 0; left: calc(50% - 0.8px); width: 1.6px; border-radius: 1px; background: rgba(150, 178, 226, .2); }
 /* With a clock between glyph and thread, the thread starts under it:
    39 glyph + 8 gap + 10 clock + the 1px breather. */
 .panel-event-avatar:has(.panel-event-time)::after { top: 58px; }
@@ -329,6 +329,12 @@
    every further piece is a list-like paragraph. Its dot is a pseudo-element
    of the paragraph itself — alignment by construction, it cannot drift. */
 .panel-event.is-run .panel-event-body { display: grid; gap: 10px; }
+.panel-reply-actions { display: flex; justify-content: flex-end; height: 24px; margin-top: -6px; }
+.panel-fork-action { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 8px; color: #b7cdf2; background: transparent; opacity: .58; transition: color .14s ease, background .14s ease, opacity .14s ease; }
+.panel-fork-action svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.panel-event.is-run:hover .panel-fork-action, .panel-fork-action:focus-visible { opacity: 1; }
+.panel-fork-action:hover:not(:disabled), .panel-fork-action:focus-visible { color: #f1f6ff; background: rgba(179, 205, 255, .16); }
+.panel-fork-action:disabled { opacity: .35; }
 /* The reply pieces carry no bullet: a dot per paragraph read as a list of
    unrelated items — the final answer most of all. The pieces just flow. */
 .panel-avatar-img { width: 39px; height: 39px; border: 1px solid rgba(190, 213, 253, .35); border-radius: 13.5px; object-fit: cover; }
@@ -358,9 +364,12 @@
 .panel-event-system .panel-event-body p { margin: 0; color: #a9bee4; font-size: 11px; line-height: 1.5; }
 /* A user message with attachments: the file list sits under its own hairline
    instead of trailing the sentence on the same line. */
-.panel-event-attachments { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
-.panel-event-attachment-line { flex: 1; height: 1px; min-width: 24px; background: linear-gradient(90deg, rgba(190, 212, 255, .38), rgba(190, 212, 255, .05)); }
-.panel-event-attachment-label { flex: none; color: #a9bee4; font-size: 11px; }
+.panel-event-attachments { display: grid; gap: 7px; margin-top: 8px; }
+.panel-event-attachment-line { height: 1px; background: linear-gradient(90deg, rgba(190, 212, 255, .38), rgba(190, 212, 255, .05)); }
+.panel-event-file-list { display: flex; flex-wrap: wrap; gap: 5px; }
+.panel-event-file { display: inline-flex; align-items: baseline; gap: 5px; max-width: 100%; padding: 2px 8px 3px; border: 1px solid rgba(190, 213, 253, .18); border-radius: 7px; color: #dce7ff; background: rgba(141, 176, 239, .12); font-size: 11px; }
+.panel-event-file i { flex: none; color: #93aad4; font-size: 9px; font-style: normal; letter-spacing: .06em; }
+.panel-event-file span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .panel-event-tool .panel-event-body p { color: #cad8f5; }
 /* Thinking reads like a tool row (read / Grep): a summary you expand, never a
    quote-styled block. The chain runs flush with the panel's left edge — the old
@@ -400,7 +409,7 @@
    while the dot shows, a faint line bridges from the block's bottom edge down
    onto the dot's top edge on the same axis; a finished turn has no dot, so no
    bridge is drawn. */
-.panel-turn-stats:has(.panel-turn-stats-dot)::before { content: ''; position: absolute; left: 18.7px; top: -15px; width: 1.6px; height: calc(50% + 11.5px); border-radius: 1px; background: linear-gradient(180deg, rgba(150, 178, 226, .08), rgba(150, 178, 226, .3)); }
+.panel-turn-stats:has(.panel-turn-stats-dot)::before { content: ''; position: absolute; left: 18.7px; top: -15px; width: 1.6px; height: calc(50% + 11.5px); border-radius: 1px; background: rgba(150, 178, 226, .2); }
 /* Hover the token count to see how the endpoint billed it: fresh input, cache
    hits, cache writes and output cost very different amounts. */
 .panel-turn-usage { position: relative; cursor: default; }
@@ -500,13 +509,13 @@
 .panel-tool-diff-line.is-gap, .panel-tool-diff-line.is-more { padding-top: 3px; color: #7f93bb; }
 /* A stretch of continuous work — 思考 + 工具调用 — folded under one header that
    states what it did. Live while it runs, folded once the turn moves on. */
-.panel-cluster { margin: 0 0 4px; }
-.panel-cluster-summary { display: flex; align-items: center; gap: 8px; min-height: 25px; padding: 0 6px; border: 1px solid transparent; border-radius: 7px; color: #b9cdf0; font-size: 11px; list-style: none; cursor: pointer; }
+.panel-cluster { margin: 0; }
+.panel-cluster-summary { display: flex; align-items: center; gap: 8px; min-height: 25px; padding: 0 6px 0 0; border: 1px solid transparent; border-radius: 7px; color: #b9cdf0; font-size: 11px; list-style: none; cursor: pointer; }
 .panel-cluster-summary:hover, .panel-cluster[open] > .panel-cluster-summary { border-color: rgba(185, 210, 255, .15); background: rgba(7, 23, 56, .24); }
 .panel-cluster-summary::-webkit-details-marker { display: none; }
 .panel-cluster-chevron { flex: none; width: 12px; height: 12px; fill: none; stroke: #90aad8; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; transition: transform .18s ease; }
 .panel-cluster[open] .panel-cluster-chevron { transform: rotate(90deg); }
-.panel-cluster-facts { display: flex; gap: 12px; min-width: 0; overflow: hidden; color: #93aad4; }
+.panel-cluster-facts { display: flex; gap: 12px; min-width: 0; overflow: hidden; color: #7f93bd; font-size: 10px; }
 .panel-cluster-facts > span { white-space: nowrap; }
 .panel-cluster-state { margin-left: auto; flex: none; color: #9bd8ad; font-size: 14px; line-height: 1; }
 .panel-cluster-state.is-running { color: #f0c47b; animation: voice-pulse 1.2s ease-in-out infinite; }
@@ -708,7 +717,7 @@
 .panel-suggestion-item span { flex: none; max-width: 42%; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .panel-suggestion-item small { flex: 1; min-width: 0; overflow: hidden; color: #adc1e5; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .panel-composer-inputrow { position: relative; display: flex; flex: none; min-height: 0; padding-right: 23px; }
-.panel-composer textarea { width: 100%; flex: none; min-width: 0; min-height: 0; max-height: 94px; padding: 2px 2px 2px 0; resize: none; overflow-y: auto; border: 0; outline: none; color: #f3f6ff; background: transparent; font-size: 13px; line-height: 1.45; scrollbar-color: rgba(171, 201, 250, .62) transparent; scrollbar-width: auto; }
+.panel-composer textarea { width: 100%; flex: none; min-width: 0; min-height: 0; max-height: 155px; padding: 2px 2px 2px 0; resize: none; overflow-y: auto; border: 0; outline: none; color: #f3f6ff; background: transparent; font-size: 13px; line-height: 1.45; scrollbar-color: rgba(171, 201, 250, .62) transparent; scrollbar-width: auto; }
 .panel-composer textarea::-webkit-scrollbar { width: 8px; }
 .panel-composer textarea::-webkit-scrollbar-thumb { border-radius: 8px; background: rgba(171, 201, 250, .58); }
 .panel-composer textarea::-webkit-scrollbar-thumb:hover { background: rgba(198, 220, 255, .78); }
@@ -821,7 +830,8 @@
 .panel-send { color: #1a2d5b; background: #bdd4ff; }
 .panel-attachments { display: flex; flex: none; gap: 5px; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
 .panel-attachments::-webkit-scrollbar { display: none; }
-.panel-attachment-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 138px; min-height: 20px; padding: 0 4px 0 7px; border: 1px solid rgba(190, 213, 253, .18); border-radius: 7px; color: #dce7ff; background: rgba(141, 176, 239, .12); font-size: 10px; }
+.panel-attachment-chip { display: inline-flex; align-items: center; gap: 4px; max-width: 160px; min-height: 20px; padding: 0 4px 0 7px; border: 1px solid rgba(190, 213, 253, .18); border-radius: 7px; color: #dce7ff; background: rgba(141, 176, 239, .12); font-size: 10px; }
+.panel-attachment-chip i { flex: none; color: #93aad4; font-size: 9px; font-style: normal; letter-spacing: .06em; }
 .panel-attachment-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .panel-attachment-chip button { display: grid; place-items: center; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 5px; color: #c4d4f4; background: transparent; font-size: 14px; line-height: 1; }
 .panel-attachment-error { flex: none; overflow: hidden; color: #f1c6c9; font-size: 10px; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }

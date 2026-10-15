@@ -38,6 +38,72 @@ async function until(check: () => boolean, label: string): Promise<void> {
 }
 
 describe('conversation controller', () => {
+  it('copies a settled Claude conversation cold and keeps subsequent turns independent', async () => {
+    const calls: Array<{ history: Array<{ role: string; content: string }>; sdkSessionId: string | null | undefined }> = []
+    const model: ModelClient = {
+      respond: async (history, _signal, _progress, sdkSessionId) => {
+        calls.push({ history: structuredClone(history), sdkSessionId })
+        return { text: `答复 ${calls.length}`, sdkSessionId: sdkSessionId ?? `new-sdk-${calls.length}` }
+      }
+    }
+    const store = new ConversationStore(testRoot)
+    const controller = new ConversationController(store,
+      (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model))
+    await controller.initialize()
+    const sourceId = controller.getSnapshot().conversationId!
+    await controller.sendMessage('原问题')
+    await until(() => controller.allConversationsIdle() && calls.length === 1 &&
+      controller.getSnapshot().taskStatus === 'done', 'source reply')
+    const replyId = [...controller.getSnapshot().timeline].reverse().find((entry) => entry.kind === 'assistant')!.id
+    const original = await store.getConversation(sourceId)
+    const childId = await controller.forkConversation(sourceId, replyId)
+    expect(controller.getSnapshot().conversationId).toBe(childId)
+    expect(controller.getSnapshot().timeline).toEqual(original?.timeline)
+    expect((await store.getConversation(childId))?.sdkSessionId).toBeNull()
+    expect((await store.getConversation(sourceId))?.sdkSessionId).toBe('new-sdk-1')
+
+    await controller.sendMessage('子会话继续')
+    await until(() => controller.allConversationsIdle() && calls.length === 2, 'child reply')
+    expect(calls[1].sdkSessionId).toBeNull()
+    expect(calls[1].history.map((line) => line.content)).toEqual(['原问题', '答复 1', '子会话继续'])
+    await controller.sendMessage('源会话继续', [], 'queue', sourceId)
+    await until(() => controller.allConversationsIdle() && calls.length === 3, 'source follow-up')
+    expect(calls[2].sdkSessionId).toBe('new-sdk-1')
+    expect(calls[2].history.map((line) => line.content)).toEqual(['原问题', '答复 1', '源会话继续'])
+    expect((await store.getConversation(childId))?.history.at(-1)?.content).toBe('答复 2')
+    expect((await store.getConversation(sourceId))?.history.at(-1)?.content).toBe('答复 3')
+  })
+
+  it('refuses a stale reply, a running turn and a disk-queued cold source', async () => {
+    let finish!: (reply: ModelReply) => void
+    const model: ModelClient = { respond: () => new Promise((resolve) => { finish = resolve }) }
+    const store = new ConversationStore(testRoot)
+    await store.createConversation('运行源', 'live')
+    const controller = new ConversationController(store,
+      (onChange) => new AgentRuntime(new NoteStore(testRoot), model, onChange))
+    await controller.initialize()
+    const sourceId = controller.getSnapshot().conversationId!
+    await controller.sendMessage('正在处理')
+    await until(() => Boolean(finish), 'fork test live request')
+    const runningReplyId = controller.getSnapshot().timeline.find((entry) => entry.kind === 'assistant')?.id ?? 'not-yet'
+    await expect(controller.forkConversation(sourceId, runningReplyId)).rejects.toThrow()
+    expect((await store.getState()).conversations).toHaveLength(1)
+    finish({ text: '完成答复' })
+    await until(() => controller.allConversationsIdle() && controller.getSnapshot().taskStatus === 'done', 'fork test settled turn')
+    const replyId = [...controller.getSnapshot().timeline].reverse().find((entry) => entry.kind === 'assistant')!.id
+    await expect(controller.forkConversation(sourceId, 'stale-id')).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    expect((await store.getState()).conversations).toHaveLength(1)
+    const cold = await store.createConversation('冷会话', 'live')
+    await store.updateConversation(cold.id, { taskStatus: 'done',
+      timeline: [{ id: randomUUID(), kind: 'user', time: new Date().toISOString(), text: '冷问题' },
+        { id: replyId, kind: 'assistant', time: new Date().toISOString(), text: '冷答复' }],
+      history: [{ role: 'user', content: '冷问题' }, { role: 'assistant', content: '冷答复' }],
+      pendingMessages: [{ id: randomUUID(), text: '稍后发送', attachments: [], createdAt: new Date().toISOString() }]
+    })
+    await expect(controller.forkConversation(cold.id, replyId)).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    expect((await store.getState()).conversations).toHaveLength(2)
+  })
+
   it('bulk updates idle sessions, preserves busy turns, and replaces an emptied active session', async () => {
     const calls: Array<(reply: ModelReply) => void> = []
     const model: ModelClient = { respond: () => new Promise((resolve) => { calls.push(resolve) }) }
@@ -329,9 +395,12 @@ describe('conversation controller', () => {
     const current = await store.createConversation('正在查看')
     await store.setConversationPinned(pinned.id, true)
     await store.updateSettings({ autoArchiveAfterDays: 7 })
-    const data = JSON.parse(await fs.readFile(store.filePath, 'utf8'))
-    for (const record of data.conversations) record.updatedAt = '2020-01-01T00:00:00.000Z'
-    await fs.writeFile(store.filePath, JSON.stringify(data), 'utf8')
+    for (const session of [stale, pinned, current]) {
+      const file = path.join(testRoot, 'conversations', 'records', `${session.id}.json`)
+      const record = JSON.parse(await fs.readFile(file, 'utf8'))
+      record.lastActivityAt = '2020-01-01T00:00:00.000Z'
+      await fs.writeFile(file, JSON.stringify(record), 'utf8')
+    }
 
     const reopened = new ConversationStore(testRoot)
     const controller = new ConversationController(reopened, (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))

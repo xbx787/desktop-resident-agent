@@ -16,7 +16,7 @@ const settings: ConversationSettings = {
 
 function summary(id: string, archived = false): ConversationSummary {
   return {
-    id, title: `会话 ${id}`, createdAt: '2026-10-13T00:00:00.000Z', updatedAt: '2026-10-13T00:00:00.000Z',
+    id, title: `会话 ${id}`, createdAt: '2026-10-13T00:00:00.000Z', updatedAt: '2026-10-13T00:00:00.000Z', lastActivityAt: '2026-10-13T00:00:00.000Z',
     archivedAt: archived ? '2026-10-13T01:00:00.000Z' : null, pinnedAt: null, mode: 'claude_code',
     taskStatus: 'idle', messageCount: 1, preview: ''
   }
@@ -170,7 +170,7 @@ describe('conversation library search', () => {
     const updated = snapshot()
     updated.conversationLibrary!.conversations[0] = {
       ...updated.conversationLibrary!.conversations[0],
-      updatedAt: '2026-10-13T02:00:00.000Z', messageCount: 2, preview: '新增内容'
+      updatedAt: '2026-10-13T02:00:00.000Z', lastActivityAt: '2026-10-13T02:00:00.000Z', messageCount: 2, preview: '新增内容'
     }
     await act(async () => root.render(<PanelBubble visible snapshot={updated} error={null}
       run={async (action) => { try { await action(bridge); return true } catch { return false } }} />))

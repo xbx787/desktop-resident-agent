@@ -1,5 +1,6 @@
 import type { AgentGoal, AppSnapshot, AskAnswers, ContextUsageSnapshot, EffortLevel, ModelMode, ModelProfile, ProposedAction, TimelineEntry, UserAttachment } from '../shared/contracts'
 import { isImageAttachmentName } from '../shared/image-preview'
+import { usageSpendYuan } from '../shared/deepseek-pricing'
 import { toolLabel } from '../shared/tool-labels'
 import { AgentTurnError } from './agent-errors'
 import type { DialogueLine, ModelClient, ModelReply, ModelToolEvent } from './deepseek'
@@ -319,6 +320,7 @@ export class AgentRuntime {
     this.state.contextUsage = { status: 'unavailable' }
     this.state.contextCompacting = false
     this.state.taskMetrics = undefined
+    this.state.conversationSpentYuan = record.spentYuan ?? 0
     // A restored CLI goal is visible, but its state must be confirmed again by
     // an SDK event before we call it active or count another iteration.
     this.clearGoalTimer()
@@ -342,12 +344,13 @@ export class AgentRuntime {
     this.emit()
   }
 
-  exportConversationState(): Pick<ConversationRecord, 'mode' | 'timeline' | 'history' | 'sdkSessionId'> {
+  exportConversationState(): Pick<ConversationRecord, 'mode' | 'timeline' | 'history' | 'sdkSessionId' | 'spentYuan'> {
     return {
       mode: this.state.mode,
       timeline: structuredClone(this.state.timeline),
       history: structuredClone(this.history),
-      sdkSessionId: this.sdkSessionId
+      sdkSessionId: this.sdkSessionId,
+      spentYuan: this.state.conversationSpentYuan ?? 0
     }
   }
 
@@ -795,10 +798,22 @@ export class AgentRuntime {
     return model?.getCommandCatalog?.()
   }
 
+  /** The settled turn's tokens are billed at the tier in force now — the same
+   *  clock the balance card shows — and the conversation keeps a running
+   *  total for the hover readout. */
+  private accrueSpend(): void {
+    const usage = this.state.taskMetrics?.usage
+    if (!usage) return
+    const yuan = usageSpendYuan(usage)
+    if (yuan === null || !Number.isFinite(yuan)) return
+    this.state.conversationSpentYuan = Number(((this.state.conversationSpentYuan ?? 0) + yuan).toFixed(6))
+  }
+
   private emit(): void {
     if (this.state.taskMetrics && !this.state.taskMetrics.finishedAt &&
       ['done', 'failed', 'cancelled'].includes(this.state.taskStatus)) {
       this.state.taskMetrics.finishedAt = new Date().toISOString()
+      this.accrueSpend()
     }
     // The consumer pulls a snapshot when it is ready to publish one; building one here
     // would clone the whole timeline on every streaming delta for nothing.

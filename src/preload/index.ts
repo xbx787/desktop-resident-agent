@@ -9,6 +9,8 @@ const api: PetAPI = {
   preparePastedFile: (request) => ipcRenderer.invoke('pet:prepare-pasted-file', request),
   readImagePreview: (filePath) => ipcRenderer.invoke('pet:read-image-preview', filePath),
   createConversation: (title) => ipcRenderer.invoke('pet:create-conversation', title),
+  forkConversation: (sourceConversationId, expectedAssistantEntryId) =>
+    ipcRenderer.invoke('pet:fork-conversation', sourceConversationId, expectedAssistantEntryId),
   selectConversation: (id) => ipcRenderer.invoke('pet:select-conversation', id),
   renameConversation: (id, title) => ipcRenderer.invoke('pet:rename-conversation', id, title),
   setConversationPinned: (id, pinned) => ipcRenderer.invoke('pet:set-conversation-pinned', id, pinned),
@@ -57,6 +59,7 @@ const api: PetAPI = {
   },
   showContextMenu: () => ipcRenderer.invoke('pet:show-context-menu'),
   setBalanceOpen: (open) => ipcRenderer.invoke('pet:set-balance-open', open),
+  toggleBalance: () => ipcRenderer.invoke('pet:toggle-balance'),
   onBalanceOpen: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, open: boolean): void => callback(open)
     ipcRenderer.on('pet:balance-open', listener)

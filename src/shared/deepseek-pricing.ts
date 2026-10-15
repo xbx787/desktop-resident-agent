@@ -59,3 +59,42 @@ export function getPeakStatus(now = Date.now()): PeakStatus {
   }
   return current
 }
+
+/** DeepSeek Flash's published rates (yuan per million tokens, the left
+ *  column of the sheet — the cheaper of the two models): cache hits, cache
+ *  misses, and output, each with a peak and an off-peak rate. The sheet
+ *  lists no rate for cache *writes*, so a write is billed as a miss — that
+ *  is the token being processed for the first time. */
+export const DEEPSEEK_PRICES_YUAN_PER_MILLION = {
+  peak: { cacheHit: 0.04, cacheMiss: 2, output: 8 },
+  off_peak: { cacheHit: 0.02, cacheMiss: 1, output: 4 }
+} as const
+
+export interface SpendTokens {
+  input?: number
+  output?: number
+  cacheRead?: number
+  cacheCreate?: number
+}
+
+/** What one stretch of usage costs in yuan, priced by the tier in force at
+ *  `at` (defaults to now). Null when the tier cannot be determined — the
+ *  caller shows nothing rather than inventing a number. */
+export function usageSpendYuan(tokens: SpendTokens, at = Date.now()): number | null {
+  const tier = getPeakStatus(at).tier
+  if (tier === 'unknown') return null
+  const price = DEEPSEEK_PRICES_YUAN_PER_MILLION[tier]
+  const miss = (tokens.input ?? 0) + (tokens.cacheCreate ?? 0)
+  const hit = tokens.cacheRead ?? 0
+  const output = tokens.output ?? 0
+  return (miss * price.cacheMiss + hit * price.cacheHit + output * price.output) / 1_000_000
+}
+
+/** "¥0.42" for amounts people care about, "¥0.0042" when it is small; two
+ *  significant-ish digits, never a long tail. */
+export function formatYuan(value: number): string {
+  const yuan = Math.max(0, value)
+  if (yuan >= 0.1) return `¥${yuan.toFixed(2)}`
+  if (yuan >= 0.001) return `¥${yuan.toFixed(4)}`
+  return `¥${yuan.toFixed(6)}`
+}

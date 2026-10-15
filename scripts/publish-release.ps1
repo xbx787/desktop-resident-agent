@@ -56,14 +56,38 @@ if ($releaseLookupExitCode -ne 0) {
     if ($LASTEXITCODE -ne 0) { throw 'Checksum upload failed.' }
   }
 }
-$remoteRefs = & git ls-remote origin refs/heads/master "refs/tags/$tag"
-if ($LASTEXITCODE -ne 0) { throw 'Remote refs readback failed.' }
-$remoteMaster = @($remoteRefs | Where-Object { $_ -match 'refs/heads/master$' })
-$remoteTag = @($remoteRefs | Where-Object { $_ -match "refs/tags/$tag$" })
-if ($remoteMaster.Count -ne 1 -or $remoteTag.Count -ne 1 -or
-    $remoteMaster[0].Split("`t")[0] -ne $head -or $remoteTag[0].Split("`t")[0] -ne $head) {
-  throw 'Remote branch or tag does not point to the release commit.'
+function Assert-RemoteReleaseRefs {
+  param(
+    [Parameter(Mandatory=$true)][string[]]$Refs,
+    [Parameter(Mandatory=$true)][string]$ExpectedCommit,
+    [Parameter(Mandatory=$true)][string]$TagName
+  )
+
+  $masterRef = 'refs/heads/master'
+  $tagRef = "refs/tags/$TagName"
+  $peeledTagRef = "${tagRef}^{}"
+  $found = @{}
+  foreach ($line in $Refs) {
+    $parts = $line -split "`t", 2
+    if ($parts.Count -ne 2 -or $parts[0] -notmatch '^[0-9a-f]{40}$' -or $parts[1] -notmatch '^refs/') {
+      throw 'Remote refs readback returned an invalid line.'
+    }
+    if ($found.ContainsKey($parts[1])) { throw 'Remote refs readback returned a duplicate ref.' }
+    $found.Add($parts[1], $parts[0])
+  }
+
+  if (-not $found.ContainsKey($masterRef) -or -not $found.ContainsKey($tagRef)) {
+    throw 'Remote branch or tag is missing.'
+  }
+  $tagCommit = if ($found.ContainsKey($peeledTagRef)) { $found[$peeledTagRef] } else { $found[$tagRef] }
+  if ($found[$masterRef] -ne $ExpectedCommit -or $tagCommit -ne $ExpectedCommit) {
+    throw 'Remote branch or tag does not point to the release commit.'
+  }
 }
+
+$remoteRefs = & git ls-remote origin refs/heads/master "refs/tags/$tag" "refs/tags/$tag^{}"
+if ($LASTEXITCODE -ne 0) { throw 'Remote refs readback failed.' }
+Assert-RemoteReleaseRefs -Refs @($remoteRefs) -ExpectedCommit $head -TagName $tag
 $release = & gh release view $tag --json tagName,assets,url,body | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0 -or $release.tagName -ne $tag) { throw 'GitHub Release readback failed.' }
 $names = @($release.assets | ForEach-Object { $_.name })

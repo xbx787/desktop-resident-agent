@@ -18,3 +18,13 @@ export function splitAttachmentNote(text: string): AttachmentNote | null {
   if (!files) return null
   return { prompt: prompt || '请阅读附件并帮助我。', files }
 }
+
+/** How one attachment name reads on its chip: `报告.docx` → badge `DOCX`
+ *  with the stem `报告` beside it. Anything without a plain extension keeps
+ *  its whole name and gets the generic badge. */
+export function fileBadge(name: string): { kind: string; stem: string } {
+  const dot = name.lastIndexOf('.')
+  const extension = dot > 0 && dot < name.length - 1 ? name.slice(dot + 1) : ''
+  if (!/^[A-Za-z0-9]{1,5}$/u.test(extension)) return { kind: '文件', stem: name }
+  return { kind: extension.toUpperCase(), stem: name.slice(0, dot) }
+}

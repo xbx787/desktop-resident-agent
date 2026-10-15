@@ -7,6 +7,10 @@ import { PanelBubble } from '../src/renderer/panel'
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
+/** The library is always a floating pane over the conversation — it never
+ *  squeezes the chat beside itself. The wide shape only earns the date
+ *  headings in the list; closing behaviour is the same in both shapes. */
+
 const settings: ConversationSettings = {
   visibleConversationTabs: 5, autoArchiveAfterDays: 0, goalMaxIterations: 30, goalMaxMinutes: 180,
   memoryEnabled: true, effort: 'high', modelProfiles: [], activeModelProfileId: null,
@@ -17,7 +21,7 @@ const settings: ConversationSettings = {
 function conversation(id: string): ConversationSummary {
   const now = new Date().toISOString()
   return {
-    id, title: `会话 ${id}`, createdAt: now, updatedAt: now, archivedAt: null, pinnedAt: null,
+    id, title: `会话 ${id}`, createdAt: now, updatedAt: now, lastActivityAt: now, archivedAt: null, pinnedAt: null,
     mode: 'claude_code', taskStatus: 'idle', messageCount: 1, preview: `来自 ${id} 的消息`
   }
 }
@@ -43,12 +47,9 @@ describe('conversation library layout', () => {
   let root: Root
   let bridge: PetAPI
   let selectConversation: ReturnType<typeof vi.fn>
-  let createConversation: ReturnType<typeof vi.fn>
   let originalWidth: PropertyDescriptor | undefined
-  let resizeCallbacks: ResizeObserverCallback[]
 
   beforeEach(() => {
-    resizeCallbacks = []
     originalWidth = Object.getOwnPropertyDescriptor(window, 'innerWidth')
     const nativeRect = HTMLElement.prototype.getBoundingClientRect
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
@@ -58,7 +59,6 @@ describe('conversation library layout', () => {
       return nativeRect.call(this)
     })
     vi.stubGlobal('ResizeObserver', class {
-      constructor(callback: ResizeObserverCallback) { resizeCallbacks.push(callback) }
       observe(): void {}
       disconnect(): void {}
     })
@@ -66,8 +66,7 @@ describe('conversation library layout', () => {
     document.body.appendChild(host)
     root = createRoot(host)
     selectConversation = vi.fn(async () => undefined)
-    createConversation = vi.fn(async () => undefined)
-    bridge = new Proxy({ selectConversation, createConversation } as Record<string, unknown>, {
+    bridge = new Proxy({ selectConversation } as Record<string, unknown>, {
       get(target, property: string) {
         if (property in target) return target[property]
         if (property.startsWith('on')) return () => () => {}
@@ -97,53 +96,46 @@ describe('conversation library layout', () => {
     await act(async () => click(host.querySelector('.panel-library-toggle')!))
   }
 
-  it('keeps the expanded library beside chat while switching or creating conversations', async () => {
+  const expanded = (): string | null => host.querySelector('.panel-library-toggle')?.getAttribute('aria-expanded') ?? null
+
+  it('floats over the expanded chat, keeps the date headings, and folds away when a conversation is picked', async () => {
     await renderAtWidth(554)
-    expect(host.querySelector('.panel-bubble')?.classList.contains('is-library-docked')).toBe(true)
-    expect(host.querySelector('.panel-chat-body')?.firstElementChild?.classList.contains('panel-library-drawer')).toBe(true)
-    expect(host.querySelector('.panel-library-group-heading')?.textContent).toBe('近 7 天')
-    expect(host.querySelector('.panel-library-toggle')?.getAttribute('aria-expanded')).toBe('true')
-
-    await act(async () => click([...host.querySelectorAll('.panel-session-main')].find((row) => row.textContent?.includes('会话 b'))!))
-    expect(selectConversation).toHaveBeenCalledWith('b')
-    expect(host.querySelector('.panel-library-toggle')?.getAttribute('aria-expanded')).toBe('true')
-
-    await act(async () => host.querySelector('.panel-feed')?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })))
-    expect(host.querySelector('.panel-library-toggle')?.getAttribute('aria-expanded')).toBe('true')
-
-    await act(async () => click(host.querySelector('.panel-library-new')!))
-    expect(createConversation).toHaveBeenCalledOnce()
-    expect(host.querySelector('.panel-library-toggle')?.getAttribute('aria-expanded')).toBe('true')
-
-    await act(async () => click(host.querySelector('.panel-library-toggle')!))
-    expect(host.querySelector('.panel-library-toggle')?.getAttribute('aria-expanded')).toBe('false')
-  })
-
-  it('uses an overlay on a narrow display and closes it when the user returns to chat', async () => {
-    await renderAtWidth(500)
-    expect(host.querySelector('.panel-bubble')?.classList.contains('is-library-docked')).toBe(false)
-    expect(host.querySelector('.panel-library-toggle')?.getAttribute('aria-expanded')).toBe('true')
-
-    await act(async () => host.querySelector('.panel-feed')?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })))
-    expect(host.querySelector('.panel-library-toggle')?.getAttribute('aria-expanded')).toBe('false')
-
-    await act(async () => click(host.querySelector('.panel-library-toggle')!))
-    await act(async () => click([...host.querySelectorAll('.panel-session-main')].find((row) => row.textContent?.includes('会话 b'))!))
-    expect(selectConversation).toHaveBeenCalledWith('b')
-    expect(host.querySelector('.panel-library-toggle')?.getAttribute('aria-expanded')).toBe('false')
-  })
-
-  it('falls back to the overlay if the available width shrinks while the library is open', async () => {
-    await renderAtWidth(554)
-    expect(host.querySelector('.panel-bubble')?.classList.contains('is-library-docked')).toBe(true)
-
-    await act(async () => {
-      Object.defineProperty(window, 'innerWidth', { configurable: true, value: 500 })
-      for (const callback of resizeCallbacks) callback([], {} as ResizeObserver)
-    })
+    // A floating pane, not a column: no docked marker, and the drawer is its own box.
     expect(host.querySelector('.panel-bubble')?.classList.contains('is-library-docked')).toBe(false)
     expect(host.querySelector('.panel-library-drawer')).not.toBeNull()
+    // The wide shape still earns the list's date headings.
+    expect(host.querySelector('.panel-library-group-heading')?.textContent).toBe('近 7 天')
+    expect(expanded()).toBe('true')
+
+    await act(async () => click([...host.querySelectorAll('.panel-session-main')].find((row) => row.textContent?.includes('会话 b'))!))
+    expect(selectConversation).toHaveBeenCalledWith('b')
+    expect(expanded()).toBe('false')
+  })
+
+  it('closes when the user goes back to the conversation', async () => {
+    await renderAtWidth(554)
     await act(async () => host.querySelector('.panel-feed')?.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true })))
-    expect(host.querySelector('.panel-library-toggle')?.getAttribute('aria-expanded')).toBe('false')
+    expect(expanded()).toBe('false')
+  })
+
+  it("keeps a row's mode and dates in the row, shown on hover", async () => {
+    await renderAtWidth(554)
+    const meta = host.querySelector('.panel-session-meta')
+    expect(meta).not.toBeNull()
+    expect(meta?.textContent).toContain('Claude Code + DeepSeek')
+    expect(meta?.textContent).toContain('创建')
+    expect(meta?.textContent).toContain('活动')
+    expect(meta?.textContent).toContain('条消息')
+  })
+
+  it('is the same floating pane on a narrow display, without the date headings', async () => {
+    await renderAtWidth(500)
+    expect(host.querySelector('.panel-bubble')?.classList.contains('is-library-docked')).toBe(false)
+    expect(host.querySelector('.panel-library-drawer')).not.toBeNull()
+    expect(host.querySelector('.panel-library-group-heading')).toBeNull()
+    expect(expanded()).toBe('true')
+
+    await act(async () => click(host.querySelector('.panel-library-toggle')!))
+    expect(expanded()).toBe('false')
   })
 })

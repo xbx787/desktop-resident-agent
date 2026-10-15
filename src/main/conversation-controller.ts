@@ -568,6 +568,41 @@ export class ConversationController {
     })
   }
 
+  /** A cold history copy, not a provider checkpoint fork. Both the source
+   *  runtime and the persisted record must still describe the same settled
+   *  reply when the store creates the child. */
+  async forkConversation(sourceId: string, expectedAssistantEntryId: string): Promise<string> {
+    await this.initialize()
+    return this.serialize(async () => {
+      this.assertIdle(sourceId)
+      const source = await this.store.getConversation(sourceId)
+      if (!source) throw new ConversationStoreError('NOT_FOUND', '找不到这个会话。')
+      if (source.archivedAt !== null) {
+        throw new ConversationStoreError('ARCHIVED_CONVERSATION', '请先恢复归档会话。')
+      }
+      const runtime = this.runtimes.get(sourceId)
+      if (runtime) {
+        const snapshot = runtime.getSnapshot()
+        if (snapshot.taskStatus !== 'done' || snapshot.proposal || snapshot.question || snapshot.plan) {
+          throw new ConversationStoreError('INVALID_INPUT', '请等源会话完成回复。')
+        }
+        await this.persistConversation(sourceId)
+      }
+      // Persistence and other asynchronous work can yield to a live runtime.
+      // Check again before the store's own atomic reply-ID validation.
+      this.assertIdle(sourceId)
+      if (runtime) {
+        const snapshot = runtime.getSnapshot()
+        if (snapshot.taskStatus !== 'done' || snapshot.proposal || snapshot.question || snapshot.plan) {
+          throw new ConversationStoreError('INVALID_INPUT', '源会话状态已变化，请刷新后重试。')
+        }
+      }
+      const record = await this.store.forkConversation(sourceId, expectedAssistantEntryId)
+      await this.setDisplayed(record.id)
+      return record.id
+    })
+  }
+
   async selectConversation(id: string): Promise<ConversationRecord> {
     await this.initialize()
     return this.serialize(async () => {

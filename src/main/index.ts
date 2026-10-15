@@ -684,6 +684,13 @@ function registerIpc(): void {
     if (title !== undefined && typeof title !== 'string') throw new Error('标题无效。')
     await activeController().createConversation(title as string | undefined)
   })
+  ipcMain.handle('pet:fork-conversation', (event, sourceId: unknown, expectedReplyId: unknown) => {
+    if (!trusted(event) || typeof sourceId !== 'string' || typeof expectedReplyId !== 'string' ||
+        !sourceId.trim() || !expectedReplyId.trim() || sourceId.length > 128 || expectedReplyId.length > 128) {
+      throw new Error('复制会话请求无效。')
+    }
+    return activeController().forkConversation(sourceId, expectedReplyId)
+  })
   ipcMain.handle('pet:select-conversation', async (event, id: unknown) => {
     if (!trusted(event) || typeof id !== 'string') throw new Error('会话编号无效。')
     await activeController().selectConversation(id)
@@ -913,6 +920,13 @@ function registerIpc(): void {
     if (!trusted(event) && !balanceTrusted(event)) throw new Error('无效的界面请求。')
     if (typeof open !== 'boolean') throw new Error('余额卡片状态无效。')
     setBalanceOpen(open)
+  })
+  ipcMain.handle('pet:toggle-balance', (event) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    // Toggled here, not by the renderer: the renderer's cached flag can drift
+    // from this one, and the guard in setBalanceOpen would then swallow every
+    // follow-up flip — the card would open and never close again.
+    setBalanceOpen(!balanceOpen)
   })
   ipcMain.handle('pet:get-balance', (event) => {
     if (!trusted(event) && !balanceTrusted(event)) throw new Error('无效的界面请求。')

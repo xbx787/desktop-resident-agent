@@ -6,7 +6,7 @@ import { ClaudeAgentClient } from '../src/main/claude-agent'
 import { findClaudeExecutable } from '../src/main/claude-code'
 import { linkClaudeUserResources } from '../src/main/claude-resource-links'
 import { resolveAgentWorkspace } from '../src/main/workspace-root'
-import type { AskQuestionRequest, PlanApprovalRequest } from '../src/shared/contracts'
+import type { AskQuestionRequest, PlanApprovalRequest, TaskUsage } from '../src/shared/contracts'
 
 const runLive = process.env.DESKTOP_PET_LIVE_SDK_TEST === '1'
 
@@ -62,17 +62,58 @@ describe('Claude Agent SDK live tool access', () => {
       const usage = await client.getContextUsage(first.sdkSessionId)
       expect(usage.status).toBe('available')
       expect(usage.maxTokens).toBeGreaterThan(0)
+      let secondUsage: TaskUsage | undefined
       const second = await client.respond([
         { role: 'user', content: `记住标记 ${marker}，只回答“记住了”。` },
         { role: 'assistant', content: first.text },
         { role: 'user', content: '刚才的标记是什么？只输出标记。' }
-      ], abort.signal, undefined, first.sdkSessionId)
+      ], abort.signal, undefined, first.sdkSessionId, undefined, (usage) => { secondUsage = usage })
       expect(second.text).toContain(marker)
       expect(second.sdkSessionId).toBe(first.sdkSessionId)
+      // A resumed session is where the summary's zeroed output bucket showed up
+      // first: its accumulated usage must still count the reply tokens.
+      expect(secondUsage?.input ?? 0).toBeGreaterThan(0)
+      expect(secondUsage?.output ?? 0).toBeGreaterThan(0)
     } finally {
       clearTimeout(timeout)
       await client?.dispose()
       await fs.rm(probeDir, { recursive: true, force: true })
+    }
+  }, 100_000)
+
+  it.skipIf(!runLive)('reports measured output tokens for a live turn', async () => {
+    const executable = findClaudeExecutable(process.env)
+    const apiKey = process.env.DEEPSEEK_API_KEY?.trim()
+    if (!executable || !apiKey) throw new Error('本机 Claude Code 或 DeepSeek Key 未就绪。')
+    const probeDir = path.join(process.cwd(), '.cache', 'tests', randomUUID())
+    const abort = new AbortController()
+    const timeout = setTimeout(() => abort.abort(), 90_000)
+    let client: ClaudeAgentClient | undefined
+    let lastUsage: TaskUsage | undefined
+    try {
+      await fs.mkdir(probeDir, { recursive: true })
+      await fs.writeFile(path.join(probeDir, 'probe.txt'), 'TIDE', 'utf8')
+      client = new ClaudeAgentClient(executable, apiKey, probeDir, path.join(probeDir, 'claude'))
+      // A tool-using turn, the shape the panel shows every day: the plain-reply
+      // shape measured fine, the summary only ever went wrong on turns with
+      // tool calls in them.
+      const reply = await client.respond([{ role: 'user', content: '读一下 probe.txt，然后只回答两个字：收到。' }], abort.signal,
+        undefined, undefined, undefined, (usage) => { lastUsage = usage })
+      expect(reply.text.length).toBeGreaterThan(0)
+      // The panel's footer lies when output reads 0: the SDK's result summary
+      // has carried a zeroed output count on this backend, so the turn must
+      // keep reporting the measured assistant usage when that happens.
+      expect(lastUsage?.input ?? 0).toBeGreaterThan(0)
+      expect(lastUsage?.output ?? 0).toBeGreaterThan(0)
+    } finally {
+      abort.abort()
+      clearTimeout(timeout)
+      await client?.dispose()
+      const relative = path.relative(process.cwd(), probeDir)
+      if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Unsafe live test cleanup path.')
+      await fs.rm(probeDir, { recursive: true, force: true }).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code !== 'EBUSY') throw error
+      })
     }
   }, 100_000)
 

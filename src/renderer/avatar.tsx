@@ -30,7 +30,6 @@ function samePosition(a: { x: number; y: number } | null, b: { x: number; y: num
 function Avatar() {
   const { snapshot, error, run } = usePetState();
   const [panelOpen, setPanelOpen] = useState(false);
-  const balanceOpen = useRef(false);
   const pointer = useRef<PointerSession | null>(null);
   const lastPointerPosition = useRef({ x: 0, y: 0 });
   const lastMoveSent = useRef<{ x: number; y: number } | null>(null);
@@ -160,16 +159,12 @@ function Avatar() {
         setPanelOpen(open);
       }
     });
-    const unsubscribeBalance = bridge.onBalanceOpen((open) => {
-      if (active) balanceOpen.current = open;
-    });
     void bridge.getPanelOpen().then((open) => {
       if (active && !receivedUpdate) setPanelOpen(open);
     }).catch(() => undefined);
     return () => {
       active = false;
       unsubscribe();
-      unsubscribeBalance();
     };
   }, []);
 
@@ -292,7 +287,7 @@ function Avatar() {
         onAuxClick={(event) => {
           if (event.button !== 1) return;
           event.preventDefault();
-          void run((bridge) => bridge.setBalanceOpen(!balanceOpen.current));
+          void run((bridge) => bridge.toggleBalance());
         }}
         onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') {

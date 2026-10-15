@@ -15,7 +15,7 @@ const settings: ConversationSettings = {
 }
 
 function summary(id: string): ConversationSummary {
-  return { id, title: `会话 ${id}`, createdAt: '2026-10-13T00:00:00.000Z', updatedAt: '2026-10-13T00:00:00.000Z',
+  return { id, title: `会话 ${id}`, createdAt: '2026-10-13T00:00:00.000Z', updatedAt: '2026-10-13T00:00:00.000Z', lastActivityAt: '2026-10-13T00:00:00.000Z',
     archivedAt: null, pinnedAt: null, mode: 'claude_code', taskStatus: 'idle', messageCount: 1, preview: '' }
 }
 
@@ -129,7 +129,7 @@ describe('composer submissions stay with their conversation', () => {
 
     await switchTo('a')
     expect(host.querySelector<HTMLTextAreaElement>('textarea[aria-label="输入消息"]')!.value).toBe('原消息\n\n之后输入')
-    expect([...host.querySelectorAll('.panel-attachment-chip')].map((chip) => chip.textContent)).toEqual(['original.txt×', 'later.txt×'])
+    expect([...host.querySelectorAll('.panel-attachment-chip')].map((chip) => chip.textContent)).toEqual(['TXToriginal×', 'TXTlater×'])
   })
 
   it('restores a rejected goal prompt in its original conversation', async () => {

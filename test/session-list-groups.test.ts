@@ -8,7 +8,7 @@ const ago = (days: number, extraMs = 0): string => new Date(NOW - days * DAY_MS 
 
 function summary(id: string, options: Partial<ConversationSummary> = {}): ConversationSummary {
   return {
-    id, title: id, createdAt: ago(40), updatedAt: ago(1), archivedAt: null,
+    id, title: id, createdAt: ago(40), updatedAt: ago(1), lastActivityAt: ago(1), archivedAt: null,
     pinnedAt: null, mode: 'demo', taskStatus: 'idle', messageCount: 0, preview: '',
     ...options
   }
@@ -17,11 +17,11 @@ function summary(id: string, options: Partial<ConversationSummary> = {}): Conver
 describe('groupSessionSummaries', () => {
   it('puts pinned sessions first and groups unpinned sessions at inclusive 7/30-day boundaries', () => {
     const items = [
-      summary('older', { updatedAt: ago(30, 1) }),
-      summary('month', { updatedAt: ago(30) }),
-      summary('week', { updatedAt: ago(7) }),
-      summary('pinned', { updatedAt: ago(50), pinnedAt: ago(1) }),
-      summary('after-week', { updatedAt: ago(7, 1) })
+      summary('older', { lastActivityAt: ago(30, 1) }),
+      summary('month', { lastActivityAt: ago(30) }),
+      summary('week', { lastActivityAt: ago(7) }),
+      summary('pinned', { lastActivityAt: ago(50), pinnedAt: ago(1) }),
+      summary('after-week', { lastActivityAt: ago(7, 1) })
     ]
     const groups = groupSessionSummaries(items, false, NOW)
     expect(groups.map(({ key, label, conversations }) => [key, label, conversations.map(({ id }) => id)])).toEqual([
@@ -35,9 +35,9 @@ describe('groupSessionSummaries', () => {
 
   it('sorts each section by its relevant timestamp then stable ID', () => {
     const items = [
-      summary('z', { updatedAt: ago(1) }),
-      summary('b', { updatedAt: ago(2) }),
-      summary('a', { updatedAt: ago(1) }),
+      summary('z', { lastActivityAt: ago(1) }),
+      summary('b', { lastActivityAt: ago(2) }),
+      summary('a', { lastActivityAt: ago(1) }),
       summary('pin-old', { pinnedAt: ago(1), updatedAt: ago(4) }),
       summary('pin-new', { pinnedAt: ago(4), updatedAt: ago(1) })
     ]
@@ -48,9 +48,9 @@ describe('groupSessionSummaries', () => {
 
   it('uses archivedAt in the archive scope and ignores stale pinnedAt', () => {
     const items = [
-      summary('active', { updatedAt: ago(1) }),
-      summary('archived-old', { updatedAt: ago(1), archivedAt: ago(40), pinnedAt: ago(1) }),
-      summary('archived-new', { updatedAt: ago(50), archivedAt: ago(2) })
+      summary('active', { lastActivityAt: ago(1) }),
+      summary('archived-old', { lastActivityAt: ago(1), archivedAt: ago(40), pinnedAt: ago(1) }),
+      summary('archived-new', { lastActivityAt: ago(50), archivedAt: ago(2) })
     ]
     expect(groupSessionSummaries(items, true, NOW).map(({ key, conversations }) =>
       [key, conversations.map(({ id }) => id)])).toEqual([
@@ -63,8 +63,8 @@ describe('groupSessionSummaries', () => {
 
   it('keeps invalid timestamps visible as older and treats future timestamps as recent', () => {
     const items = [
-      summary('invalid', { updatedAt: 'invalid date' }),
-      summary('future', { updatedAt: new Date(NOW + DAY_MS).toISOString() }),
+      summary('invalid', { lastActivityAt: 'invalid date' }),
+      summary('future', { lastActivityAt: new Date(NOW + DAY_MS).toISOString() }),
       summary('invalid-archive', { archivedAt: 'invalid date' })
     ]
     expect(groupSessionSummaries(items, false, NOW).map(({ key, conversations }) =>

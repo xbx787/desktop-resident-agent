@@ -9,7 +9,9 @@ import { describe, expect, it } from 'vitest'
  *  is how the UI drifted into eight near-identical sizes once, so it fails
  *  here and needs a deliberate decision instead of a drive-by addition. */
 
-const UI_STEPS = ['9px', '10px', '11px', '13px']
+// 12px is a deliberate exception for one label ("任务" on the task strip) at
+// the owner's request — do not treat it as a general fifth step.
+const UI_STEPS = ['9px', '10px', '11px', '12px', '13px']
 const GLYPH_STEPS = ['14px', '16px', '17px', '19px']
 
 const WINDOWS: Array<{ css: string; allowed: string[]; root: RegExp }> = [
