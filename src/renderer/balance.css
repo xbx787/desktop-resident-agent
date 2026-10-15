@@ -7,7 +7,8 @@
   grid-template-rows: 24px minmax(0, 1fr) 30px;
   row-gap: 4px;
   width: 276px;
-  height: 160px;
+  /* 更新行搬进标题后少了一行，卡片跟着矮一行——窗口也是这个数（main/index.ts）。 */
+  height: 145px;
   padding: 12px 14px 11px;
   border: 1px solid rgba(187, 212, 255, .34);
   border-radius: 18px;

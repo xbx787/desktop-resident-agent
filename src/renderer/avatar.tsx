@@ -18,6 +18,8 @@ interface PointerSession {
   screenX: number;
   screenY: number;
   moved: boolean;
+  /** 会话建立时刻——丢失的抬起事件靠它自愈（见 handlePointerDown）。 */
+  at: number;
 }
 
 function hasMoved(session: PointerSession, event: React.PointerEvent<HTMLButtonElement>): boolean {
@@ -80,6 +82,22 @@ function Avatar() {
     return () => {
       window.clearTimeout(timer);
       for (const name of events) window.removeEventListener(name, wake);
+    };
+  }, []);
+
+  // 元素上的 pointerup 偶尔收不到（指针被别的窗口或系统手势抢走）：窗口级
+  // 的抬起与取消兜底收尾，别让会话留在引用里把后续的拖动和单击一起挡掉。
+  useEffect(() => {
+    const settle = (): void => {
+      if (!pointer.current) return;
+      pointer.current = null;
+      queueDrag((bridge) => bridge.endDrag());
+    };
+    window.addEventListener('pointerup', settle);
+    window.addEventListener('pointercancel', settle);
+    return () => {
+      window.removeEventListener('pointerup', settle);
+      window.removeEventListener('pointercancel', settle);
     };
   }, []);
 
@@ -229,7 +247,15 @@ function Avatar() {
   }
 
   function handlePointerDown(event: React.PointerEvent<HTMLButtonElement>) {
-    if (event.button !== 0 || pointer.current) return;
+    if (event.button !== 0) return;
+    // 一次丢失的 pointerup（别的窗口抢走指针、系统手势插进来）会把会话留在
+    // 引用里，之后的每一次按下都被它挡掉——拖动和单击一起失灵。超过两秒的
+    // 旧会话一律当成丢事件清掉，然后照常开始这一次。
+    if (pointer.current) {
+      if (Date.now() - pointer.current.at < 2000) return;
+      pointer.current = null;
+      queueDrag((bridge) => bridge.endDrag());
+    }
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     const position = { x: event.screenX, y: event.screenY };
@@ -240,6 +266,7 @@ function Avatar() {
       screenX: event.screenX,
       screenY: event.screenY,
       moved: false,
+      at: Date.now(),
     };
     // Invoke IPC in this pointerdown turn. Deferring it through a Promise.then
     // lets a fast drag move the OS cursor before main samples its origin.

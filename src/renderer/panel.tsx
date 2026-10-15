@@ -1986,6 +1986,11 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
               const runAnchor = group.items[0];
               return <div className="panel-turn" key={group.user.id}>
                 <TimelineItem entry={group.user} display={rowDisplay} onAvatarMenu={(event) => showTurnMenu(event, group.user.id, turnMenuTitle(group.user), isLiveTurn)} />
+                {/* 插话夹在自己的消息和这条回复之间，按条数叠成一列——它们是
+                    消息，不是小鲸气泡里的东西；过程依旧整条可折叠。 */}
+                {asides.length > 0 && <div className="panel-turn-asides">
+                  {asides.map((segment) => <TimelineItem key={segment.entry.id} entry={segment.entry} display={rowDisplay} onOpenImage={openImageViewer} />)}
+                </div>}
                 {runAnchor && <article className="panel-event panel-event-assistant is-run" data-entry-id={firstReplyId ?? runAnchor.id}
                   aria-label={`${kindLabels.assistant}，${timeText(runAnchor.time)}`}>
                   <div className="panel-event-avatar" aria-hidden="true" onContextMenu={(event) => showTurnMenu(event, group.user.id, turnMenuTitle(group.user), isLiveTurn)}>
@@ -1993,9 +1998,6 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
                     {rowDisplay.showTimestamps && <time className="panel-event-time" dateTime={runAnchor.time}>{timeText(runAnchor.time)}</time>}
                   </div>
                   <div className="panel-event-body">
-                    {asides.length > 0 && <div className="panel-turn-asides">
-                      {asides.map((segment) => <TimelineItem key={segment.entry.id} entry={segment.entry} display={rowDisplay} onOpenImage={openImageViewer} />)}
-                    </div>}
                     {head.length > 0 && <TurnProcess segments={head} renderEntry={renderEntry} renderNote={renderNote} />}
                     {tail.map((segment, segmentIndex) => segment.kind === 'note'
                       ? <RunParagraph key={segment.entry.id} entry={segment.entry} onOpenImage={openImageViewer} />

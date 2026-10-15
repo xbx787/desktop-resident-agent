@@ -110,6 +110,22 @@ describe('steered messages', () => {
     expect(groups[0].items.map((item) => item.kind)).toEqual(['thinking', 'user', 'thinking'])
   })
 
+  it('keeps the live turn’s own opening message out of the previous turn', () => {
+    // 真实的时序：轮开始时先记 startedAt，消息条目随后才写——条目的时间比
+    // 起点晚几毫秒。没有容差，这一轮自己的开场消息会被当成插话并进上一轮，
+    // 等它结算后又自己跳回去（用户看到「顺序反复横跳」的那个 bug）。
+    const opened: TimelineEntry = { ...at('user', 'after restart', 0), time: new Date(BASE + 60_005).toISOString() }
+    const groups = groupTimeline([
+      at('user', 'previous turn', 0),
+      at('assistant', 'previous reply', 5),
+      opened
+    ], BASE + 60_000)
+    expect(groups).toHaveLength(2)
+    const second = groups[1]
+    if (second.kind !== 'turn') throw new Error('expected a turn group')
+    expect(second.user.text).toBe('after restart')
+  })
+
   it('still opens a new block for a message sent after a finished turn', () => {
     const first = { ...at('user', 'first', 0), metrics: { startedAt: new Date(BASE).toISOString(), finishedAt: new Date(BASE + 3000).toISOString() } }
     const groups = groupTimeline([first, at('thinking', 'work', 2), at('user', 'next', 5), at('thinking', 'second work', 6)])

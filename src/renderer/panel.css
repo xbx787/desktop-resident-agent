@@ -328,9 +328,10 @@
    every further piece is a list-like paragraph. Its dot is a pseudo-element
    of the paragraph itself — alignment by construction, it cannot drift. */
 .panel-event.is-run .panel-event-body { display: grid; gap: 10px; }
-/* 插话叠在这一轮的最上面：一条一行、按条数排开，和正文用同一种行距节奏。
-   它们留在折叠块外面，所以过程整条可收，插话也不会被收没。 */
-.panel-turn-asides { display: grid; gap: 10px; min-width: 0; }
+/* 插话是自己的消息行——独立列在「你的消息」和「这条回复」之间，一条一行、
+   按条数叠着；每行的下边距来自 .panel-event 自身，与消息列同一节奏。它们
+   在过程折叠之外，所以整条过程能收，插话也不会被收没。 */
+.panel-turn-asides { min-width: 0; }
 .panel-reply-actions { display: flex; justify-content: flex-end; height: 24px; margin-top: -6px; }
 .panel-fork-action { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 8px; color: #b7cdf2; background: transparent; opacity: .58; transition: color .14s ease, background .14s ease, opacity .14s ease; }
 .panel-fork-action svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
@@ -380,7 +381,7 @@
 .panel-thought:hover, .panel-thought[open] { border-color: rgba(185, 210, 255, .15); background: rgba(7, 23, 56, .24); }
 .panel-thought summary { display: flex; align-items: center; gap: 8px; min-height: 25px; list-style: none; cursor: pointer; color: #a9bee4; }
 .panel-thought summary::-webkit-details-marker { display: none; }
-.panel-thought-icon, .panel-tool-icon { flex: none; width: 14px; height: 14px; fill: none; stroke: #a9c6f7; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.panel-thought-icon, .panel-tool-icon { flex: none; width: 16px; height: 16px; fill: none; stroke: #a9c6f7; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .panel-tool-icon { stroke: #8fb3ea; }
 /* The live row's icon carries the same warm accent as its sheen. */
 .panel-thought.is-streaming .panel-thought-icon, .panel-tool-activity.is-running .panel-tool-icon { stroke: #f0c47b; }
@@ -411,7 +412,7 @@
    while the dot shows, a faint line bridges from the block's bottom edge down
    onto the dot's top edge on the same axis; a finished turn has no dot, so no
    bridge is drawn. */
-.panel-turn-stats:has(.panel-turn-stats-dot)::before { content: ''; position: absolute; left: 18.7px; top: -15px; width: 1.6px; height: calc(50% + 11.5px); border-radius: 1px; background: rgba(150, 178, 226, .2); }
+.panel-turn-stats:has(.panel-turn-stats-dot)::before { content: ''; position: absolute; left: 15.7px; top: -15px; width: 1.6px; height: calc(50% + 11.5px); border-radius: 1px; background: rgba(150, 178, 226, .2); }
 /* Hover the token count to see how the endpoint billed it: fresh input, cache
    hits, cache writes and output cost very different amounts. */
 .panel-turn-usage { position: relative; cursor: default; }

@@ -57,7 +57,12 @@ export function groupTimeline(entries: TimelineEntry[], liveTurnStartMs?: number
     const sent = Date.parse(entry.time)
     if (!Number.isFinite(sent)) return false
     if (windows.some(([start, end]) => start <= sent && sent <= end)) return true
-    return liveTurnStartMs !== undefined && sent > liveTurnStartMs
+    // The live turn's own opening message sits a few milliseconds after the
+    // turn's startedAt (that clock starts before the entry is written). Without
+    // a grace window that message read as a steer and folded into the previous
+    // turn — until the turn settled and it grew its own footer. Real steers
+    // come seconds later, so a small margin separates the two cleanly.
+    return liveTurnStartMs !== undefined && sent > liveTurnStartMs + 2000
   }
   const groups: TimelineGroup[] = []
   const turns: TurnGroup[] = []

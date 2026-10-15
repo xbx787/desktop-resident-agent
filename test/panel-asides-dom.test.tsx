@@ -77,11 +77,16 @@ describe('a steered line inside a finished turn', () => {
     })
     const asides = host.querySelector('.panel-turn-asides')
     const process = host.querySelector('.panel-cluster.is-turn-process')
+    const reply = host.querySelector('.panel-event-assistant')
     expect(asides).toBeTruthy()
     expect(asides!.textContent).toContain('插话：用另一种方案')
     expect(process).toBeTruthy()
-    // 插话在过程上方，且没有掉进折叠块里——它永远看得见。
-    expect(asides!.compareDocumentPosition(process!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(reply).toBeTruthy()
+    // 插话在自己的消息行上、在小鲸的气泡外面：在气泡里假装成它的内容会
+    // 让消息看起来"跑错了地方"。
+    expect(reply!.contains(asides!)).toBe(false)
+    expect(asides!.compareDocumentPosition(reply!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // 也没掉进折叠块——它永远看得见。
     expect(process!.textContent).not.toContain('插话：用另一种方案')
     // 折叠块默认是收起来的：插话前后的工作都在里面，链整条可收。
     expect(process!.hasAttribute('open')).toBe(false)

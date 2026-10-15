@@ -26,5 +26,10 @@ describe('avatar thread geometry', () => {
     const bridge = rule('.panel-turn-stats:has(.panel-turn-stats-dot)::before')
     expect(bridge).toContain('top: -15px')
     expect(bridge).toContain('height: calc(50% + 11.5px)')
+    // 桥和头像下的线必须同一条铅垂线：桥的 left 由头像宽度推出来（宽/2 - 线半宽），
+    // 头像调档时这里会跟着抓。
+    const glyphWidth = Number(rule('.panel-event-glyph').match(/width:\s*(\d+)px/)![1])
+    const bridgeLeft = Number((glyphWidth / 2 - 0.8).toFixed(1))
+    expect(bridge).toContain(`left: ${bridgeLeft}px`)
   })
 })

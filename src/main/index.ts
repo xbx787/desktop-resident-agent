@@ -290,7 +290,7 @@ function createBalanceWindow(): BrowserWindow {
     x: bounds.x + bounds.width - 452,
     y: bounds.y + bounds.height - 176,
     width: 284,
-    height: 160,
+    height: 145,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
