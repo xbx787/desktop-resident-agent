@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { TimelineEntry } from '../src/shared/contracts'
-import { groupTimeline, tailWindow, type TimelineGroup } from '../src/renderer/timeline-groups'
+import { groupTimeline, segmentTurn, splitTurnTail, tailWindow, type TimelineGroup } from '../src/renderer/timeline-groups'
 
 const BASE = Date.parse('2026-10-09T00:00:00.000Z')
 let sequence = 0
@@ -66,6 +66,73 @@ describe('groupTimeline', () => {
     expect(firstGroup.user.metrics?.usedTokens).toBe(17)
     expect(secondGroup.user.id).toBe(second.id)
     expect(secondGroup.user.metrics?.usedTokens).toBe(23)
+  })
+})
+
+describe('steered messages', () => {
+  it('folds a flagged steer into the running turn instead of opening a block', () => {
+    const groups = groupTimeline([
+      at('user', 'first', 0),
+      at('thinking', 'work before', 2),
+      { ...at('user', 'steer', 4), interrupted: true },
+      at('thinking', 'work after', 6)
+    ])
+    expect(groups).toHaveLength(1)
+    const turn = groups[0]
+    if (turn.kind !== 'turn') throw new Error('expected a turn group')
+    expect(turn.user.text).toBe('first')
+    expect(turn.items.map((item) => item.kind)).toEqual(['thinking', 'user', 'thinking'])
+    expect(turn.items[1].text).toBe('steer')
+  })
+
+  it("reads an unflagged message inside a finished turn's window as a steer too", () => {
+    const first = { ...at('user', 'first', 0), metrics: { startedAt: new Date(BASE).toISOString(), finishedAt: new Date(BASE + 9000).toISOString() } }
+    const groups = groupTimeline([
+      first,
+      at('thinking', 'work before', 2),
+      at('user', 'old steer', 4),
+      at('thinking', 'work after', 6)
+    ])
+    expect(groups).toHaveLength(1)
+    if (groups[0].kind !== 'turn') throw new Error('expected a turn group')
+    expect(groups[0].items.some((item) => item.text === 'old steer')).toBe(true)
+  })
+
+  it('folds a message sent past the live turn start while that turn still runs', () => {
+    const groups = groupTimeline([
+      at('user', 'live turn', 0),
+      at('thinking', 'work', 2),
+      at('user', 'mid-turn', 4),
+      at('thinking', 'more work', 6)
+    ], BASE + 1000)
+    expect(groups).toHaveLength(1)
+    if (groups[0].kind !== 'turn') throw new Error('expected a turn group')
+    expect(groups[0].items.map((item) => item.kind)).toEqual(['thinking', 'user', 'thinking'])
+  })
+
+  it('still opens a new block for a message sent after a finished turn', () => {
+    const first = { ...at('user', 'first', 0), metrics: { startedAt: new Date(BASE).toISOString(), finishedAt: new Date(BASE + 3000).toISOString() } }
+    const groups = groupTimeline([first, at('thinking', 'work', 2), at('user', 'next', 5), at('thinking', 'second work', 6)])
+    expect(groups).toHaveLength(2)
+    expect(groups.map((group) => group.kind === 'turn' ? group.user.text : '')).toEqual(['first', 'next'])
+  })
+})
+
+describe('segmentTurn', () => {
+  it('lifts a steered user line out as a segment of its own', () => {
+    const segments = segmentTurn([at('thinking', 't1', 1), at('user', 'steer', 2), at('assistant', 'reply', 3)])
+    expect(segments.map((segment) => segment.kind)).toEqual(['work', 'user', 'note'])
+  })
+})
+
+describe('splitTurnTail', () => {
+  it('never folds a steered message into the process row', () => {
+    const segments = segmentTurn([at('thinking', 't1', 1), at('user', 'steer', 2), at('thinking', 't2', 3), at('assistant', 'final', 4)])
+    const { head, tail } = splitTurnTail(segments, false)
+    // The fold stops at the steer: the work before it collapses, everything
+    // from the message on stays visible.
+    expect(head.map((segment) => segment.kind)).toEqual(['work'])
+    expect(tail.map((segment) => segment.kind)).toEqual(['user', 'work', 'note'])
   })
 })
 

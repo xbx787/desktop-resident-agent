@@ -63,6 +63,13 @@ function Chevron() {
   return <svg className="panel-cluster-chevron" viewBox="0 0 20 20" aria-hidden="true"><path d="m8 4.8 5.2 5.2L8 15.2" /></svg>
 }
 
+/** The header's state word, shaped after a thinking row's 「思考中/已思考」:
+ *  live while the stretch runs, settled once it ends. The bare clock beside it
+ *  stays the only number on the row. */
+function ClusterLabel({ running }: { running: boolean }) {
+  return <span className={`panel-cluster-label${running ? ' panel-live-label' : ''}`}>{running ? '正在工作' : '已工作'}</span>
+}
+
 /**
  * One stretch of uninterrupted work: thinking blocks and tool calls folded into
  * a single row that states what it did. Live while it runs, folded once the run
@@ -99,6 +106,7 @@ export const WorkCluster = memo(function WorkCluster({ items, running, renderEnt
     }}>
     <summary className="panel-cluster-summary" title={fullText} aria-label={`${fullText || '工作记录'}，单击${open ? '收起' : '展开'}`}>
       <Chevron />
+      <ClusterLabel running={running} />
       {parts.length > 0 && <span className="panel-cluster-facts">{parts.map((part) => <span key={part}>{part}</span>)}</span>}
       <span className={`panel-cluster-state${running ? ' is-running' : ''}`} aria-hidden="true">{running ? '…' : '✓'}</span>
     </summary>
@@ -110,6 +118,7 @@ export const WorkCluster = memo(function WorkCluster({ items, running, renderEnt
 function sameSegment(a: TurnSegment, b: TurnSegment): boolean {
   if (a.kind !== b.kind) return false
   if (a.kind === 'note' && b.kind === 'note') return sameTimelineEntry(a.entry, b.entry)
+  if (a.kind === 'user' && b.kind === 'user') return sameTimelineEntry(a.entry, b.entry)
   if (a.kind === 'work' && b.kind === 'work') {
     return a.items.length === b.items.length && a.items.every((entry, index) => sameTimelineEntry(entry, b.items[index]))
   }
@@ -137,12 +146,13 @@ export const TurnProcess = memo(function TurnProcess({ segments, renderEntry, re
     onToggle={(event) => setOpen(event.currentTarget.open)}>
     <summary className="panel-cluster-summary" title={fullText} aria-label={`过程：${fullText || '工作记录'}，单击${open ? '收起' : '展开'}`}>
       <Chevron />
+      <ClusterLabel running={false} />
       {parts.length > 0 && <span className="panel-cluster-facts">{parts.map((part) => <span key={part}>{part}</span>)}</span>}
       <span className="panel-cluster-state" aria-hidden="true">✓</span>
     </summary>
-    <div className="panel-cluster-body">{segments.map((segment) => segment.kind === 'note'
-      ? <Fragment key={segment.entry.id}>{renderNote(segment.entry)}</Fragment>
-      : <WorkCluster key={segment.id} items={segment.items} running={false} renderEntry={renderEntry} />)}
+    <div className="panel-cluster-body">{segments.map((segment) => segment.kind === 'work'
+      ? <WorkCluster key={segment.id} items={segment.items} running={false} renderEntry={renderEntry} />
+      : <Fragment key={segment.entry.id}>{renderNote(segment.entry)}</Fragment>)}
     </div>
   </details>
 }, (prev, next) => prev.renderEntry === next.renderEntry && prev.renderNote === next.renderNote &&

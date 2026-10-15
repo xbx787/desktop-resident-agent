@@ -55,6 +55,10 @@ export interface TimelineEntry {
   /** Settled usage and price of the task this user message started. Kept with
    *  the turn so past footers survive switching conversations or restarting. */
   metrics?: TaskMetrics
+  /** A message steered into a turn that was already running: it belongs to
+   *  that turn in place — no second avatar, no rail mark — instead of
+   *  opening a block of its own. */
+  interrupted?: boolean
   /** Image attachments the message carried, so the panel can show the pictures
    *  themselves instead of a file list. */
   images?: Array<{ name: string; path: string }>

@@ -1454,7 +1454,13 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   // snapshots an unchanged timeline keeps its identity, so these memos let
   // every render that doesn't touch the timeline reuse the last result.
   const timeline = snapshot?.timeline ?? EMPTY_TIMELINE;
-  const timelineGroups = useMemo(() => groupTimeline(timeline), [timeline]);
+  // While a turn runs, its start marks the live window: a user line past it
+  // was steered into the running turn. New records carry the flag on the entry
+  // itself; this covers the steers already on disk without one.
+  const liveTurnStart = active && snapshot?.taskMetrics && !snapshot.taskMetrics.finishedAt
+    ? Date.parse(snapshot.taskMetrics.startedAt) : NaN;
+  const liveTurnStartMs = Number.isFinite(liveTurnStart) ? liveTurnStart : undefined;
+  const timelineGroups = useMemo(() => groupTimeline(timeline, liveTurnStartMs), [timeline, liveTurnStartMs]);
   const transcriptEstimateYuan = useMemo(() => {
     let amount = 0;
     for (const entry of timeline) {
@@ -1901,6 +1907,8 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
                     {head.length > 0 && <TurnProcess segments={head} renderEntry={renderEntry} renderNote={renderNote} />}
                     {tail.map((segment, segmentIndex) => segment.kind === 'note'
                       ? <RunParagraph key={segment.entry.id} entry={segment.entry} onOpenImage={openImageViewer} />
+                      : segment.kind === 'user'
+                      ? <TimelineItem key={segment.entry.id} entry={segment.entry} display={rowDisplay} onOpenImage={openImageViewer} />
                       : <WorkCluster
                           key={segment.id}
                           items={segment.items}

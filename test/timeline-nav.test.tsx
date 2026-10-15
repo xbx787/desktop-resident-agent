@@ -8,7 +8,7 @@ const entry = (kind: TimelineEntry['kind'], text: string): TimelineEntry =>
   ({ id: `${kind}-${text}`, time: '2026-10-10T00:00:00.000Z', kind, text })
 
 describe('navMarks', () => {
-  it('keeps one mark per turn — the user line and the first reply — and drops the stream pieces between', () => {
+  it('keeps one mark per turn — the user line only — and drops replies and the stream pieces between', () => {
     const groups = groupTimeline([
       entry('user', '问题'),
       entry('thinking', '想想'),
@@ -19,10 +19,21 @@ describe('navMarks', () => {
       entry('system', '通知')
     ])
     const marks = navMarks(groups)
-    expect(marks.map((mark) => `${mark.role}:${mark.text}`)).toEqual(['user:问题', 'assistant:第一句'])
+    expect(marks.map((mark) => `${mark.role}:${mark.text}`)).toEqual(['user:问题'])
     // The text is the entry's own string, not a copy — the rail must not
     // double the memory the timeline already holds.
     expect(marks[0].text).toBe('问题')
+  })
+
+  it('never marks a steered mid-turn message — it lives inside its turn', () => {
+    const groups = groupTimeline([
+      { ...entry('user', '任务'), time: '2026-10-10T00:00:00.000Z', metrics: { startedAt: '2026-10-10T00:00:00.000Z', finishedAt: '2026-10-10T00:01:00.000Z' } },
+      entry('thinking', '干活'),
+      { ...entry('user', '中途插话'), time: '2026-10-10T00:00:30.000Z' },
+      entry('assistant', '答复')
+    ])
+    const marks = navMarks(groups)
+    expect(marks.map((mark) => mark.text)).toEqual(['任务'])
   })
 })
 
@@ -120,16 +131,11 @@ describe('navBoost', () => {
 })
 
 describe('navMarkClass', () => {
-  it('keeps the resting handle one even column — no speaker tone until the rail opens', () => {
-    expect(navMarkClass('user', false, false)).toBe('panel-nav-mark')
-    expect(navMarkClass('assistant', false, false)).toBe('panel-nav-mark')
-    expect(navMarkClass('user', false, true)).toBe('panel-nav-mark')
-  })
-
-  it('splits the tones and marks the pointer only once opened', () => {
-    expect(navMarkClass('user', true, false)).toBe('panel-nav-mark is-user')
-    expect(navMarkClass('assistant', true, false)).toBe('panel-nav-mark')
-    expect(navMarkClass('user', true, true)).toBe('panel-nav-mark is-user is-active')
+  it('renders one tone for every mark — no speaker split — and lights one only once opened', () => {
+    expect(navMarkClass(false, false)).toBe('panel-nav-mark')
+    expect(navMarkClass(false, true)).toBe('panel-nav-mark')
+    expect(navMarkClass(true, false)).toBe('panel-nav-mark')
+    expect(navMarkClass(true, true)).toBe('panel-nav-mark is-active')
   })
 })
 

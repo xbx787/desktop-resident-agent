@@ -7,19 +7,17 @@ export interface NavMark {
   text: string;
 }
 
-/** One mark per turn — the user's line and the model's first reply — not the
- *  stream-fragmented pieces in between: those repeat within one answer and
- *  are not landmarks a reader navigates by. */
+/** One mark per turn — the user's own line, which is what opened it. The
+ *  model's replies and the steered mid-turn messages live inside their turn
+ *  and are not landmarks a reader navigates by. */
 export function navMarks(groups: readonly TimelineGroup[]): NavMark[] {
   const marks: NavMark[] = [];
   for (const group of groups) {
     if (group.kind === 'single') {
-      if (group.entry.kind === 'user' || group.entry.kind === 'assistant') marks.push({ id: group.entry.id, role: group.entry.kind, text: group.entry.text });
+      if (group.entry.kind === 'user') marks.push({ id: group.entry.id, role: 'user', text: group.entry.text });
       continue;
     }
     marks.push({ id: group.user.id, role: 'user', text: group.user.text });
-    const firstReply = group.items.find((entry) => entry.kind === 'assistant');
-    if (firstReply) marks.push({ id: firstReply.id, role: 'assistant', text: firstReply.text });
   }
   return marks;
 }
@@ -93,11 +91,11 @@ export function navWheelStep(deltaY: number): number {
   return Math.max(3, Math.min(24, Math.round(Math.abs(deltaY) / 40)));
 }
 
-/** The classes one mark renders with. The speaker tone (`is-user`) belongs to
- *  the opened rail only: at rest the newest marks read as one quiet column,
- *  and even opened the split is a narrow shading, not a stripe. */
-export function navMarkClass(role: NavMark['role'], expanded: boolean, isActive: boolean): string {
-  return `panel-nav-mark${expanded && role === 'user' ? ' is-user' : ''}${expanded && isActive ? ' is-active' : ''}`;
+/** The classes one mark renders with. Every mark is the user's own line, so
+ *  there is no speaker tone to split — only the pointer highlight, and that
+ *  belongs to the opened rail alone. */
+export function navMarkClass(expanded: boolean, isActive: boolean): string {
+  return `panel-nav-mark${expanded && isActive ? ' is-active' : ''}`;
 }
 
 /** Which mark row the pointer sits in — the wheel re-anchors the hover with
@@ -201,7 +199,7 @@ export function TimelineNav({ marks, onJump, windowSize = NAV_WINDOW_WIDE }: { m
         return <i
           key={mark.id}
           aria-hidden="true"
-          className={navMarkClass(mark.role, expanded, index === active)}
+          className={navMarkClass(expanded, index === active)}
           style={boost ? ({ '--nav-boost': `${boost}px` } as CSSProperties) : undefined}
           onMouseEnter={expanded ? () => setActive(index) : undefined}
         />;

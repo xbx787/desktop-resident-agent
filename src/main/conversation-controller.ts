@@ -628,14 +628,7 @@ export class ConversationController {
       this.assertIdle(id)
       await this.store.archiveConversation(id)
       this.releaseRuntime(id)
-      if (id === this.activeId) {
-        const state = await this.store.getState()
-        const nextId = state.activeConversationId
-        if (nextId) await this.setDisplayed(nextId)
-        else this.emit()
-      } else {
-        await this.refreshLibrary()
-      }
+      await this.followActive()
       return structuredClone(this.library!)
     })
   }
@@ -656,14 +649,7 @@ export class ConversationController {
       await this.store.deleteConversation(id)
       this.releaseRuntime(id)
       this.pending.delete(id)
-      if (id === this.activeId) {
-        const state = await this.store.getState()
-        const nextId = state.activeConversationId
-        if (nextId) await this.setDisplayed(nextId)
-        else this.emit()
-      } else {
-        await this.refreshLibrary()
-      }
+      await this.followActive()
       return structuredClone(this.library!)
     })
   }
@@ -685,10 +671,7 @@ export class ConversationController {
         this.releaseRuntime(outcome.id)
         this.pending.delete(outcome.id)
       }
-      const state = await this.store.getState()
-      const nextId = state.activeConversationId
-      if (nextId && nextId !== this.activeId) await this.setDisplayed(nextId)
-      else await this.refreshLibrary()
+      await this.followActive()
       return result
     })
   }
@@ -714,6 +697,19 @@ export class ConversationController {
       await this.persistConversation(id)
       return structuredClone(this.library!)
     })
+  }
+
+  /** After a conversation leaves the list (or a restored one arrives): show
+   *  whatever the store now calls active, or refresh the library in place when
+   *  nothing is left. The second half is the whole point — closing the last
+   *  tab has to publish the empty list. Emitting the old copy instead left the
+   *  renderer drawing a tab strip that no longer exists, and the panel stayed
+   *  stuck on it until some other action refreshed the library. */
+  private async followActive(): Promise<void> {
+    const state = await this.store.getState()
+    const nextId = state.activeConversationId
+    if (nextId && nextId !== this.activeId) await this.setDisplayed(nextId)
+    else await this.refreshLibrary()
   }
 
   /** A conversation that leaves the list lets its runtime (and SDK query) go. */

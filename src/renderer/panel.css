@@ -156,7 +156,6 @@
    marks sit in one quiet column. The wheel's sliding still reads through the
    growing marks around the pointer (nav-boost). */
 .panel-nav-mark { display: block; width: calc(var(--nav-base, 8.8px) + var(--nav-boost, 0px)); height: 3.2px; margin-left: 4px; border-radius: 1.6px; background: rgba(152, 180, 228, .42); transition: width .12s ease, background-color .12s ease; }
-.panel-nav-mark.is-user { background: rgba(202, 218, 250, .68); }
 .panel-nav-mark.is-active { background: #dbe7ff; }
 .panel-bubble.is-expanded .panel-nav { --nav-base: 12px; }
 .panel-nav-card { position: absolute; z-index: 6; left: 28px; width: 206px; padding: 8px 10px 9px; border: 1px solid rgba(190, 212, 255, .30); border-radius: 12px; color: #dfe9ff; background: rgba(16, 31, 66, .97); box-shadow: 0 10px 26px rgba(4, 12, 33, .45); transform: translateY(-50%); }
@@ -374,7 +373,7 @@
 /* Thinking reads like a tool row (read / Grep): a summary you expand, never a
    quote-styled block. The chain runs flush with the panel's left edge — the old
    43px indent (lining it up with message bodies) made the runs look adrift. */
-.panel-thought { margin: 0 0 3px; padding: 0 5px 0 0; border: 1px solid transparent; border-radius: 7px; color: #b9cdf0; background: rgba(7, 23, 56, .12); font-size: 11px; content-visibility: auto; contain-intrinsic-size: auto 26px; }
+.panel-thought { margin: 0 0 2px; padding: 0 5px 0 0; border: 1px solid transparent; border-radius: 7px; color: #b9cdf0; background: rgba(7, 23, 56, .12); font-size: 11px; content-visibility: auto; contain-intrinsic-size: auto 26px; }
 .panel-thought:hover, .panel-thought[open] { border-color: rgba(185, 210, 255, .15); background: rgba(7, 23, 56, .24); }
 .panel-thought summary { display: flex; align-items: center; gap: 8px; min-height: 25px; list-style: none; cursor: pointer; color: #a9bee4; }
 .panel-thought summary::-webkit-details-marker { display: none; }
@@ -415,6 +414,12 @@
 .panel-turn-usage { position: relative; cursor: default; }
 .panel-turn-usage-tip { position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 5; display: flex; flex-direction: column; gap: 3px; padding: 7px 9px; border: 1px solid rgba(185, 210, 255, .22); border-radius: 8px; color: #d7e5ff; background: rgba(13, 28, 60, .97); box-shadow: 0 6px 18px rgba(4, 12, 33, .45); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .12s ease; }
 .panel-turn-usage:hover .panel-turn-usage-tip, .panel-turn-usage:focus-visible .panel-turn-usage-tip { opacity: 1; }
+.panel-turn-formula { display: grid; grid-template-columns: max-content 1fr max-content max-content; column-gap: 12px; row-gap: 3px; }
+.panel-turn-formula-amount { text-align: right; }
+.panel-turn-formula-mult { color: rgba(215, 229, 255, .72); }
+.panel-turn-formula-sub { min-width: 58px; color: rgba(215, 229, 255, .85); text-align: right; }
+.panel-turn-usage-total { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding-top: 4px; border-top: 1px solid rgba(185, 210, 255, .38); }
+.panel-turn-usage-total-amount { color: #f4f8ff; }
 .panel-turn-usage-note { color: #8fa6cf; }
 /* The tool count rides the same hover-tip pattern as the token breakdown:
    one line per call, speaking the exact words the tool cards above use. */
@@ -515,6 +520,7 @@
 .panel-cluster-summary::-webkit-details-marker { display: none; }
 .panel-cluster-chevron { flex: none; width: 12px; height: 12px; fill: none; stroke: #90aad8; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; transition: transform .18s ease; }
 .panel-cluster[open] .panel-cluster-chevron { transform: rotate(90deg); }
+.panel-cluster-label { color: #cddcf8; }
 .panel-cluster-facts { display: flex; gap: 12px; min-width: 0; overflow: hidden; color: #7f93bd; font-size: 10px; }
 .panel-cluster-facts > span { white-space: nowrap; }
 .panel-cluster-state { margin-left: auto; flex: none; color: #9bd8ad; font-size: 14px; line-height: 1; }

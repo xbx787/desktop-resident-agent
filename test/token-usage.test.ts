@@ -13,13 +13,21 @@ describe('compactTokens', () => {
 })
 
 describe('tokenBreakdownRows', () => {
-  it('splits the total the way the endpoint billed it', () => {
+  it('splits the total the way the endpoint billed it, tagged with its rate bucket', () => {
     expect(tokenBreakdownRows({ total: 1_936_000, input: 160_000, output: 120_000, cacheRead: 1_620_000, cacheCreate: 36_000 }))
-      .toEqual(['输入未命中 160K', '缓存命中 1.62M', '缓存写入 36K', '输出 120K'])
+      .toEqual([
+        { label: '输入未命中', amount: '160K', tokens: 160_000, bucket: 'miss' },
+        { label: '输入命中', amount: '1.62M', tokens: 1_620_000, bucket: 'hit' },
+        { label: '缓存写入', amount: '36K', tokens: 36_000, bucket: 'miss' },
+        { label: '输出', amount: '120K', tokens: 120_000, bucket: 'output' }
+      ])
   })
 
   it('hides buckets the endpoint never reported', () => {
-    expect(tokenBreakdownRows({ total: 900, input: 700, output: 200 })).toEqual(['输入未命中 700', '输出 200'])
+    expect(tokenBreakdownRows({ total: 900, input: 700, output: 200 })).toEqual([
+      { label: '输入未命中', amount: '700', tokens: 700, bucket: 'miss' },
+      { label: '输出', amount: '200', tokens: 200, bucket: 'output' }
+    ])
     expect(tokenBreakdownRows({ total: 1_940_000 })).toEqual([])
   })
 })

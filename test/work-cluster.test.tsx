@@ -60,6 +60,8 @@ describe('WorkCluster', () => {
     // (and in the hover title), never beside the elapsed time.
     expect(html).not.toContain('<span>思考 00:12</span>')
     expect(html).toContain('<span>00:12</span>')
+    // The header says what state the stretch is in; the clock stays bare.
+    expect(html).toContain('已工作')
     // The tool breakdown moved off the row: it is the hover title now.
     expect(html).toContain('title="思考 00:12，1 项操作，执行命令 ×1，用时 00:12"')
     expect(html).not.toContain('<span>1 项操作</span>')
@@ -72,6 +74,9 @@ describe('WorkCluster', () => {
     const html = render(<WorkCluster items={items} running renderEntry={entry} />)
     expect(html).toMatch(/<details[^>]*\sopen/)
     expect(html).toContain('is-running')
+    // The state word follows the same live/settled pair as a thinking row.
+    expect(html).toContain('正在工作')
+    expect(html).not.toContain('已工作')
   })
 })
 
@@ -107,7 +112,9 @@ describe('TurnProcess', () => {
     expect(html).toContain('is-turn-process')
     // Closed by default — the reader sees the outcome, not the process.
     expect(html).not.toMatch(/<details[^>]*\sopen/)
-    // The row states the whole stretch, alive and visible.
+    // The row states the whole stretch, alive and visible: the settled state
+    // word plus the bare clock.
+    expect(html).toContain('已工作')
     expect(html).toContain('<span>00:52</span>')
     expect(html).toContain('title="思考 00:24，1 项操作，执行命令 ×1，用时 00:52"')
     // Opening it lays the same pieces back out: the work cluster and the note.

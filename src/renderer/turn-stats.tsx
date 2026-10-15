@@ -1,5 +1,6 @@
-import { formatYuan } from '../shared/deepseek-pricing';
-import { compactTokens, tokenBreakdownRows } from './token-usage';
+import { Fragment } from 'react';
+import { DEEPSEEK_PRICES_YUAN_PER_MILLION, getPeakStatus } from '../shared/deepseek-pricing';
+import { compactTokens, tokenBreakdownRows, type TokenBreakdownRow, type TokenBucket } from './token-usage';
 import { toolLabel } from '../shared/tool-labels';
 import { toolArgumentPreview } from './tool-arguments';
 import type { TaskMetrics, TimelineEntry } from '../shared/contracts';
@@ -7,6 +8,10 @@ import type { TaskMetrics, TimelineEntry } from '../shared/contracts';
 function secondsLabel(seconds: number): string {
   return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
 }
+
+/** All money in the bill reads at the same two decimals — rows, total and
+ *  notes alike — so the written sum is easy to check by hand. */
+const yuanText = (value: number): string => `¥${Math.max(0, value).toFixed(2)}`;
 
 /** The turn's tool calls by type, most used first: [["编辑", 6], …]. Ties
  *  keep first-seen order (Map preserves insertion, sort is stable). The
@@ -56,25 +61,65 @@ export function TurnStats({ entries, metrics, running, spentYuan, estimatedSpend
   const ended = metrics?.finishedAt ? Date.parse(metrics.finishedAt) : Date.now();
   const elapsedLabel = !running && Number.isFinite(started) ? secondsLabel(Math.max(0, Math.floor((ended - started) / 1000))) : null;
   const usage = metrics?.usage ?? (metrics?.usedTokens !== undefined ? { total: metrics.usedTokens } : undefined);
-  const breakdown = usage ? tokenBreakdownRows(usage) : [];
-  if (metrics?.spentYuan !== undefined) breakdown.push(`本轮花费 ${formatYuan(metrics.spentYuan)}`);
-  else if (usage && !running) breakdown.push('本轮费用未统计');
-  if (metrics?.usageSource === 'transcript_estimate') breakdown.push('从本机转录恢复的估算，非完整账单');
+  // Output speed over the turn's wall clock. Only generated tokens count —
+  // the cached input is prefilled, not written — and a turn younger than a
+  // second says nothing reliable about speed.
+  const elapsedSeconds = Number.isFinite(started) ? Math.max(0, (ended - started) / 1000) : 0;
+  const outputRate = usage?.output !== undefined && elapsedSeconds >= 1 ? usage.output / elapsedSeconds : null;
+  const rateLabel = outputRate === null ? null
+    : `${outputRate >= 10 ? Math.round(outputRate) : Number(outputRate.toFixed(1))} token/s`;
+  const formulaRows = usage ? tokenBreakdownRows(usage) : [];
+  // The charge was priced at the tier in force when the turn finished
+  // (main/agent-runtime accrueSpend), so the multipliers must read the same
+  // clock — otherwise a peak-priced turn could show off-peak rates.
+  const priceTier = getPeakStatus(ended).tier;
+  const rates = priceTier === 'unknown' ? null : DEEPSEEK_PRICES_YUAN_PER_MILLION[priceTier];
+  const multiplierFor = (bucket: TokenBucket): string => {
+    if (!rates) return '';
+    const rate = bucket === 'hit' ? rates.cacheHit : bucket === 'miss' ? rates.cacheMiss : rates.output;
+    return `×${rate}`;
+  };
+  // Each row's own price — token count at that row's rate — so the written sum
+  // adds up to the footer total, which is accrued with the same formula.
+  const subtotalFor = (row: TokenBreakdownRow): string => {
+    if (!rates) return '';
+    const rate = row.bucket === 'hit' ? rates.cacheHit : row.bucket === 'miss' ? rates.cacheMiss : rates.output;
+    return `= ${yuanText((row.tokens * rate) / 1_000_000)}`;
+  };
+  const spendTotal = metrics?.spentYuan !== undefined
+    ? { label: '本轮花费', amount: yuanText(metrics.spentYuan) }
+    : usage && !running ? { label: '本轮费用未统计', amount: null } : null;
   // The running cost of the whole conversation belongs only to the latest
   // turn's hover tip. Older turns keep only their own settled prices.
   const showSpend = spentYuan !== undefined && spentYuan > 0;
-  if (showSpend) breakdown.push(`本对话已记录 ${formatYuan(spentYuan!)}`);
   const showEstimate = estimatedSpendYuan !== undefined && estimatedSpendYuan > 0;
-  if (showEstimate) breakdown.push(`转录可核对部分 ${formatYuan(estimatedSpendYuan!)}`);
+  const notes: string[] = [];
+  if (showSpend) notes.push(`本对话已记录 ${yuanText(spentYuan!)}`);
+  if (showEstimate) notes.push(`转录可核对部分 ${yuanText(estimatedSpendYuan!)}`);
+  const hasTip = formulaRows.length > 0 || spendTotal !== null || notes.length > 0;
   const missingUsage = showMissingUsage && !running && !usage;
   if (!toolCount && !elapsedLabel && !usage && !showSpend && !showEstimate && !missingUsage) return null;
   return <div className="panel-turn-stats" role="status">
     <span className={`panel-turn-stats-dot${running ? ' is-running' : ' is-done'}`} aria-hidden="true" />
     {elapsedLabel && <span>用时 {elapsedLabel}</span>}
-    {(usage || showSpend || showEstimate || missingUsage) && <span className="panel-turn-usage" tabIndex={0} title={breakdown.length ? undefined : missingUsage ? '旧会话可能没有保存本轮用量' : '本轮主模型消耗；不含子代理和辅助调用'}>
-      {usage ? `${compactTokens(usage.total)} token` : missingUsage ? '用量未记录' : formatYuan(spentYuan ?? estimatedSpendYuan!)}
-      {breakdown.length > 0 && <span className="panel-turn-usage-tip" role="tooltip">
-        {breakdown.map((row) => <span key={row}>{row}</span>)}
+    {(usage || showSpend || showEstimate || missingUsage) && <span className="panel-turn-usage" tabIndex={0} title={hasTip ? undefined : missingUsage ? '旧会话可能没有保存本轮用量' : '本轮主模型消耗；不含子代理和辅助调用'}>
+      {usage ? `${compactTokens(usage.total)} token${rateLabel ? `（${rateLabel}）` : ''}` : missingUsage ? '用量未记录' : yuanText(spentYuan ?? estimatedSpendYuan!)}
+      {hasTip && <span className="panel-turn-usage-tip" role="tooltip">
+        {formulaRows.length > 0 && <span className="panel-turn-formula">
+          {formulaRows.map((row) => (
+            <Fragment key={row.label}>
+              <span>{row.label}</span>
+              <span className="panel-turn-formula-amount">{row.amount}</span>
+              <span className="panel-turn-formula-mult">{multiplierFor(row.bucket)}</span>
+              <span className="panel-turn-formula-sub">{subtotalFor(row)}</span>
+            </Fragment>
+          ))}
+        </span>}
+        {spendTotal && <span className="panel-turn-usage-total">
+          <span>{spendTotal.label}</span>
+          {spendTotal.amount !== null && <span className="panel-turn-usage-total-amount">{spendTotal.amount}</span>}
+        </span>}
+        {notes.map((row) => <span key={row}>{row}</span>)}
         <span className="panel-turn-usage-note">不含子代理和辅助调用</span>
       </span>}
     </span>}

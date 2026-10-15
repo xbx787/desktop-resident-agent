@@ -35,14 +35,40 @@ type TurnGroup = Extract<TimelineGroup, { kind: 'turn' }>
  * lags). An entry therefore belongs to the newest turn whose user message was
  * sent at or before its own timestamp, not merely to the nearest one by array
  * position. Entries with unusable timestamps keep the old positional rule.
+ *
+ * A steered message — sent while its turn was still running — does not open a
+ * block of its own: it slots into the running turn in place. New records carry
+ * the flag on the entry itself; for records written before it existed, a
+ * message landing inside a finished turn's window (its user line →
+ * finishedAt), or past the start of the live turn, is the same thing.
  */
-export function groupTimeline(entries: TimelineEntry[]): TimelineGroup[] {
+export function groupTimeline(entries: TimelineEntry[], liveTurnStartMs?: number): TimelineGroup[] {
+  const windows: Array<[number, number]> = []
+  for (const entry of entries) {
+    if (entry.kind !== 'user' || !entry.metrics?.finishedAt) continue
+    const start = Date.parse(entry.time)
+    const end = Date.parse(entry.metrics.finishedAt)
+    if (Number.isFinite(start) && Number.isFinite(end)) windows.push([start, end])
+  }
+  const isSteered = (entry: TimelineEntry): boolean => {
+    if (entry.interrupted) return true
+    // A user line that received the turn's footer opened a turn of its own.
+    if (entry.metrics) return false
+    const sent = Date.parse(entry.time)
+    if (!Number.isFinite(sent)) return false
+    if (windows.some(([start, end]) => start <= sent && sent <= end)) return true
+    return liveTurnStartMs !== undefined && sent > liveTurnStartMs
+  }
   const groups: TimelineGroup[] = []
   const turns: TurnGroup[] = []
   let current: TurnGroup | undefined
   let currentMs = Number.NEGATIVE_INFINITY
   for (const entry of entries) {
     if (entry.kind === 'user') {
+      if (current && isSteered(entry)) {
+        current.items.push(entry)
+        continue
+      }
       const turn: TurnGroup = { kind: 'turn', user: entry, items: [] }
       turns.push(turn)
       groups.push(turn)
@@ -90,12 +116,14 @@ export function tailWindow(groups: TimelineGroup[], minEntries: number, extraGro
 export type TurnSegment =
   | { kind: 'work'; id: string; items: TimelineEntry[] }
   | { kind: 'note'; entry: TimelineEntry }
+  | { kind: 'user'; entry: TimelineEntry }
 
 /**
  * Inside a turn, consecutive thinking/tool entries form one collapsible work
  * cluster ("思考 12 秒 · Bash ×2、Read · 用时 1:32"); the model's own sentences
  * stay outside the clusters as visible dividers, so folding the work never
- * hides what it said.
+ * hides what it said. A steered user line is a segment of its own — the
+ * shape the panel draws as a message in place.
  */
 export function segmentTurn(items: TimelineEntry[]): TurnSegment[] {
   const segments: TurnSegment[] = []
@@ -106,7 +134,10 @@ export function segmentTurn(items: TimelineEntry[]): TurnSegment[] {
   }
   for (const entry of items) {
     if (entry.kind === 'thinking' || entry.kind === 'tool') work.push(entry)
-    else {
+    else if (entry.kind === 'user') {
+      flush()
+      segments.push({ kind: 'user', entry })
+    } else {
       flush()
       segments.push({ kind: 'note', entry })
     }
@@ -119,7 +150,9 @@ export function segmentTurn(items: TimelineEntry[]): TurnSegment[] {
  * A finished turn shows only its final answer: everything before the last
  * model sentence — work clusters and progress sentences alike — folds into
  * one row. A live turn folds nothing, its process is the view. A turn with
- * no sentence after its work keeps its clusters as they are.
+ * no sentence after its work keeps its clusters as they are. The fold never
+ * reaches past a steered user line: that message stays visible, so an
+ * interrupted turn shows everything from it on.
  */
 export function splitTurnTail(segments: TurnSegment[], live: boolean): { head: TurnSegment[]; tail: TurnSegment[] } {
   if (live) return { head: [], tail: segments }
@@ -127,5 +160,8 @@ export function splitTurnTail(segments: TurnSegment[], live: boolean): { head: T
   for (let index = segments.length - 1; index >= 0; index -= 1) {
     if (segments[index].kind === 'note') { lastNote = index; break }
   }
-  return lastNote > 0 ? { head: segments.slice(0, lastNote), tail: segments.slice(lastNote) } : { head: [], tail: segments }
+  let cut = lastNote
+  const firstUser = segments.findIndex((segment) => segment.kind === 'user')
+  if (firstUser >= 0) cut = cut < 0 ? firstUser : Math.min(cut, firstUser)
+  return cut > 0 ? { head: segments.slice(0, cut), tail: segments.slice(cut) } : { head: [], tail: segments }
 }

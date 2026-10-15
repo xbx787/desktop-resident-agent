@@ -297,9 +297,12 @@ export class AgentRuntime {
     const expandedPrompt = [expandedText.prompt, context, sessionContext].filter(Boolean).join('\n\n')
     if (!await model.steer(expandedPrompt)) return false
     this.history.push({ role: 'user', content: prompt, ...(sessionContext ? { sessionContext } : {}) })
-    // Native guidance continues the same SDK task. Its final response lands
-    // after this user line, so put the task footer on that visible turn.
-    this.currentTurnUserId = this.add('user', attachments.length ? `${text || '请阅读附件并帮助我。'}\n附件：${attachments.map(({ name }) => name).join('、')}` : text, messageImages(attachments)).id
+    // Native guidance continues the same SDK task in place: the message joins
+    // the running turn — no second avatar, no rail mark — and the turn's
+    // footer stays on the user line that actually started it.
+    const steered = this.add('user', attachments.length ? `${text || '请阅读附件并帮助我。'}\n附件：${attachments.map(({ name }) => name).join('、')}` : text, messageImages(attachments))
+    steered.interrupted = true
+    this.markTimelineDirty(steered)
     return true
   }
 
