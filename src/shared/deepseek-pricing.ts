@@ -96,5 +96,6 @@ export function formatYuan(value: number): string {
   const yuan = Math.max(0, value)
   if (yuan >= 0.1) return `¥${yuan.toFixed(2)}`
   if (yuan >= 0.001) return `¥${yuan.toFixed(4)}`
+  if (yuan > 0 && yuan < 0.000001) return `¥${yuan.toFixed(8)}`
   return `¥${yuan.toFixed(6)}`
 }

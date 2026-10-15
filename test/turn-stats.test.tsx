@@ -39,4 +39,32 @@ describe('TurnStats', () => {
     expect(html).not.toContain('次工具')
     expect(renderToStaticMarkup(<TurnStats running={false} entries={[]} />)).toBe('')
   })
+
+  it('shows one recorded turn price and the conversation total only on the newest turn', () => {
+    const older = renderToStaticMarkup(<TurnStats running={false} metrics={{ ...metrics, spentYuan: 0.12 }} entries={[]} />)
+    const newest = renderToStaticMarkup(<TurnStats running={false} metrics={{ ...metrics, spentYuan: 0.08 }} spentYuan={0.20} entries={[]} />)
+    expect(older).toContain('本轮花费 ¥0.12')
+    expect(older).not.toContain('本对话已记录')
+    expect(newest).toContain('本轮花费 ¥0.0800')
+    expect(newest).toContain('本对话已记录 ¥0.20')
+  })
+
+  it('labels missing historic usage without fabricating zero tokens or zero cost', () => {
+    const html = renderToStaticMarkup(<TurnStats running={false} entries={[]} showMissingUsage />)
+    expect(html).toContain('用量未记录')
+    expect(html).not.toContain('0 token')
+    expect(html).not.toContain('¥0')
+  })
+
+  it('labels transcript recovered usage as an estimate rather than a complete bill', () => {
+    const html = renderToStaticMarkup(<TurnStats running={false} entries={[]} estimatedSpendYuan={0.125} metrics={{
+      ...metrics,
+      usage: { total: 1234, input: 1000, output: 234 },
+      spentYuan: 0.001,
+      usageSource: 'transcript_estimate'
+    }} />)
+    expect(html).toContain('转录恢复的估算')
+    expect(html).toContain('非完整账单')
+    expect(html).toContain('转录可核对部分 ¥0.13')
+  })
 })

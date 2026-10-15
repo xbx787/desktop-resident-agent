@@ -48,6 +48,7 @@ export class AgentRuntime {
   private model: ModelClient | undefined
   private draft?: NoteDraft
   private activeRequest?: AbortController
+  private currentTurnUserId?: string
   private generation = 0
   private contextGeneration = 0
   private sdkSessionId: string | null = null
@@ -296,7 +297,9 @@ export class AgentRuntime {
     const expandedPrompt = [expandedText.prompt, context, sessionContext].filter(Boolean).join('\n\n')
     if (!await model.steer(expandedPrompt)) return false
     this.history.push({ role: 'user', content: prompt, ...(sessionContext ? { sessionContext } : {}) })
-    this.add('user', attachments.length ? `${text || '请阅读附件并帮助我。'}\n附件：${attachments.map(({ name }) => name).join('、')}` : text, messageImages(attachments))
+    // Native guidance continues the same SDK task. Its final response lands
+    // after this user line, so put the task footer on that visible turn.
+    this.currentTurnUserId = this.add('user', attachments.length ? `${text || '请阅读附件并帮助我。'}\n附件：${attachments.map(({ name }) => name).join('、')}` : text, messageImages(attachments)).id
     return true
   }
 
@@ -320,7 +323,9 @@ export class AgentRuntime {
     this.state.contextUsage = { status: 'unavailable' }
     this.state.contextCompacting = false
     this.state.taskMetrics = undefined
-    this.state.conversationSpentYuan = record.spentYuan ?? 0
+    this.state.conversationSpentYuan = typeof record.spentYuan === 'number' && Number.isFinite(record.spentYuan) && record.spentYuan >= 0
+      ? record.spentYuan : undefined
+    this.currentTurnUserId = undefined
     // A restored CLI goal is visible, but its state must be confirmed again by
     // an SDK event before we call it active or count another iteration.
     this.clearGoalTimer()
@@ -350,7 +355,7 @@ export class AgentRuntime {
       timeline: structuredClone(this.state.timeline),
       history: structuredClone(this.history),
       sdkSessionId: this.sdkSessionId,
-      spentYuan: this.state.conversationSpentYuan ?? 0
+      spentYuan: this.state.conversationSpentYuan
     }
   }
 
@@ -386,7 +391,7 @@ export class AgentRuntime {
     this.state.taskStatus = 'planning'
     this.state.avatarState = 'thinking'
     this.history.push({ role: 'user', content: prompt, ...(sessionContext ? { sessionContext } : {}) })
-    this.add('user', attachments.length ? `${text || '请阅读附件并帮助我。'}\n附件：${attachments.map(({ name }) => name).join('、')}` : text, messageImages(attachments))
+    this.currentTurnUserId = this.add('user', attachments.length ? `${text || '请阅读附件并帮助我。'}\n附件：${attachments.map(({ name }) => name).join('、')}` : text, messageImages(attachments)).id
 
     if (!this.model) {
       const noteBody = /^(?:记录|记下|测试笔记)\s*[:：]\s*([\s\S]+)$/u.exec(text)?.[1]?.trim()
@@ -749,7 +754,7 @@ export class AgentRuntime {
     this.add('assistant', text)
   }
 
-  private add(kind: TimelineEntry['kind'], text: string, images?: TimelineEntry['images']): void {
+  private add(kind: TimelineEntry['kind'], text: string, images?: TimelineEntry['images']): TimelineEntry {
     const entry: TimelineEntry = {
       id: crypto.randomUUID(),
       time: new Date().toISOString(),
@@ -760,6 +765,7 @@ export class AgentRuntime {
     this.state.timeline.push(entry)
     this.markTimelineDirty(entry)
     this.emit()
+    return entry
   }
 
   /** Records that an entry changed since the last publisher take; the id-keyed
@@ -798,15 +804,19 @@ export class AgentRuntime {
     return model?.getCommandCatalog?.()
   }
 
-  /** The settled turn's tokens are billed at the tier in force now — the same
-   *  clock the balance card shows — and the conversation keeps a running
-   *  total for the hover readout. */
+  /** Charge only when both billed token buckets are known. A bare total is a
+   *  real token count but cannot determine the price, so leave it unknown. */
   private accrueSpend(): void {
     const usage = this.state.taskMetrics?.usage
-    if (!usage) return
-    const yuan = usageSpendYuan(usage)
+    const finishedAt = this.state.taskMetrics?.finishedAt
+    if (!usage || usage.input === undefined || usage.output === undefined || !finishedAt) return
+    if (![usage.input, usage.output, usage.cacheRead ?? 0, usage.cacheCreate ?? 0]
+      .every((tokens) => Number.isSafeInteger(tokens) && tokens >= 0)) return
+    const yuan = usageSpendYuan(usage, Date.parse(finishedAt))
     if (yuan === null || !Number.isFinite(yuan)) return
-    this.state.conversationSpentYuan = Number(((this.state.conversationSpentYuan ?? 0) + yuan).toFixed(6))
+    const charge = Number(yuan.toFixed(9))
+    this.state.taskMetrics!.spentYuan = charge
+    this.state.conversationSpentYuan = Number(((this.state.conversationSpentYuan ?? 0) + charge).toFixed(9))
   }
 
   private emit(): void {
@@ -814,6 +824,12 @@ export class AgentRuntime {
       ['done', 'failed', 'cancelled'].includes(this.state.taskStatus)) {
       this.state.taskMetrics.finishedAt = new Date().toISOString()
       this.accrueSpend()
+      const user = this.state.timeline.find((entry) => entry.id === this.currentTurnUserId && entry.kind === 'user')
+      if (user) {
+        user.metrics = structuredClone(this.state.taskMetrics)
+        this.markTimelineDirty(user)
+      }
+      this.currentTurnUserId = undefined
     }
     // The consumer pulls a snapshot when it is ready to publish one; building one here
     // would clone the whole timeline on every streaming delta for nothing.

@@ -40,7 +40,10 @@ export function toolFailures(tools: TimelineEntry[]): string[] {
  * only failed calls get spelled out below it. It never folds the entries
  * above it — those stay visible on their own.
  */
-export function TurnStats({ entries, metrics, running, spentYuan }: { entries: TimelineEntry[]; metrics?: TaskMetrics; running: boolean; spentYuan?: number }) {
+export function TurnStats({ entries, metrics, running, spentYuan, estimatedSpendYuan, showMissingUsage = false }: {
+  entries: TimelineEntry[]; metrics?: TaskMetrics; running: boolean; spentYuan?: number;
+  estimatedSpendYuan?: number; showMissingUsage?: boolean
+}) {
   const tools = entries.filter((entry) => entry.kind === 'tool');
   const toolCount = tools.length;
   const countGroups = toolCountGroups(tools);
@@ -54,16 +57,22 @@ export function TurnStats({ entries, metrics, running, spentYuan }: { entries: T
   const elapsedLabel = !running && Number.isFinite(started) ? secondsLabel(Math.max(0, Math.floor((ended - started) / 1000))) : null;
   const usage = metrics?.usage ?? (metrics?.usedTokens !== undefined ? { total: metrics.usedTokens } : undefined);
   const breakdown = usage ? tokenBreakdownRows(usage) : [];
-  // The running cost of the whole conversation rides the same tip: the four
-  // token rows are this turn's, the last row is every turn of this one so far.
+  if (metrics?.spentYuan !== undefined) breakdown.push(`本轮花费 ${formatYuan(metrics.spentYuan)}`);
+  else if (usage && !running) breakdown.push('本轮费用未统计');
+  if (metrics?.usageSource === 'transcript_estimate') breakdown.push('从本机转录恢复的估算，非完整账单');
+  // The running cost of the whole conversation belongs only to the latest
+  // turn's hover tip. Older turns keep only their own settled prices.
   const showSpend = spentYuan !== undefined && spentYuan > 0;
-  if (showSpend) breakdown.push(`本对话花费 ${formatYuan(spentYuan!)}`);
-  if (!toolCount && !elapsedLabel && !usage && !showSpend) return null;
+  if (showSpend) breakdown.push(`本对话已记录 ${formatYuan(spentYuan!)}`);
+  const showEstimate = estimatedSpendYuan !== undefined && estimatedSpendYuan > 0;
+  if (showEstimate) breakdown.push(`转录可核对部分 ${formatYuan(estimatedSpendYuan!)}`);
+  const missingUsage = showMissingUsage && !running && !usage;
+  if (!toolCount && !elapsedLabel && !usage && !showSpend && !showEstimate && !missingUsage) return null;
   return <div className="panel-turn-stats" role="status">
     <span className={`panel-turn-stats-dot${running ? ' is-running' : ' is-done'}`} aria-hidden="true" />
     {elapsedLabel && <span>用时 {elapsedLabel}</span>}
-    {(usage || showSpend) && <span className="panel-turn-usage" tabIndex={0} title={breakdown.length ? undefined : '本轮主模型消耗；不含子代理和辅助调用'}>
-      {usage ? `${compactTokens(usage.total)} token` : formatYuan(spentYuan!)}
+    {(usage || showSpend || showEstimate || missingUsage) && <span className="panel-turn-usage" tabIndex={0} title={breakdown.length ? undefined : missingUsage ? '旧会话可能没有保存本轮用量' : '本轮主模型消耗；不含子代理和辅助调用'}>
+      {usage ? `${compactTokens(usage.total)} token` : missingUsage ? '用量未记录' : formatYuan(spentYuan ?? estimatedSpendYuan!)}
       {breakdown.length > 0 && <span className="panel-turn-usage-tip" role="tooltip">
         {breakdown.map((row) => <span key={row}>{row}</span>)}
         <span className="panel-turn-usage-note">不含子代理和辅助调用</span>

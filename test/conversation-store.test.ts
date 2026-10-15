@@ -443,10 +443,14 @@ describe('accrued conversation spend', () => {
   it('survives a reload instead of resetting with the process', async () => {
     const store = new ConversationStore(testRoot)
     const record = await store.createConversation('花了钱的会话', 'claude_code')
-    await store.updateConversation(record.id, { spentYuan: 0.4212 })
+    const metrics = { startedAt: '2026-10-13T02:00:00.000Z', finishedAt: '2026-10-13T02:00:02.000Z',
+      usedTokens: 42, usage: { total: 42, input: 30, output: 12 }, spentYuan: 0.4212 }
+    await store.updateConversation(record.id, { spentYuan: 0.4212,
+      timeline: [{ id: 'priced-user', kind: 'user', time: metrics.startedAt, text: '这个问题', metrics }] })
     // A fresh store reads the same file the way a restart would.
     const reopened = new ConversationStore(testRoot)
     expect((await reopened.getConversation(record.id))?.spentYuan).toBeCloseTo(0.4212, 6)
+    expect((await reopened.getConversation(record.id))?.timeline[0].metrics).toEqual(metrics)
   })
 })
 

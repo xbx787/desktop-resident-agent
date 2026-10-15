@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AgentRuntime } from '../src/main/agent-runtime'
 import { ConversationStore } from '../src/main/conversation-store'
 import { AgentTurnError } from '../src/main/agent-errors'
 import type { DialogueLine, ModelClient, ModelReply } from '../src/main/deepseek'
 import { NoteStore } from '../src/main/note-store'
+import { usageSpendYuan } from '../src/shared/deepseek-pricing'
 
 const projectRoot = process.cwd()
 let testRoot: string
@@ -99,6 +100,95 @@ describe('task cancellation', () => {
     expect(finished?.usedTokens).toBe(42)
     expect(finished?.usage).toEqual({ total: 42, input: 30, output: 12 })
     expect(Date.parse(finished!.finishedAt!)).toBeGreaterThanOrEqual(Date.parse(finished!.startedAt))
+    expect(runtime.exportConversationState().timeline.find((entry) => entry.kind === 'user')?.metrics).toEqual(finished)
+  })
+
+  it('retains each settled turn’s usage and its settlement-time price across a restore', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const firstUsage = { total: 200_000, input: 100_000, output: 100_000 }
+      const secondUsage = { total: 300_000, input: 200_000, output: 100_000 }
+      const usages = [firstUsage, secondUsage]
+      const model: ModelClient = {
+        respond: async (_history, _signal, _progress, _session, _tool, onTaskUsage) => {
+          onTaskUsage?.(usages.shift()!)
+          return { text: '完成' }
+        }
+      }
+      const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+      vi.setSystemTime(new Date('2026-10-13T02:00:00.000Z')) // Beijing 10:00, peak
+      await runtime.sendMessage('第一轮')
+      const firstCharge = runtime.exportConversationState().spentYuan
+      runtime.setModelMode('demo') // Emits again after completion; must not bill twice.
+      expect(runtime.exportConversationState().spentYuan).toBe(firstCharge)
+      runtime.setModelMode('claude_code')
+      vi.setSystemTime(new Date('2026-10-13T12:00:00.000Z')) // Beijing 20:00, off peak
+      await runtime.sendMessage('第二轮')
+      const saved = runtime.exportConversationState()
+      const turns = saved.timeline.filter((entry) => entry.kind === 'user')
+      expect(turns.map((entry) => entry.metrics?.usage)).toEqual([firstUsage, secondUsage])
+      expect(turns.map((entry) => entry.metrics?.spentYuan)).toEqual([
+        usageSpendYuan(firstUsage, Date.parse(turns[0].metrics!.finishedAt!)),
+        usageSpendYuan(secondUsage, Date.parse(turns[1].metrics!.finishedAt!))
+      ])
+      expect(turns.map((entry) => entry.metrics?.spentYuan)).toEqual([1, 0.6])
+      const total = turns.reduce((sum, entry) => sum + (entry.metrics?.spentYuan ?? 0), 0)
+      expect(saved.spentYuan).toBeCloseTo(total, 6)
+      const restored = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+      restored.restoreConversation({
+        id: 'saved', title: '已保存', createdAt: '', updatedAt: '', archivedAt: null, pinnedAt: null,
+        taskStatus: 'done', pendingMessages: [], ...saved
+      })
+      expect(restored.getSnapshot().timeline.filter((entry) => entry.kind === 'user').map((entry) => entry.metrics)).toEqual(turns.map((entry) => entry.metrics))
+      expect(restored.getSnapshot().conversationSpentYuan).toBeCloseTo(total, 6)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps the price unknown when only a total token count is reported', async () => {
+    const model: ModelClient = { respond: async (_history, _signal, _progress, _session, _tool, onTaskUsage) => {
+      onTaskUsage?.({ total: 42 })
+      return { text: '完成' }
+    } }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), model)
+    await runtime.sendMessage('总量')
+    const user = runtime.exportConversationState().timeline.find((entry) => entry.kind === 'user')
+    expect(user?.metrics?.usedTokens).toBe(42)
+    expect(user?.metrics?.spentYuan).toBeUndefined()
+    expect(runtime.exportConversationState().spentYuan).toBeUndefined()
+  })
+
+  it('settles failed and stopped turns once even when later events arrive', async () => {
+    const usage = { total: 100_000, input: 50_000, output: 50_000 }
+    const failing: ModelClient = { respond: async (_history, _signal, _progress, _session, _tool, onTaskUsage) => {
+      onTaskUsage?.(usage)
+      throw new Error('请求失败')
+    } }
+    const failed = new AgentRuntime(new NoteStore(testRoot), failing)
+    await failed.sendMessage('失败轮')
+    const failure = failed.exportConversationState()
+    expect(failed.getSnapshot().taskStatus).toBe('failed')
+    expect(failure.timeline.find((entry) => entry.kind === 'user')?.metrics?.finishedAt).toBeTruthy()
+    expect(failure.timeline.find((entry) => entry.kind === 'user')?.metrics?.spentYuan).toBe(failure.spentYuan)
+    failed.stop()
+    expect(failed.exportConversationState().spentYuan).toBe(failure.spentYuan)
+
+    let release!: (reply: ModelReply) => void
+    const stopping: ModelClient = { respond: (_history, _signal, _progress, _session, _tool, onTaskUsage) => {
+      onTaskUsage?.(usage)
+      return new Promise<ModelReply>((resolve) => { release = resolve })
+    } }
+    const stopped = new AgentRuntime(new NoteStore(testRoot), stopping)
+    const run = stopped.sendMessage('停止轮')
+    stopped.stop()
+    const atStop = stopped.exportConversationState()
+    release({ text: '迟到的回复' })
+    await run
+    expect(stopped.getSnapshot().taskStatus).toBe('cancelled')
+    expect(stopped.exportConversationState().spentYuan).toBe(atStop.spentYuan)
+    expect(stopped.exportConversationState().timeline.find((entry) => entry.kind === 'user')?.metrics?.spentYuan).toBe(atStop.spentYuan)
+    expect(atStop.timeline.filter((entry) => entry.kind === 'user')).toHaveLength(1)
   })
 
   it('does not present context occupancy as the current task token cost', async () => {

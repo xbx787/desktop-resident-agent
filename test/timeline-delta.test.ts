@@ -79,6 +79,28 @@ describe('timeline deltas', () => {
     expect(tools[0].tool).toMatchObject({ status: 'done', output: '文件已读取' })
   })
 
+  it('updates the original user entry with settled metrics after its running delta was sent', async () => {
+    let finish!: () => void
+    const model: ModelClient = { respond: async (_history, _signal, _progress, _session, _tool, onTaskUsage) => {
+      onTaskUsage?.({ total: 42, input: 30, output: 12 })
+      await new Promise<void>((resolve) => { finish = resolve })
+      return { text: '完成' }
+    } }
+    const runtime = runtimeWith(model)
+    runtime.takeTimelineDelta()
+    const run = runtime.sendMessage('查看用量')
+    const running = runtime.takeTimelineDelta()
+    const pendingUser = running.entries.find((entry) => entry.kind === 'user')!
+    expect(pendingUser.metrics).toBeUndefined()
+    finish()
+    await run
+    const settled = runtime.takeTimelineDelta()
+    const completedUser = settled.entries.find((entry) => entry.id === pendingUser.id)
+    expect(completedUser?.metrics?.usedTokens).toBe(42)
+    expect(completedUser?.metrics?.finishedAt).toBeTruthy()
+    expect(applyTimelineDelta(running.entries, settled.entries).find((entry) => entry.id === pendingUser.id)?.metrics?.usedTokens).toBe(42)
+  })
+
   it('asks for a full send again after restoring a conversation', () => {
     const runtime = runtimeWith()
     runtime.takeTimelineDelta()

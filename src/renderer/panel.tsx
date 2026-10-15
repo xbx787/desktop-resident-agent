@@ -1455,6 +1455,16 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   // every render that doesn't touch the timeline reuse the last result.
   const timeline = snapshot?.timeline ?? EMPTY_TIMELINE;
   const timelineGroups = useMemo(() => groupTimeline(timeline), [timeline]);
+  const transcriptEstimateYuan = useMemo(() => {
+    let amount = 0;
+    for (const entry of timeline) {
+      if (entry.kind === 'user' && entry.metrics?.usageSource === 'transcript_estimate' &&
+          typeof entry.metrics.spentYuan === 'number' && Number.isFinite(entry.metrics.spentYuan)) {
+        amount += entry.metrics.spentYuan;
+      }
+    }
+    return amount > 0 ? amount : undefined;
+  }, [timeline]);
   const tasks = useMemo(() => agentTasks(timeline), [timeline]);
   const navMarkList = useMemo(() => navMarks(timelineGroups), [timelineGroups]);
   const [earlierGroups, setEarlierGroups] = useState(0);
@@ -1902,7 +1912,12 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
                     </div>}
                   </div>
                 </article>}
-                <TurnStats entries={group.items} metrics={index === latestTurnIndex ? snapshot?.taskMetrics : undefined} running={index === latestTurnIndex && active} spentYuan={snapshot?.conversationSpentYuan} />
+                <TurnStats entries={group.items}
+                  metrics={group.user.metrics ?? (index === latestTurnIndex && active ? snapshot?.taskMetrics : undefined)}
+                  running={index === latestTurnIndex && active}
+                  spentYuan={index === latestTurnIndex ? snapshot?.conversationSpentYuan : undefined}
+                  estimatedSpendYuan={index === latestTurnIndex ? transcriptEstimateYuan : undefined}
+                  showMissingUsage={index === latestTurnIndex && !active} />
               </div>;
             })}
             <WorkingIndicator sending={sendingCurrent} thinking={liveThinking} status={status} tool={runningTool} startedAt={snapshot?.taskMetrics?.startedAt} />

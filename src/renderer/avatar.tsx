@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import type { BalanceSnapshot, PetAPI } from '../shared/contracts';
 import { WhalePortrait } from './WhalePortrait';
 import { BalanceCard } from './balance';
+import { balanceErrorMessage } from './balance-error';
 import { PanelBubble } from './panel';
 import { petBridge, usePetState } from './pet-state';
 import { playClickBounce } from './avatar-motion';
@@ -279,6 +280,11 @@ function Avatar() {
         className="avatar-hit-target"
         type="button"
         aria-label="桌面角色，单击切换聊天气泡，拖动可移动位置"
+        onMouseDown={(event) => {
+          // Chromium starts Windows middle-button autoscroll on mousedown.
+          // Cancelling auxclick alone is too late and can swallow later drags.
+          if (event.button === 1) event.preventDefault();
+        }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={(event) => finishPointer(event)}
@@ -315,11 +321,12 @@ function BalanceOverlay() {
     const requestId = ++refreshId.current;
     setLoading(true);
     setError(null);
+    setSnapshot(null);
     try {
       const next = await petBridge().getBalance();
       if (requestId === refreshId.current) setSnapshot(next);
     } catch (cause) {
-      if (requestId === refreshId.current) setError(cause instanceof Error ? cause.message : '余额查询失败。');
+      if (requestId === refreshId.current) setError(balanceErrorMessage(cause));
     } finally {
       if (requestId === refreshId.current) setLoading(false);
     }
@@ -342,7 +349,7 @@ function BalanceOverlay() {
     loading={loading}
     error={error}
     onRefresh={() => { void refreshBalance(); }}
-    onClose={() => { void petBridge().setBalanceOpen(false).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : String(cause))); }}
+    onClose={() => { void petBridge().setBalanceOpen(false).catch(() => setError('余额卡片暂时无法收起。')); }}
   />;
 }
 

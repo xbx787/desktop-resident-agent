@@ -38,6 +38,24 @@ async function until(check: () => boolean, label: string): Promise<void> {
 }
 
 describe('conversation controller', () => {
+  it('shows recorded turn metrics and total spend when opening a cold conversation', async () => {
+    const store = new ConversationStore(testRoot)
+    const cold = await store.createConversation('旧会话', 'claude_code')
+    const metrics = { startedAt: '2026-10-13T02:00:00.000Z', finishedAt: '2026-10-13T02:00:02.000Z',
+      usedTokens: 42, usage: { total: 42, input: 30, output: 12 }, spentYuan: 0.321 }
+    await store.updateConversation(cold.id, { taskStatus: 'done', spentYuan: 0.321,
+      timeline: [{ id: 'cold-user', kind: 'user', time: metrics.startedAt, text: '旧问题', metrics }] })
+    await store.createConversation('当前会话', 'claude_code')
+    const controller = new ConversationController(store,
+      (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))
+    await controller.initialize()
+    await controller.selectConversation(cold.id)
+    const snapshot = controller.getSnapshot()
+    expect(snapshot.timeline[0].metrics).toEqual(metrics)
+    expect(snapshot.conversationSpentYuan).toBe(0.321)
+    expect(snapshot.taskMetrics).toBeUndefined()
+  })
+
   it('copies a settled Claude conversation cold and keeps subsequent turns independent', async () => {
     const calls: Array<{ history: Array<{ role: string; content: string }>; sdkSessionId: string | null | undefined }> = []
     const model: ModelClient = {

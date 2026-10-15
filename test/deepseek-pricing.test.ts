@@ -45,5 +45,6 @@ describe('formatYuan', () => {
     expect(formatYuan(0.4212)).toBe('¥0.42')
     expect(formatYuan(0.0042)).toBe('¥0.0042')
     expect(formatYuan(0.0000042)).toBe('¥0.000004')
+    expect(formatYuan(0.00000002)).toBe('¥0.00000002')
   })
 })

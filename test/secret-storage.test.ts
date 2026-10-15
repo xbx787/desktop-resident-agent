@@ -4,7 +4,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { ConversationStore } from '../src/main/conversation-store'
 import { publicSettings, publicSnapshot, type SecretCodec } from '../src/main/secret-storage'
-import type { ModelProfile } from '../src/shared/contracts'
+import type { AppSnapshot, ModelProfile } from '../src/shared/contracts'
 
 const root = path.resolve(process.cwd(), '.cache', 'tests')
 const dirs: string[] = []
@@ -59,8 +59,14 @@ describe('model secret storage', () => {
     expect(publicView.modelProfiles[0]).toMatchObject({ apiKey: '', apiKeyConfigured: true, extraEnvConfigured: true })
     expect(JSON.stringify(publicView)).not.toContain(profile.apiKey)
     expect(JSON.stringify(publicView)).not.toContain('OTHER_SECRET=private-value')
-    const snapshot = publicSnapshot({ conversationLibrary: state } as never)
+    const turnMetrics = { startedAt: '2026-10-13T02:00:00.000Z', finishedAt: '2026-10-13T02:00:02.000Z', usedTokens: 42 }
+    const publicInput = { conversationLibrary: state,
+      timeline: [{ id: 'user', kind: 'user', time: turnMetrics.startedAt, text: '提问', metrics: turnMetrics }] }
+    const snapshot = publicSnapshot(publicInput as unknown as AppSnapshot & {
+      conversationLibrary: NonNullable<AppSnapshot['conversationLibrary']>
+    })
     expect(JSON.stringify(snapshot)).not.toContain(profile.apiKey)
+    expect(snapshot.timeline[0].metrics).toEqual(turnMetrics)
     const futureSecret = { ...profile, refreshToken: 'future-private-token' }
     expect(JSON.stringify(publicSettings({ ...state.settings, modelProfiles: [futureSecret] })))
       .not.toContain('future-private-token')

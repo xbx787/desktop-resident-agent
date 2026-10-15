@@ -217,6 +217,8 @@ export class ConversationController {
       taskStatus: record?.taskStatus ?? 'idle',
       timeline: structuredClone(record?.timeline ?? []),
       timelineRevision: 0,
+      conversationSpentYuan: typeof record?.spentYuan === 'number' && Number.isFinite(record.spentYuan) && record.spentYuan >= 0
+        ? record.spentYuan : undefined,
       modelReady: this.readiness.modelReady,
       claudeCodeReady: this.readiness.claudeCodeReady,
       conversationId: id,

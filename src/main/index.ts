@@ -22,7 +22,7 @@ import { transcribeAudio } from './asr-server'
 import { voiceLog, voiceLogError } from './voice-log'
 import { NoteStore } from './note-store'
 import { createSnapshotScheduler } from './snapshot-scheduler'
-import { getEnabledDeepSeekKey } from './model-config'
+import { getDeepSeekBalanceKey, getEnabledDeepSeekKey } from './model-config'
 import { loadWindowsMcpConfig } from './mcp-config'
 import { generateConversationTitle } from './title-generation'
 import { APP_SLASH_COMMANDS, listClaudeWorkflows, parseAppSlashCommand } from './claude-workflows'
@@ -928,10 +928,12 @@ function registerIpc(): void {
     // follow-up flip — the card would open and never close again.
     setBalanceOpen(!balanceOpen)
   })
-  ipcMain.handle('pet:get-balance', (event) => {
+  ipcMain.handle('pet:get-balance', async (event) => {
     if (!trusted(event) && !balanceTrusted(event)) throw new Error('无效的界面请求。')
-    if (!claudeKey) throw new Error('本机尚未配置 DeepSeek API Key。')
-    return fetchDeepSeekBalance(claudeKey)
+    const settings = (await activeController().getLibraryState()).settings
+    const key = getDeepSeekBalanceKey(settings, claudeKey)
+    if (!key) throw new Error('请在设置中添加 DeepSeek API Key。')
+    return fetchDeepSeekBalance(key)
   })
   ipcMain.handle('pet:open-external', async (event, value: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')

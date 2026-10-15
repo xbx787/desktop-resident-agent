@@ -52,6 +52,9 @@ export interface TimelineEntry {
   kind: 'user' | 'assistant' | 'system' | 'tool' | 'thinking'
   text: string
   endedAt?: string
+  /** Settled usage and price of the task this user message started. Kept with
+   *  the turn so past footers survive switching conversations or restarting. */
+  metrics?: TaskMetrics
   /** Image attachments the message carried, so the panel can show the pictures
    *  themselves instead of a file list. */
   images?: Array<{ name: string; path: string }>
@@ -218,6 +221,11 @@ export interface TaskMetrics {
   finishedAt?: string
   usedTokens?: number
   usage?: TaskUsage
+  /** Mark recovered historical usage separately from live SDK accounting. */
+  usageSource?: 'transcript_estimate'
+  /** This turn's charge at the price tier in force when it finished. Absent
+   *  when token buckets or the applicable price are unknown. */
+  spentYuan?: number
 }
 
 /** One choice inside an ask-user question; the description shows under the label. */

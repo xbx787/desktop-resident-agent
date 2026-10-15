@@ -48,18 +48,24 @@ describe('groupTimeline', () => {
   })
 
   it('returns an interrupted turn’s late entries to their own user message', () => {
+    const first = { ...at('user', 'first', 0), metrics: { startedAt: new Date(BASE).toISOString(), usedTokens: 17 } }
+    const second = { ...at('user', 'second', 4), metrics: { startedAt: new Date(BASE + 4000).toISOString(), usedTokens: 23 } }
     const groups = groupTimeline([
-      at('user', 'first', 0),
+      first,
       at('thinking', 'first turn thought', 2),
-      at('user', 'second', 4),                  // sent while the first turn was still running
+      second,                                  // sent while the first turn was still running
       at('assistant', 'first turn answer', 3),  // drains late, after 'second' was written
       at('thinking', 'second turn thought', 5)
     ])
     expect(groups).toHaveLength(2)
-    const [first, second] = groups
-    if (first.kind !== 'turn' || second.kind !== 'turn') throw new Error('expected turn groups')
-    expect(first.items.map((item) => item.text)).toEqual(['first turn thought', 'first turn answer'])
-    expect(second.items.map((item) => item.text)).toEqual(['second turn thought'])
+    const [firstGroup, secondGroup] = groups
+    if (firstGroup.kind !== 'turn' || secondGroup.kind !== 'turn') throw new Error('expected turn groups')
+    expect(firstGroup.items.map((item) => item.text)).toEqual(['first turn thought', 'first turn answer'])
+    expect(secondGroup.items.map((item) => item.text)).toEqual(['second turn thought'])
+    expect(firstGroup.user.id).toBe(first.id)
+    expect(firstGroup.user.metrics?.usedTokens).toBe(17)
+    expect(secondGroup.user.id).toBe(second.id)
+    expect(secondGroup.user.metrics?.usedTokens).toBe(23)
   })
 })
 
