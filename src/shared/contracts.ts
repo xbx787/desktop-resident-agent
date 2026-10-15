@@ -334,9 +334,6 @@ export interface PetAPI {
   preparePastedFile(request: { name: string; data: string }): Promise<UserAttachment>
   readImagePreview(filePath: string): Promise<string | null>
   createConversation(title?: string): Promise<void>
-  /** Copy the settled latest reply into an independent conversation. Returns
-   *  only the new ID; its private model history never enters the renderer. */
-  forkConversation(sourceConversationId: string, expectedAssistantEntryId: string): Promise<string>
   selectConversation(id: string): Promise<void>
   renameConversation(id: string, title: string): Promise<void>
   setConversationPinned(id: string, pinned: boolean): Promise<void>

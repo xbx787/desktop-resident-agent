@@ -671,46 +671,6 @@ export class ConversationStore {
   /** Copy only a settled, final reply. The expected entry ID is checked in
    *  the same write transaction as the new record, so a stale UI cannot fork
    *  a different turn. Model history stays in the main process. */
-  forkConversation(sourceId: string, expectedAssistantEntryId: string): Promise<ConversationRecord> {
-    if (typeof sourceId !== 'string' || !sourceId.trim() || sourceId.length > 128 ||
-        typeof expectedAssistantEntryId !== 'string' || !expectedAssistantEntryId.trim() ||
-        expectedAssistantEntryId.length > 128) {
-      throw new ConversationStoreError('INVALID_INPUT', '会话或回复编号无效。')
-    }
-    return this.mutate((draft) => {
-      const source = findRecord(draft, sourceId)
-      if (source.archivedAt !== null) {
-        throw new ConversationStoreError('ARCHIVED_CONVERSATION', '请先恢复归档会话。')
-      }
-      if (source.taskStatus !== 'done' || source.pendingMessages.length > 0) {
-        throw new ConversationStoreError('INVALID_INPUT', '请等源会话完成回复并处理待发送消息。')
-      }
-      let lastUser = -1
-      let lastAssistant = -1
-      source.timeline.forEach((entry, index) => {
-        if (entry.kind === 'user') lastUser = index
-        if (entry.kind === 'assistant') lastAssistant = index
-      })
-      const reply = source.timeline[lastAssistant]
-      if (lastUser < 0 || lastAssistant <= lastUser ||
-          reply?.id !== expectedAssistantEntryId || !reply.text.trim() ||
-          source.history.at(-1)?.role !== 'assistant' || !source.history.at(-1)?.content.trim()) {
-        throw new ConversationStoreError('INVALID_INPUT', '源会话的最新完整回复已变化，请刷新后重试。')
-      }
-      const now = new Date().toISOString()
-      const record: ConversationRecord = {
-        id: randomUUID(), title: cleanTitle(`${source.title.slice(0, 116).replace(/[\uD800-\uDBFF]$/u, '')} 的续聊`),
-        createdAt: now, updatedAt: now, lastActivityAt: now, archivedAt: null, pinnedAt: null,
-        mode: source.mode, taskStatus: 'idle',
-        timeline: structuredClone(source.timeline), history: structuredClone(source.history),
-        pendingMessages: [], sdkSessionId: null, goal: null
-      }
-      draft.conversations.push(record)
-      draft.settings.tabOrder.unshift(record.id)
-      draft.activeConversationId = record.id
-      return record
-    })
-  }
 
   setActiveConversation(id: string): Promise<ConversationRecord> {
     return this.mutate((draft) => {

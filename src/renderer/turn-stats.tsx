@@ -77,7 +77,9 @@ export function TurnStats({ entries, metrics, running, spentYuan, estimatedSpend
   // backend may not report output at all yet: zero means "not counted yet",
   // not "zero speed", so the reading simply stays absent until it has one.
   const elapsedSeconds = Number.isFinite(started) ? Math.max(0, (ended - started) / 1000) : 0;
-  const outputRate = effectiveUsage?.output !== undefined && effectiveUsage.output > 0 && elapsedSeconds >= 1
+  // 速度只在一轮结束后给出：思考中这个后端不报输出量，估算出来的速率不可信
+  // （用户明确要求思考中途不显示）。
+  const outputRate = !running && effectiveUsage?.output !== undefined && effectiveUsage.output > 0 && elapsedSeconds >= 1
     ? effectiveUsage.output / elapsedSeconds : null;
   const rateLabel = outputRate === null ? null
     : `${outputRate >= 10 ? Math.round(outputRate) : Number(outputRate.toFixed(1))} token/s`;
@@ -125,7 +127,13 @@ export function TurnStats({ entries, metrics, running, spentYuan, estimatedSpend
   const notes: string[] = [];
   if (showSpend) notes.push(`本对话累计 ${yuanText(spentYuan!)}`);
   if (showEstimate) notes.push(`转录可核对部分 ${yuanText(estimatedSpendYuan!)}`);
-  const hasTip = formulaRows.length > 0 || spendTotal !== null || notes.length > 0;
+  // 缓存命中率：命中输入 ÷ 全部输入（命中 + 未命中）。两桶都报得出时才有——
+  // 直接 DeepSeek 路径的裸总数给不出这个拆分。
+  const hitRate = effectiveUsage && typeof effectiveUsage.cacheRead === 'number' &&
+    typeof effectiveUsage.input === 'number' && effectiveUsage.input + effectiveUsage.cacheRead > 0
+    ? Math.round((effectiveUsage.cacheRead / (effectiveUsage.input + effectiveUsage.cacheRead)) * 100)
+    : null;
+  const hasTip = formulaRows.length > 0 || spendTotal !== null || hitRate !== null || notes.length > 0;
   const missingUsage = showMissingUsage && !running && !usage;
   if (!toolCount && !elapsedLabel && !usage && !showSpend && !showEstimate && !missingUsage) return null;
   return <div className="panel-turn-stats" role="status">
@@ -149,6 +157,7 @@ export function TurnStats({ entries, metrics, running, spentYuan, estimatedSpend
           <span>{spendTotal.label}{tierLabel && <i className={`panel-turn-tier${tierTone}`}>{tierLabel}</i>}</span>
           {spendTotal.amount !== null && <span className="panel-turn-usage-total-amount">{spendTotal.amount}</span>}
         </span>}
+        {hitRate !== null && <span>缓存命中率 {hitRate}%</span>}
         {notes.map((row) => <span key={row}>{row}</span>)}
         <span className="panel-turn-usage-note">不含子代理和辅助调用</span>
       </span>}

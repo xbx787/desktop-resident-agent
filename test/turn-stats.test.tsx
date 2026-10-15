@@ -71,11 +71,11 @@ describe('TurnStats', () => {
       startedAt: new Date(Date.now() - 10_000).toISOString(),
       usage: { total: 3000, input: 2000, output: 0 }
     }} />)
-    // 300 字符 ÷ 1.5 ≈ 200 token：思考中「输出」不再挂着 0，速度也随之有了；
-    // 结算拿到真实值后这一段会被真实数取代。
+    // 300 字符 ÷ 1.5 ≈ 200 token：思考中「输出」不再挂着 0；速度则一律等到
+    // 结算后才有（思考中途这个后端不报输出量，估算速率不可信）。
     expect(html).toContain('输出')
     expect(html).toContain('>200<')
-    expect(html).toContain('token/s')
+    expect(html).not.toContain('token/s')
     // 没有流式文字时不该凭空造数。
     const idle = renderToStaticMarkup(<TurnStats running entries={[]} metrics={{
       startedAt: new Date(Date.now() - 10_000).toISOString(),
@@ -129,7 +129,8 @@ describe('TurnStats', () => {
     }} />)
     expect(peak).toContain('panel-turn-formula')
     expect(peak).toContain('输入命中')
-    expect(peak).not.toContain('缓存命中')
+    // 旧行名是「缓存命中 N」；「缓存命中率」是另一条注记，不算它。
+    expect(peak).not.toContain('缓存命中 ')
     expect(peak).toContain('×2')
     expect(peak).toContain('×0.04')
     expect(peak).toContain('×8')
@@ -166,6 +167,8 @@ describe('TurnStats', () => {
     expect(off).toContain('panel-turn-formula-mult is-off-peak')
     expect(off).toContain('<i class="panel-turn-tier is-off-peak">谷</i>')
     expect(off).not.toContain('is-peak')
+    // 缓存命中率：1.62M 命中 ÷（160K 未命中 + 1.62M 命中）≈ 91%。
+    expect(off).toContain('缓存命中率 91%')
     // 峰时：同一对色里的柔和红。
     expect(peak).toContain('panel-turn-formula-mult is-peak')
     expect(peak).toContain('<i class="panel-turn-tier is-peak">峰</i>')

@@ -25,7 +25,7 @@ export function toolIconKind(name: string): ToolIconKind {
 }
 
 const shapes: Record<ToolIconKind, ReactElement> = {
-  terminal: <><path d="m10.6 5.8-4.4 4.4 4.4 4.4" /><path d="m9.4 5.8 4.4 4.4-4.4 4.4" /></>,
+  terminal: <><path d="m7.6 5.2-3.6 4.8 3.6 4.8" /><path d="m12.4 5.2 3.6 4.8-3.6 4.8" /></>,
   document: <><path d="M6.2 3.6h4.6l3.4 3.4v9.4H6.2z" /><path d="M10.8 3.6v3.4h3.4" /></>,
   'document-write': <><path d="M10 3.8v7.6m-2.6-2.6L10 11.4l2.6-2.6" /><path d="M4.6 13.6v1.8h10.8v-1.8" /></>,
   pencil: <><path d="m4.6 14.8.6-2.9 7.6-7.6 2.4 2.4-7.6 7.6z" /><path d="m11.6 5.6 2.4 2.4" /></>,

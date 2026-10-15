@@ -332,12 +332,6 @@
    按条数叠着；每行的下边距来自 .panel-event 自身，与消息列同一节奏。它们
    在过程折叠之外，所以整条过程能收，插话也不会被收没。 */
 .panel-turn-asides { min-width: 0; }
-.panel-reply-actions { display: flex; justify-content: flex-end; height: 24px; margin-top: -6px; }
-.panel-fork-action { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 8px; color: #b7cdf2; background: transparent; opacity: .58; transition: color .14s ease, background .14s ease, opacity .14s ease; }
-.panel-fork-action svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
-.panel-event.is-run:hover .panel-fork-action, .panel-fork-action:focus-visible { opacity: 1; }
-.panel-fork-action:hover:not(:disabled), .panel-fork-action:focus-visible { color: #f1f6ff; background: rgba(179, 205, 255, .16); }
-.panel-fork-action:disabled { opacity: .35; }
 /* The reply pieces carry no bullet: a dot per paragraph read as a list of
    unrelated items — the final answer most of all. The pieces just flow. */
 .panel-avatar-img { width: 33px; height: 33px; border: 1px solid rgba(190, 213, 253, .35); border-radius: 11.5px; object-fit: cover; }

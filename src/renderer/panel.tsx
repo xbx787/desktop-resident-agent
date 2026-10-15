@@ -22,7 +22,7 @@ import { TaskStrip } from './task-strip';
 import { AskQuestionPanel } from './ask-question';
 import { PlanApprovalPanel } from './plan-approval';
 import { ThinkingItem } from './thinking-item';
-import { groupTimeline, liftAsides, sameTimelineEntry, segmentTurn, splitTurnTail, tailWindow } from './timeline-groups';
+import { groupTimeline, liftAsides, sameTimelineEntry, segmentTurn, splitTurnTail, tailWindow, type TurnSegment } from './timeline-groups';
 import { navMarks, NAV_WINDOW_COMPACT, NAV_WINDOW_WIDE, TimelineNav } from './timeline-nav';
 import { ToolDiffBody } from './tool-diff-body';
 import { ToolIcon } from './tool-icons';
@@ -84,10 +84,6 @@ function ConversationsIcon() {
 
 function SelectIcon() {
   return <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3.5" y="4" width="11" height="11" rx="2" /><path d="m6.5 9.4 2.3 2.2 3.6-3.8M16.5 7v9" /></svg>;
-}
-
-function ForkIcon() {
-  return <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="4" r="1.7" /><circle cx="15" cy="5" r="1.7" /><circle cx="15" cy="16" r="1.7" /><path d="M5 5.7v5a5 5 0 0 0 5 5h3.3M15 6.7v3a5 5 0 0 1-5 5" /></svg>;
 }
 
 function BackIcon() {
@@ -1367,28 +1363,6 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     });
   }
 
-  async function forkFromReply(replyId: string): Promise<void> {
-    const sourceId = activeConversationIdRef.current;
-    if (!sourceId || libraryBusy) return;
-    let childId: string | null = null;
-    await libraryAction(async (bridge) => { childId = await bridge.forkConversation(sourceId, replyId); }, () => {
-      if (!childId) return;
-      flushDraft(sourceId, composerStateRef.current.draft);
-      stashComposerState(composerStash.current, sourceId, composerStateRef.current.draft, composerStateRef.current.attachments);
-      goalPromptStash.current.set(sourceId, goalPrompting);
-      activeConversationIdRef.current = childId;
-      const saved = restoreComposerState(composerStash.current, childId);
-      composerStateRef.current = saved;
-      setDraft(saved.draft);
-      setAttachments(saved.attachments);
-      setCaretIndex(saved.draft.length);
-      setAttachmentError(null);
-      setGoalPrompting(false);
-      setComposerOpen(true);
-      setLibraryOpen(false);
-    });
-  }
-
   /** A draft write that must never surface an error: it runs on a debounce
    *  and on every switch, and a failed save must not bother the writer. */
   function flushDraft(id: string | null, text: string): void {
@@ -1965,9 +1939,12 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
               if (group.kind === 'single') return <EntryItem key={group.entry.id} entry={group.entry} running={false} onOpenImage={openImageViewer} display={rowDisplay} />;
               const segments = segmentTurn(group.items);
               const isLiveTurn = index === latestTurnIndex && active;
-              // 插话抬到这一轮的最上面、按条数叠成一列：它们不会被折叠吞掉，
-              // 下面的过程也不再被打断——整条链任何时候都能收起来。
-              const { asides, flow } = liftAsides(segments);
+              // 思考中：插话按顺序留在过程流里——那就是当时的现场，不提前搬走。
+              // 这一轮结束、过程合并成一条之后，插话才整体抬到折叠链的上方，
+              // 按条数叠成一列：折叠不被插话打断，链任何时候都能收起来。
+              const { asides, flow } = isLiveTurn
+                ? { asides: [] as Array<Extract<TurnSegment, { kind: 'user' }>>, flow: segments }
+                : liftAsides(segments);
               // A finished turn folds everything before its final sentence into
               // one process row, so the outcome is what stays in sight; while
               // the turn runs, nothing folds — its process is the view.
@@ -1977,12 +1954,6 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
               // structural, and none of the pieces become rail marks.
               const firstReplyId = group.items.find((item) => item.kind === 'assistant')?.id;
               // "Latest reply" is the turn's final entry itself: a mid-turn
-              // sentence or a tool call after it means the answer is not
-              // complete yet — there is nothing settled to fork from.
-              const lastEntry = group.items[group.items.length - 1];
-              const latestReplyId = lastEntry?.kind === 'assistant' && lastEntry.text.trim() ? lastEntry.id : undefined;
-              const canFork = index === latestTurnIndex && status === 'done' && !sendingCurrent && queuedCount === 0 &&
-                !snapshot?.proposal && Boolean(library?.activeConversationId && latestReplyId);
               const runAnchor = group.items[0];
               return <div className="panel-turn" key={group.user.id}>
                 <TimelineItem entry={group.user} display={rowDisplay} onAvatarMenu={(event) => showTurnMenu(event, group.user.id, turnMenuTitle(group.user), isLiveTurn)} />
@@ -2001,15 +1972,14 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
                     {head.length > 0 && <TurnProcess segments={head} renderEntry={renderEntry} renderNote={renderNote} />}
                     {tail.map((segment, segmentIndex) => segment.kind === 'note'
                       ? <RunParagraph key={segment.entry.id} entry={segment.entry} onOpenImage={openImageViewer} />
+                      : segment.kind === 'user'
+                      ? <TimelineItem key={segment.entry.id} entry={segment.entry} display={rowDisplay} onOpenImage={openImageViewer} />
                       : <WorkCluster
                           key={segment.id}
                           items={segment.items}
                           running={isLiveTurn && segmentIndex === tail.length - 1}
                           renderEntry={renderEntry}
                         />)}
-                    {canFork && latestReplyId && <div className="panel-reply-actions">
-                      <button type="button" className="panel-fork-action" aria-label="从最新回复复制会话续聊" aria-description="复制对话记录，模型会重新读取部分历史，不会回滚电脑文件" title="复制对话记录续聊；模型会重新读取部分历史，不会回滚文件" disabled={libraryBusy} onClick={() => { void forkFromReply(latestReplyId); }}><ForkIcon /></button>
-                    </div>}
                   </div>
                 </article>}
                 <TurnStats entries={group.items}

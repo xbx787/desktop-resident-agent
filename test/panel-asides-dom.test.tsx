@@ -92,4 +92,14 @@ describe('a steered line inside a finished turn', () => {
     expect(process!.hasAttribute('open')).toBe(false)
     expect(process!.textContent).toContain('已工作')
   })
+
+  it('keeps the steered line inside the process while the turn still runs', async () => {
+    const live: AppSnapshot = { ...snapshot, taskStatus: 'executing', taskMetrics: { startedAt: at(0) } }
+    await act(async () => {
+      root.render(<PanelBubble visible snapshot={live} error={null} run={async (action) => { await action(window.pet); return true }} />)
+    })
+    // 思考中：插话按顺序留在过程流里，不提前搬到折叠链上方。
+    expect(host.querySelector('.panel-turn-asides')).toBeNull()
+    expect(host.textContent).toContain('插话：用另一种方案')
+  })
 })

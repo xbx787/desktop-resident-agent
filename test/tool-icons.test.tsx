@@ -31,10 +31,10 @@ describe('ToolIcon', () => {
   it('draws different shapes per family and ignores letter case', () => {
     const bash = renderToStaticMarkup(<ToolIcon name="Bash" />)
     expect(bash).toContain('panel-tool-icon')
-    // 执行命令是一对尖括号：左边一个尖朝左（<）、右边一个尖朝右（>），
-    // 不再有终端窗口的外框——方向反了会拼成一个叉，这里钉住朝向。
-    expect(bash).toContain('m10.6 5.8-4.4 4.4 4.4 4.4')
-    expect(bash).toContain('m9.4 5.8 4.4 4.4-4.4 4.4')
+    // 执行命令是一对分开的尖括号：左边一个尖朝左（<）、右边一个尖朝右（>）。
+    // 两个根部要拉开距离——贴在一起会连成一个菱形（这里钉住两个根部的 x）。
+    expect(bash).toContain('m7.6 5.2-3.6 4.8 3.6 4.8')
+    expect(bash).toContain('m12.4 5.2 3.6 4.8-3.6 4.8')
     expect(bash).not.toContain('<rect')
     expect(renderToStaticMarkup(<ToolIcon name="Read" />)).not.toBe(bash)
     expect(renderToStaticMarkup(<ToolIcon name="BASH" />)).toBe(bash)

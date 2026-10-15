@@ -9,8 +9,6 @@ const api: PetAPI = {
   preparePastedFile: (request) => ipcRenderer.invoke('pet:prepare-pasted-file', request),
   readImagePreview: (filePath) => ipcRenderer.invoke('pet:read-image-preview', filePath),
   createConversation: (title) => ipcRenderer.invoke('pet:create-conversation', title),
-  forkConversation: (sourceConversationId, expectedAssistantEntryId) =>
-    ipcRenderer.invoke('pet:fork-conversation', sourceConversationId, expectedAssistantEntryId),
   selectConversation: (id) => ipcRenderer.invoke('pet:select-conversation', id),
   renameConversation: (id, title) => ipcRenderer.invoke('pet:rename-conversation', id, title),
   setConversationPinned: (id, pinned) => ipcRenderer.invoke('pet:set-conversation-pinned', id, pinned),

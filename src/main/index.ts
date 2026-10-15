@@ -690,13 +690,6 @@ function registerIpc(): void {
     if (title !== undefined && typeof title !== 'string') throw new Error('标题无效。')
     await activeController().createConversation(title as string | undefined)
   })
-  ipcMain.handle('pet:fork-conversation', (event, sourceId: unknown, expectedReplyId: unknown) => {
-    if (!trusted(event) || typeof sourceId !== 'string' || typeof expectedReplyId !== 'string' ||
-        !sourceId.trim() || !expectedReplyId.trim() || sourceId.length > 128 || expectedReplyId.length > 128) {
-      throw new Error('复制会话请求无效。')
-    }
-    return activeController().forkConversation(sourceId, expectedReplyId)
-  })
   ipcMain.handle('pet:select-conversation', async (event, id: unknown) => {
     if (!trusted(event) || typeof id !== 'string') throw new Error('会话编号无效。')
     await activeController().selectConversation(id)
