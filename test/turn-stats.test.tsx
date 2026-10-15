@@ -55,6 +55,33 @@ describe('TurnStats', () => {
     const bare = renderToStaticMarkup(<TurnStats running={false} entries={[]} metrics={metrics} />)
     expect(bare).toContain('1.2K token')
     expect(bare).not.toContain('token/s')
+    // A running turn whose backend has not reported output yet reads as "not
+    // counted yet" — never as a lying "0 token/s".
+    const uncounted = renderToStaticMarkup(<TurnStats running entries={[]} metrics={{
+      startedAt: new Date(Date.now() - 20_000).toISOString(),
+      usage: { total: 1234, input: 1000, output: 0 }
+    }} />)
+    expect(uncounted).toContain('1.2K token')
+    expect(uncounted).not.toContain('token/s')
+  })
+
+  it('estimates the output while the backend withholds it mid-stream', () => {
+    const streaming: TimelineEntry = { id: 'a1', kind: 'assistant', time: new Date().toISOString(), text: '一'.repeat(300) }
+    const html = renderToStaticMarkup(<TurnStats running entries={[streaming]} metrics={{
+      startedAt: new Date(Date.now() - 10_000).toISOString(),
+      usage: { total: 3000, input: 2000, output: 0 }
+    }} />)
+    // 300 字符 ÷ 1.5 ≈ 200 token：思考中「输出」不再挂着 0，速度也随之有了；
+    // 结算拿到真实值后这一段会被真实数取代。
+    expect(html).toContain('输出')
+    expect(html).toContain('>200<')
+    expect(html).toContain('token/s')
+    // 没有流式文字时不该凭空造数。
+    const idle = renderToStaticMarkup(<TurnStats running entries={[]} metrics={{
+      startedAt: new Date(Date.now() - 10_000).toISOString(),
+      usage: { total: 3000, input: 2000, output: 0 }
+    }} />)
+    expect(idle).not.toContain('token/s')
   })
 
   it('hides the tool line when the turn ran no tools, and the whole footer when nothing happened', () => {
@@ -68,9 +95,10 @@ describe('TurnStats', () => {
     const newest = renderToStaticMarkup(<TurnStats running={false} metrics={{ ...metrics, spentYuan: 0.08 }} spentYuan={0.20} entries={[]} />)
     expect(older).toContain('本轮花费')
     expect(older).toContain('¥0.12')
-    expect(older).not.toContain('本对话已记录')
+    expect(older).not.toContain('本对话累计')
     expect(newest).toContain('¥0.08')
-    expect(newest).toContain('本对话已记录 ¥0.20')
+    // 对话累计坐在合计下面，措辞写明它是累计——不是这一轮的加法结果。
+    expect(newest).toContain('本对话累计 ¥0.20')
   })
 
   it('labels missing historic usage without fabricating zero tokens or zero cost', () => {
@@ -131,5 +159,26 @@ describe('TurnStats', () => {
     expect(off).toContain('= ¥0.04')
     expect(off).toContain('= ¥0.48')
     expect(off).toContain('¥0.71')
+    // 合计行永远在，而且就是四行小计加起来的结果。
+    expect(off).toContain('本轮合计')
+    expect(off).toContain('panel-turn-usage-total-amount')
+    // 谷时：乘数与合计标记都走柔和绿。
+    expect(off).toContain('panel-turn-formula-mult is-off-peak')
+    expect(off).toContain('<i class="panel-turn-tier is-off-peak">谷</i>')
+    expect(off).not.toContain('is-peak')
+    // 峰时：同一对色里的柔和红。
+    expect(peak).toContain('panel-turn-formula-mult is-peak')
+    expect(peak).toContain('<i class="panel-turn-tier is-peak">峰</i>')
+  })
+
+  it('gives the rule a result under it even while the turn still runs', () => {
+    const usage = { total: 1_936_000, input: 160_000, output: 120_000, cacheRead: 1_620_000, cacheCreate: 36_000 }
+    const html = renderToStaticMarkup(<TurnStats running entries={[]} metrics={{
+      startedAt: new Date(Date.now() - 8_000).toISOString(), usage
+    }} />)
+    // 跑动中的一轮没有本轮精算值；合计仍要由各行算出来，横线下面不能空着。
+    expect(html).toContain('本轮合计')
+    expect(html).toContain('panel-turn-usage-total')
+    expect(html).toContain('panel-turn-usage-total-amount')
   })
 })

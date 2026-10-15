@@ -33,11 +33,16 @@ export function BalanceCard({ visible, snapshot, loading, error, onRefresh, onCl
   const checked = snapshot?.checkedAt ? new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false,
   }).format(new Date(snapshot.checkedAt)) : null;
+  const notice = error || (snapshot?.available === false ? '账户当前不可调用 API' : '');
 
   return (
-    <aside className="balance-peek" aria-label="DeepSeek API 余额与峰谷时段">
+    <aside className={`balance-peek${notice ? ' has-notice' : ''}`} aria-label="DeepSeek API 余额与峰谷时段">
       <div className="balance-header">
-        <span className="balance-heading"><strong>DeepSeek</strong><small>余额</small></span>
+        <span className="balance-heading">
+          <strong>DeepSeek</strong><small>余额</small>
+          {/* 更新时间贴着「余额」，底行只在有提示时才占位——正常状态省下一行。 */}
+          {checked && <small className="balance-updated">{checked} 更新</small>}
+        </span>
         <div className="balance-actions">
           <button type="button" aria-label="刷新余额" title="刷新余额" disabled={loading} onClick={onRefresh}>↻</button>
           <button type="button" aria-label="收起余额卡片" title="收起" onClick={onClose}>×</button>
@@ -56,10 +61,9 @@ export function BalanceCard({ visible, snapshot, loading, error, onRefresh, onCl
         </span>
         <span className="balance-next">{peak.nextChangeAt && peak.nextTier ? formatNext(peak.nextChangeAt, peak.nextTier) : '切换时间待确认'}</span>
       </div>
-      <div className="balance-foot">
-        <span title={error || undefined}>{error || (snapshot?.available === false ? '账户当前不可调用 API' : '')}</span>
-        {checked && <span>{checked} 更新</span>}
-      </div>
+      {notice && <div className="balance-foot">
+        <span title={error || undefined}>{notice}</span>
+      </div>}
     </aside>
   );
 }

@@ -109,7 +109,7 @@ export function startPoseClock(swap: (pose: PoseSpec | null) => void, random: ()
   const schedule = (delay: number): void => { timer = window.setTimeout(tick, delay) }
   const tick = (): void => {
     if (stopped) return
-    if (document.hidden) { schedule(5000); return }
+    if (document.hidden || document.body.classList.contains('is-resting')) { schedule(5000); return }
     if (showing) {
       showing = false
       swap(null)

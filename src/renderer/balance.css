@@ -4,7 +4,7 @@
   left: 10px;
   bottom: 192px;
   display: grid;
-  grid-template-rows: 24px minmax(0, 1fr) 30px 15px;
+  grid-template-rows: 24px minmax(0, 1fr) 30px;
   row-gap: 4px;
   width: 276px;
   height: 160px;
@@ -39,10 +39,15 @@
   align-items: center;
 }
 
+/* 更新时间搬进标题行、贴在「余额」后面，正常状态省掉底部一整行；出错提示
+   回来时（has-notice）那一行才重新占位。省下的一行让金额区更舒展。 */
+.balance-peek.has-notice { grid-template-rows: 24px minmax(0, 1fr) 30px 15px; }
+
 .balance-header { justify-content: space-between; }
 .balance-heading { gap: 7px; letter-spacing: .01em; }
 .balance-heading strong { font-size: 11px; font-weight: 650; }
 .balance-heading small { color: #a9c0e9; font-size: 10px; }
+.balance-updated { color: #8ba2cc; }
 .balance-actions { gap: 2px; }
 .balance-actions button {
   display: grid;
@@ -97,6 +102,5 @@
 .balance-period-unknown { color: #b9c9e7; }
 .balance-next { overflow: hidden; text-overflow: ellipsis; }
 
-.balance-foot { justify-content: space-between; gap: 6px; min-width: 0; color: #9cb2dc; font-size: 10px; white-space: nowrap; }
-.balance-foot span:first-child { overflow: hidden; text-overflow: ellipsis; }
-.balance-foot span:last-child { flex: none; margin-left: auto; }
+.balance-foot { gap: 6px; min-width: 0; color: #9cb2dc; font-size: 10px; white-space: nowrap; }
+.balance-foot span { overflow: hidden; text-overflow: ellipsis; }

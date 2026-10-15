@@ -6,6 +6,11 @@ button { cursor: pointer; }
 button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55; }
 .settings-window { min-height: 100vh; padding: 28px 30px 20px; background: linear-gradient(155deg, #27427e 0%, #162854 45%, #0c1b3e 100%); }
 .settings-header { display: flex; align-items: center; gap: 13px; margin-bottom: 16px; }
+/* 窗口没有系统边框：标题栏画在这里——按住空白处拖动窗口，按钮不参与拖动。
+   × 与余额卡上的收起按钮同一副配方。 */
+.settings-header { -webkit-app-region: drag; }
+.settings-close { -webkit-app-region: no-drag; display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 8px; color: #c8d9fa; background: transparent; font: 17px/1 "Segoe UI Symbol", sans-serif; cursor: pointer; transition: background .15s ease, color .15s ease; }
+.settings-close:hover, .settings-close:focus-visible { color: #fff; background: rgba(184, 210, 255, .17); }
 /* One group shows at a time, so the small
    window never scrolls through the whole list. The chip style follows the
    panel's pick buttons. */

@@ -364,6 +364,14 @@ export interface PetAPI {
   /** Approves (true) or rejects (false) a parked plan; a rejection keeps the
    *  model in plan mode so it can revise and propose again. */
   answerPlan(id: string, approved: boolean, conversationId?: string): Promise<void>
+  /** The composer text as typed, kept per conversation so closing the window
+   *  or the app never loses a half-written message. */
+  saveDraft(conversationId: string, text: string): Promise<void>
+  getDraft(conversationId: string): Promise<string>
+  /** Ends a running goal the only way the CLI accepts: its own /goal clear
+   *  command, sent as a turn of its own behind an interrupt of the loop's
+   *  current turn. Steered text never reaches it as a command. */
+  clearGoal(conversationId?: string): Promise<void>
   stop(conversationId?: string): Promise<void>
   /** Aborts what the running turn is executing (a stuck command) while the
    *  session and any queued messages survive. */

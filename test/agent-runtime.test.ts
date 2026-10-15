@@ -468,6 +468,27 @@ describe('plan mode and /goal truth', () => {
     report(true)
     expect(runtime.getSnapshot().planMode).toBe(true)
   })
+  it('carries a goal and plan mode through the saved record and back', async () => {
+    const record = await new ConversationStore(testRoot).createConversation('保存', 'claude_code')
+    const planted = { ...record, planMode: true, goal: {
+      condition: '完成改进', phase: 'confirmed' as const, iterations: 2, startedAt: new Date().toISOString()
+    } }
+    const model: ModelClient = { respond: async () => ({ text: 'ok' }), setPlanMode: () => true }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    runtime.restoreConversation(planted)
+    // Both come back on the snapshot: the goal still waits for CLI confirmation,
+    // the plan-mode switch is on before the first turn rebuilds the query.
+    expect(runtime.getSnapshot().goal).toMatchObject({ condition: '完成改进', phase: 'unverified', iterations: 2 })
+    expect(runtime.getSnapshot().planMode).toBe(true)
+    // And both flow back out — this is what persistConversation writes down.
+    const exported = runtime.exportConversationState()
+    expect(exported.goal).toMatchObject({ condition: '完成改进', iterations: 2 })
+    expect(exported.planMode).toBe(true)
+    // Clearing the goal must reach the record too (null, not "keep old").
+    runtime.restoreConversation({ ...record })
+    expect(runtime.exportConversationState().goal ?? null).toBeNull()
+  })
+
   it('restores a saved goal as unverified until the CLI reports it again', async () => {
     const record = await new ConversationStore(testRoot).createConversation('目标', 'claude_code')
     const model: ModelClient = { respond: async () => ({ text: 'ok' }) }

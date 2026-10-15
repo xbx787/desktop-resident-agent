@@ -117,6 +117,44 @@ describe('Claude Agent SDK live tool access', () => {
     }
   }, 100_000)
 
+  it.skipIf(!runLive)('reports output tokens while the turn still streams', async () => {
+    const executable = findClaudeExecutable(process.env)
+    const apiKey = process.env.DEEPSEEK_API_KEY?.trim()
+    if (!executable || !apiKey) throw new Error('本机 Claude Code 或 DeepSeek Key 未就绪。')
+    const probeDir = path.join(process.cwd(), '.cache', 'tests', randomUUID())
+    const abort = new AbortController()
+    const timeout = setTimeout(() => abort.abort(), 90_000)
+    let client: ClaudeAgentClient | undefined
+    try {
+      await fs.mkdir(probeDir, { recursive: true })
+      client = new ClaudeAgentClient(executable, apiKey, probeDir, path.join(probeDir, 'claude'))
+      const readings: Array<{ output: number; textLen: number }> = []
+      let textLen = 0
+      await client.respond(
+        [{ role: 'user', content: '请从 1 数到 80，数字之间用中文逗号隔开，不要换行、不要写别的。' }],
+        abort.signal,
+        (partial) => { if (partial) textLen = partial.length },
+        undefined, undefined,
+        (usage) => { readings.push({ output: usage.output ?? -1, textLen }) },
+        undefined
+      )
+      console.log(`[live-output-probe] readings=${readings.length} first=${JSON.stringify(readings.slice(0, 6))} last=${JSON.stringify(readings.slice(-2))}`)
+      // 运行中就该有真实的输出量——答案「思考中输出一直是 0」是这里的读数能证伪的。
+      const midTurn = readings.slice(0, Math.max(1, Math.floor(readings.length / 2)))
+      expect(midTurn.some((reading) => reading.output > 0),
+        `流式期间没有一次报过输出量：${JSON.stringify(readings.slice(0, 6))}`).toBe(true)
+    } finally {
+      abort.abort()
+      clearTimeout(timeout)
+      await client?.dispose()
+      const relative = path.relative(process.cwd(), probeDir)
+      if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) throw new Error('Unsafe live test cleanup path.')
+      await fs.rm(probeDir, { recursive: true, force: true }).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code !== 'EBUSY') throw error
+      })
+    }
+  }, 100_000)
+
   it.skipIf(!runLive)('reads a disposable project file without an approval prompt', async () => {
     const executable = findClaudeExecutable(process.env)
     const apiKey = process.env.DEEPSEEK_API_KEY?.trim()

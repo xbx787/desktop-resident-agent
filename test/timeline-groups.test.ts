@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { TimelineEntry } from '../src/shared/contracts'
-import { groupTimeline, segmentTurn, splitTurnTail, tailWindow, type TimelineGroup } from '../src/renderer/timeline-groups'
+import { groupTimeline, liftAsides, segmentTurn, splitTurnTail, tailWindow, type TimelineGroup } from '../src/renderer/timeline-groups'
 
 const BASE = Date.parse('2026-10-09T00:00:00.000Z')
 let sequence = 0
@@ -125,14 +125,24 @@ describe('segmentTurn', () => {
   })
 })
 
-describe('splitTurnTail', () => {
-  it('never folds a steered message into the process row', () => {
+describe('liftAsides', () => {
+  it('lifts a steered line out so the interrupted process folds whole', () => {
     const segments = segmentTurn([at('thinking', 't1', 1), at('user', 'steer', 2), at('thinking', 't2', 3), at('assistant', 'final', 4)])
-    const { head, tail } = splitTurnTail(segments, false)
-    // The fold stops at the steer: the work before it collapses, everything
-    // from the message on stays visible.
-    expect(head.map((segment) => segment.kind)).toEqual(['work'])
-    expect(tail.map((segment) => segment.kind)).toEqual(['user', 'work', 'note'])
+    const { asides, flow } = liftAsides(segments)
+    expect(asides.map((segment) => segment.entry.text)).toEqual(['steer'])
+    expect(flow.map((segment) => segment.kind)).toEqual(['work', 'work', 'note'])
+    // The fold no longer stops at the steer: the work on both sides of it
+    // collapses together, so the chain can always be closed.
+    const { head, tail } = splitTurnTail(flow, false)
+    expect(head.map((segment) => segment.kind)).toEqual(['work', 'work'])
+    expect(tail.map((segment) => segment.kind)).toEqual(['note'])
+  })
+
+  it('keeps several steered lines in order, stacked for the top of the turn', () => {
+    const segments = segmentTurn([at('thinking', 't1', 1), at('user', 's1', 2), at('thinking', 't2', 3), at('user', 's2', 4)])
+    const { asides, flow } = liftAsides(segments)
+    expect(asides.map((segment) => segment.entry.text)).toEqual(['s1', 's2'])
+    expect(flow.map((segment) => segment.kind)).toEqual(['work', 'work'])
   })
 })
 

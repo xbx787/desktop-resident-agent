@@ -13,7 +13,9 @@ function rule(selector: string): string {
 
 describe('avatar thread geometry', () => {
   it('keeps the stats dot on the avatar column axis and paints both states', () => {
-    expect(rule('.panel-turn-stats-dot')).toContain('left: 16px')
+    // 轴 = 头像列的一半：头像宽 33、点宽 7 → left = 33/2 - 7/2 = 13。
+    expect(rule('.panel-event-glyph')).toContain('width: 33px')
+    expect(rule('.panel-turn-stats-dot')).toContain('left: 13px')
     expect(rule('.panel-turn-stats-dot.is-running')).toContain('background: #f3c36f')
     expect(rule('.panel-turn-stats-dot.is-done')).toContain('background: #9db9e9')
   })

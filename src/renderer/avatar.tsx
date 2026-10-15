@@ -65,6 +65,24 @@ function Avatar() {
   }, [taskStatus]);
   useEffect(() => () => { if (dotHold.current !== null) window.clearTimeout(dotHold.current); }, []);
 
+  // 静止（一分钟没有交互）就停下呼吸与一切偶发动效：窗口不再产生新帧，
+  // dwm 也就不再为它反复合成——这是静止基线的最大一笔。任何交互立刻唤醒。
+  useEffect(() => {
+    const REST_MS = 60_000;
+    let timer = window.setTimeout(() => document.body.classList.add('is-resting'), REST_MS);
+    const wake = (): void => {
+      document.body.classList.remove('is-resting');
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => document.body.classList.add('is-resting'), REST_MS);
+    };
+    const events = ['pointermove', 'pointerdown', 'wheel'] as const;
+    for (const name of events) window.addEventListener(name, wake, { passive: true });
+    return () => {
+      window.clearTimeout(timer);
+      for (const name of events) window.removeEventListener(name, wake);
+    };
+  }, []);
+
   useEffect(() => startIdleFidgets(portraitRef.current), []);
   useEffect(() => {
     preloadPoses();

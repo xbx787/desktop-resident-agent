@@ -104,7 +104,7 @@
 .panel-status { display: inline-flex; align-items: center; gap: 7px; flex: none; color: #c5d6fb; font-size: 11px; white-space: nowrap; }
 .panel-status i { width: 7px; height: 7px; border-radius: 50%; background: #9db9e9; }
 .panel-status-planning, .panel-status-executing, .panel-status-verifying { color: #f5d39b; }
-.panel-status-planning i, .panel-status-executing i, .panel-status-verifying i { background: #f3c36f; box-shadow: 0 0 8px rgba(243, 195, 111, .3); animation: voice-pulse 1.2s ease-in-out infinite; }
+.panel-status-planning i, .panel-status-executing i, .panel-status-verifying i { background: #f3c36f; box-shadow: 0 0 8px rgba(243, 195, 111, .3); opacity: calc(1 - .45 * var(--panel-pulse-p, 0)); transform: scale(calc(1 - .15 * var(--panel-pulse-p, 0))); }
 .panel-status-awaiting_approval { color: #a9d5ff; }
 .panel-status-awaiting_approval i { background: #7bbaff; box-shadow: 0 0 8px rgba(123, 186, 255, .3); }
 .panel-status-done { color: #a8e8bc; }
@@ -299,7 +299,7 @@
 .panel-feed::-webkit-scrollbar-thumb { border-radius: 9px; background: rgba(170, 195, 245, .38); }
 .panel-event {
   display: grid;
-  grid-template-columns: 39px minmax(0, 1fr);
+  grid-template-columns: 33px minmax(0, 1fr);
   gap: 9px;
   margin-bottom: 15px;
   /* Skip style, layout and paint for messages scrolled out of view: a long
@@ -320,14 +320,17 @@
    every one-line message — the user bubble included — was stretched to match.
    It runs to the block's own bottom edge so the stats row's bridge can pick
    it up without a seam. */
-.panel-event-avatar::after { content: ''; position: absolute; top: 40px; bottom: 0; left: calc(50% - 0.8px); width: 1.6px; border-radius: 1px; background: rgba(150, 178, 226, .2); }
+.panel-event-avatar::after { content: ''; position: absolute; top: 34px; bottom: 0; left: calc(50% - 0.8px); width: 1.6px; border-radius: 1px; background: rgba(150, 178, 226, .2); }
 /* With a clock between glyph and thread, the thread starts under it:
-   39 glyph + 8 gap + 10 clock + the 1px breather. */
-.panel-event-avatar:has(.panel-event-time)::after { top: 58px; }
+   33 glyph + 8 gap + 10 clock + the 1px breather. */
+.panel-event-avatar:has(.panel-event-time)::after { top: 52px; }
 /* One reply is one box: the avatar and clock appear once at its top, and
    every further piece is a list-like paragraph. Its dot is a pseudo-element
    of the paragraph itself — alignment by construction, it cannot drift. */
 .panel-event.is-run .panel-event-body { display: grid; gap: 10px; }
+/* 插话叠在这一轮的最上面：一条一行、按条数排开，和正文用同一种行距节奏。
+   它们留在折叠块外面，所以过程整条可收，插话也不会被收没。 */
+.panel-turn-asides { display: grid; gap: 10px; min-width: 0; }
 .panel-reply-actions { display: flex; justify-content: flex-end; height: 24px; margin-top: -6px; }
 .panel-fork-action { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 8px; color: #b7cdf2; background: transparent; opacity: .58; transition: color .14s ease, background .14s ease, opacity .14s ease; }
 .panel-fork-action svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
@@ -336,21 +339,21 @@
 .panel-fork-action:disabled { opacity: .35; }
 /* The reply pieces carry no bullet: a dot per paragraph read as a list of
    unrelated items — the final answer most of all. The pieces just flow. */
-.panel-avatar-img { width: 39px; height: 39px; border: 1px solid rgba(190, 213, 253, .35); border-radius: 13.5px; object-fit: cover; }
+.panel-avatar-img { width: 33px; height: 33px; border: 1px solid rgba(190, 213, 253, .35); border-radius: 11.5px; object-fit: cover; }
 .panel-event-glyph {
   display: grid;
   place-items: center;
-  width: 39px;
-  height: 39px;
+  width: 33px;
+  height: 33px;
   border: 1px solid rgba(195, 218, 255, .22);
-  border-radius: 13.5px;
+  border-radius: 11.5px;
   color: #d6e5ff;
   background: rgba(146, 181, 243, .15);
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 650;
 }
 .panel-event-user .panel-event-glyph { color: #f4d8c2; background: rgba(238, 183, 161, .12); }
-.panel-event-tool .panel-event-glyph { font-size: 19px; font-weight: 400; }
+.panel-event-tool .panel-event-glyph { font-size: 16px; font-weight: 400; }
 .panel-event-time { color: #8ea6d2; font-family: Bahnschrift, "Segoe UI", sans-serif; font-size: 10px; font-variant-numeric: tabular-nums; line-height: 1; }
 .panel-event-body { min-width: 0; padding-top: 1px; }
 .panel-event-body p { margin: 4px 0 0; color: #edf3ff; font-size: 13px; line-height: 1.58; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -384,7 +387,7 @@
 .panel-thought-label { color: #cddcf8; }
 .panel-thought-time { color: #9fb7df; font-variant-numeric: tabular-nums; }
 .panel-thought-state { margin-left: auto; flex: none; color: #9bd8ad; font-size: 14px; line-height: 1; }
-.panel-thought-state.is-running { color: #f0c47b; animation: voice-pulse 1.2s ease-in-out infinite; }
+.panel-thought-state.is-running { color: #f0c47b; opacity: calc(1 - .45 * var(--panel-pulse-p, 0)); transform: scale(calc(1 - .15 * var(--panel-pulse-p, 0))); }
 /* The opened thought body lines up under the "已思考" label — icon 14 px plus
    the summary's 8 px gap — instead of hanging flush against the window edge. */
 .panel-thought .panel-markdown { margin: 6px 0 8px 22px; max-height: 240px; overflow: auto; font-size: 11px; line-height: 1.55; scrollbar-width: thin; }
@@ -396,12 +399,12 @@
 .panel-turn-tools-errors { color: #f6aeb5; }
 /* On the cluster spine's axis (which itself lines up with the collapse chevron
    in the summary row), so the chain, the dot and the arrow read as one column. */
-/* The dot sits on the avatar column's axis (centre 19.5px), so the glyph, the
+/* The dot sits on the avatar column's axis (centre 16.5px), so the glyph, the
    thread line and this dot all share one plumb line. Amber and pulsing while
    the turn runs; a quiet blue once it settles — the spot never reads empty,
    and the thread always has something to land on. */
-.panel-turn-stats-dot { position: absolute; left: 16px; top: calc(50% - 3.5px); width: 7px; height: 7px; border-radius: 50%; }
-.panel-turn-stats-dot.is-running { background: #f3c36f; animation: voice-pulse 1.2s ease-in-out infinite; }
+.panel-turn-stats-dot { position: absolute; left: 13px; top: calc(50% - 3.5px); width: 7px; height: 7px; border-radius: 50%; }
+.panel-turn-stats-dot.is-running { background: #f3c36f; opacity: calc(1 - .45 * var(--panel-pulse-p, 0)); transform: scale(calc(1 - .15 * var(--panel-pulse-p, 0))); }
 .panel-turn-stats-dot.is-done { background: #9db9e9; }
 /* The thread's continuation across the gap between the message block and this
    row: the block's 15px margin and the stats' 3px margin collapse to 15px, so
@@ -417,7 +420,16 @@
 .panel-turn-formula { display: grid; grid-template-columns: max-content 1fr max-content max-content; column-gap: 12px; row-gap: 3px; }
 .panel-turn-formula-amount { text-align: right; }
 .panel-turn-formula-mult { color: rgba(215, 229, 255, .72); }
-.panel-turn-formula-sub { min-width: 58px; color: rgba(215, 229, 255, .85); text-align: right; }
+/* 峰谷着色：柔和的红与绿，一眼看出这一轮按哪一档计价，不抢数字的注意力。
+   合计行的「谷/峰」标记与每行乘数共用同一对色。 */
+.panel-turn-formula-mult.is-off-peak { color: rgba(155, 216, 173, .80); }
+.panel-turn-formula-mult.is-peak { color: rgba(246, 174, 181, .80); }
+.panel-turn-tier { margin-left: 4px; font-style: normal; }
+.panel-turn-tier.is-off-peak { color: #9bd8ad; }
+.panel-turn-tier.is-peak { color: #f6aeb5; }
+/* 金额列贴合内容：金额短（个位数）时不再留一块空档，长金额自然撑开——
+   右对齐让等号始终连成一条线。 */
+.panel-turn-formula-sub { color: rgba(215, 229, 255, .85); text-align: right; }
 .panel-turn-usage-total { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; padding-top: 4px; border-top: 1px solid rgba(185, 210, 255, .38); }
 .panel-turn-usage-total-amount { color: #f4f8ff; }
 .panel-turn-usage-note { color: #8fa6cf; }
@@ -466,9 +478,9 @@
    label is then always covered by the gradient's quiet middle, the physical
    ends of the bars never enter the label's box, and nothing can clip — the
    old narrow bar snapped hard the moment it crossed the edge. */
-.panel-live-label::before { content: ''; position: absolute; left: 0; bottom: 0; width: 300%; height: 2px; border-radius: 2px; background-image: linear-gradient(90deg, transparent 0 35%, rgba(216, 205, 255, .42) 50%, transparent 65% 100%); animation: panel-live-sweep 3.4s ease-in-out infinite; }
+.panel-live-label::before { content: ''; position: absolute; left: 0; bottom: 0; width: 300%; height: 2px; border-radius: 2px; background-image: linear-gradient(90deg, transparent 0 35%, rgba(216, 205, 255, .42) 50%, transparent 65% 100%); transform: translateX(calc(-66.67% + 66.67% * var(--panel-sweep-p, 0))); }
 /* The sheen crossing the glyphs: the same soft band, over the text. */
-.panel-live-label::after { content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 300%; background: linear-gradient(90deg, transparent 0 35%, rgba(255, 255, 255, .25) 50%, transparent 65% 100%); animation: panel-live-sweep 3.4s ease-in-out infinite; }
+.panel-live-label::after { content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 300%; background: linear-gradient(90deg, transparent 0 35%, rgba(255, 255, 255, .25) 50%, transparent 65% 100%); transform: translateX(calc(-66.67% + 66.67% * var(--panel-sweep-p, 0))); }
 .panel-tool-activity summary code.panel-live-label::before { bottom: 1px; }
 /* The status line stays a plain amber label — only its dot pulses. The
    streaming sheen belongs to the tool and thought titles below, not to the
@@ -524,7 +536,7 @@
 .panel-cluster-facts { display: flex; gap: 12px; min-width: 0; overflow: hidden; color: #7f93bd; font-size: 10px; }
 .panel-cluster-facts > span { white-space: nowrap; }
 .panel-cluster-state { margin-left: auto; flex: none; color: #9bd8ad; font-size: 14px; line-height: 1; }
-.panel-cluster-state.is-running { color: #f0c47b; animation: voice-pulse 1.2s ease-in-out infinite; }
+.panel-cluster-state.is-running { color: #f0c47b; opacity: calc(1 - .45 * var(--panel-pulse-p, 0)); transform: scale(calc(1 - .15 * var(--panel-pulse-p, 0))); }
 .panel-cluster-body { position: relative; margin: 2px 0 6px; padding-left: 22px; }
 /* One spine from the first row down past the last one, ending just above the
    footer's dot: spine, dot and the summary's chevron share one column (12px —
@@ -541,9 +553,10 @@
 /* Something is happening but nothing is streaming yet: say what, and for how long. */
 .panel-working { display: flex; align-items: center; gap: 9px; margin: 1px 0 15px; color: #9fb7df; font-size: 11px; }
 .panel-working-dots { display: inline-flex; flex: none; gap: 3px; }
-.panel-working-dots i { width: 5px; height: 5px; border-radius: 50%; background: #7fd8ff; animation: panel-working-bounce 1.2s ease-in-out infinite; }
-.panel-working-dots i:nth-child(2) { background: #a9b6ff; animation-delay: .18s; }
-.panel-working-dots i:nth-child(3) { background: #c9b8ff; animation-delay: .36s; }
+/* 三个点各走各的相位（原 .18s/.36s 错峰的等价物），变量由 30fps 的计时器推进。 */
+.panel-working-dots i { width: 5px; height: 5px; border-radius: 50%; background: #7fd8ff; opacity: calc(.4 + .6 * var(--panel-bounce-p1, 1)); transform: translateY(calc(-3px * var(--panel-bounce-p1, 1))); }
+.panel-working-dots i:nth-child(2) { background: #a9b6ff; opacity: calc(.4 + .6 * var(--panel-bounce-p2, 1)); transform: translateY(calc(-3px * var(--panel-bounce-p2, 1))); }
+.panel-working-dots i:nth-child(3) { background: #c9b8ff; opacity: calc(.4 + .6 * var(--panel-bounce-p3, 1)); transform: translateY(calc(-3px * var(--panel-bounce-p3, 1))); }
 @keyframes panel-working-bounce { 0%, 100% { transform: translateY(0); opacity: .4; } 50% { transform: translateY(-3px); opacity: 1; } }
 .panel-working-text { color: #dbe8ff; }
 .panel-working-time { color: #90a8d4; font-variant-numeric: tabular-nums; }

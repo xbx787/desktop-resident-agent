@@ -22,7 +22,7 @@ import { TaskStrip } from './task-strip';
 import { AskQuestionPanel } from './ask-question';
 import { PlanApprovalPanel } from './plan-approval';
 import { ThinkingItem } from './thinking-item';
-import { groupTimeline, sameTimelineEntry, segmentTurn, splitTurnTail, tailWindow } from './timeline-groups';
+import { groupTimeline, liftAsides, sameTimelineEntry, segmentTurn, splitTurnTail, tailWindow } from './timeline-groups';
 import { navMarks, NAV_WINDOW_COMPACT, NAV_WINDOW_WIDE, TimelineNav } from './timeline-nav';
 import { ToolDiffBody } from './tool-diff-body';
 import { ToolIcon } from './tool-icons';
@@ -1079,14 +1079,14 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     await run((bridge) => bridge.setPlanMode(on));
   }
 
-  /** Goal mode is the CLI's own /goal: the command starts the stop-hook loop,
-   *  /goal clear ends it. The composer draft is left untouched. */
+  /** Goal mode is the CLI's own /goal: the command starts the stop-hook loop.
+   *  Setting it is an ordinary queued turn; clearing it goes through clearGoal
+   *  instead — steered into the running loop the command never reaches the CLI
+   *  as a command. The composer draft is left untouched. */
   async function sendGoal(text: string, conversationId: string | null = activeConversationIdRef.current): Promise<boolean> {
     if (!snapshot || !text.trim() || !beginSubmission(conversationId)) return false;
     try {
-      const activeTurn = ['planning', 'awaiting_approval', 'executing', 'verifying'].includes(snapshot.taskStatus);
-      const strategy = text.trim() === '/goal clear' && activeTurn ? 'steer' : 'queue';
-      return await run((bridge) => bridge.sendMessage(text, [], strategy, conversationId ?? undefined));
+      return await run((bridge) => bridge.sendMessage(text, [], 'queue', conversationId ?? undefined));
     } catch (cause) {
       setAttachmentError(cause instanceof Error ? cause.message : '目标发送失败，内容已恢复。');
       return false;
@@ -1095,12 +1095,18 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     }
   }
 
+  /** The banner's stop button: the main process interrupts the goal loop's
+   *  current turn and delivers /goal clear as the next turn of its own. */
+  function clearGoal(): void {
+    void run((bridge) => bridge.clearGoal(activeConversationIdRef.current ?? undefined));
+  }
+
   /** The goal switch flips the composer into "write the goal" mode: opening
    *  closes the menu and prompts in place; closing clears a running goal, or
    *  just backs out of the prompt. */
   function toggleGoal(): void {
     if (goalPrompting) { setGoalPrompting(false); return; }
-    if (snapshot?.goal) { void sendGoal('/goal clear'); return; }
+    if (snapshot?.goal) { clearGoal(); return; }
     setGoalPrompting(true);
     setModelPickerOpen(false);
     setComposerOpen(true);
@@ -1347,6 +1353,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
 
   async function createConversation() {
     const currentId = activeConversationIdRef.current;
+    flushDraft(currentId, composerStateRef.current.draft);
     stashComposerState(composerStash.current, currentId, composerStateRef.current.draft, composerStateRef.current.attachments);
     if (currentId) goalPromptStash.current.set(currentId, goalPrompting);
     await libraryAction((bridge) => bridge.createConversation(), () => {
@@ -1366,6 +1373,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     let childId: string | null = null;
     await libraryAction(async (bridge) => { childId = await bridge.forkConversation(sourceId, replyId); }, () => {
       if (!childId) return;
+      flushDraft(sourceId, composerStateRef.current.draft);
       stashComposerState(composerStash.current, sourceId, composerStateRef.current.draft, composerStateRef.current.attachments);
       goalPromptStash.current.set(sourceId, goalPrompting);
       activeConversationIdRef.current = childId;
@@ -1381,8 +1389,42 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     });
   }
 
+  /** A draft write that must never surface an error: it runs on a debounce
+   *  and on every switch, and a failed save must not bother the writer. */
+  function flushDraft(id: string | null, text: string): void {
+    if (!id) return;
+    try { void petBridge().saveDraft(id, text).catch(() => undefined); } catch { /* 静态预览无桥。 */ }
+  }
+
+  // 输入停一下即落盘：关窗或关机不会丢半句话。附件不存——它们的临时文件不跨重启。
+  useEffect(() => {
+    const id = library?.activeConversationId;
+    if (!id) return;
+    const timer = window.setTimeout(() => { flushDraft(id, draft); }, 800);
+    return () => window.clearTimeout(timer);
+  }, [draft, library?.activeConversationId]);
+
+  // 应用重启后第一次进入：当前会话的草稿从会话记录里拿回来。内存里的 stash
+  // 优先（它是这次运行中最新的），只有它没有记录时才碰磁盘。
+  const draftRestoredRef = useRef(false);
+  useEffect(() => {
+    const id = library?.activeConversationId;
+    if (!id || draftRestoredRef.current || composerStash.current.has(id)) return;
+    draftRestoredRef.current = true;
+    let bridge: PetAPI;
+    try { bridge = petBridge(); } catch { return; }
+    void bridge.getDraft(id).then((text) => {
+      if (!text || composerStateRef.current.draft || activeConversationIdRef.current !== id) return;
+      composerStateRef.current = { draft: text, attachments: [] };
+      setDraft(text);
+      setCaretIndex(text.length);
+      setComposerOpen(true);
+    }).catch(() => undefined);
+  }, [library?.activeConversationId]);
+
   async function selectConversation(item: ConversationSummary) {
     const currentId = activeConversationIdRef.current;
+    flushDraft(currentId, composerStateRef.current.draft);
     stashComposerState(composerStash.current, currentId, composerStateRef.current.draft, composerStateRef.current.attachments);
     if (currentId) goalPromptStash.current.set(currentId, goalPrompting);
     const operation = item.archivedAt === null
@@ -1392,15 +1434,36 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
       activeConversationIdRef.current = item.id;
       setLibraryOpen(false);
       setSessionMenuOpen(false);
-      const saved = restoreComposerState(composerStash.current, item.id);
-      composerStateRef.current = saved;
-      setDraft(saved.draft);
-      setAttachments(saved.attachments);
-      setCaretIndex(saved.draft.length);
-      setAttachmentError(saved.attachments.length > 5 ? '已保留全部附件；一次最多发送 5 个，请先移除多余附件。' : null);
       const goalDraftOpen = goalPromptStash.current.get(item.id) ?? false;
       setGoalPrompting(goalDraftOpen);
-      setComposerOpen(Boolean(saved.draft || saved.attachments.length || goalDraftOpen));
+      const stashed = composerStash.current.get(item.id);
+      if (stashed) {
+        const saved = { draft: stashed.draft, attachments: [...stashed.attachments] };
+        composerStateRef.current = saved;
+        setDraft(saved.draft);
+        setAttachments(saved.attachments);
+        setCaretIndex(saved.draft.length);
+        setAttachmentError(saved.attachments.length > 5 ? '已保留全部附件；一次最多发送 5 个，请先移除多余附件。' : null);
+        setComposerOpen(Boolean(saved.draft || saved.attachments.length || goalDraftOpen));
+        return;
+      }
+      // 内存里没有这个会话的草稿（应用重启后的第一次切换）：从会话记录
+      // 里拿回来，晚到的磁盘值不覆盖已经开始的新输入。
+      composerStateRef.current = { draft: '', attachments: [] };
+      setDraft('');
+      setAttachments([]);
+      setCaretIndex(0);
+      setAttachmentError(null);
+      setComposerOpen(goalDraftOpen);
+      let bridge: PetAPI;
+      try { bridge = petBridge(); } catch { return; }
+      void bridge.getDraft(item.id).then((text) => {
+        if (!text || composerStateRef.current.draft || activeConversationIdRef.current !== item.id) return;
+        composerStateRef.current = { draft: text, attachments: [] };
+        setDraft(text);
+        setCaretIndex(text.length);
+        setComposerOpen(true);
+      }).catch(() => undefined);
     });
   }
 
@@ -1450,6 +1513,29 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const compactEmpty = empty && !expanded && !modelPickerOpen && !suggestionOpen && recentSessions.length > 0;
   const layout: BubbleLayout = !compactEmpty ? 'full' : !composerOpen ? 'empty' : attachments.length ? 'composer_attachments' : 'composer';
   const compactComposerHeight = 112 + composerHeight + (attachments.length ? 26 : 0);
+  // 30fps 的呼吸式动效：扫光与脉冲点改用 CSS 变量推进，值每 1/30 秒走一步——
+  // 合成器只在步进的帧上提交新内容（60fps 时是每帧），dwm 的合成次数减半。
+  // 没有动效在跑时这个计时器根本不启动，变量停在各自的静止位。
+  useEffect(() => {
+    if (!active && !sendingCurrent) return;
+    const started = performance.now();
+    const tri = (now: number, period: number, offset: number): number => {
+      const t = ((((now - started + offset) % period) + period) % period) / period;
+      return t < 0.5 ? t * 2 : (1 - t) * 2;
+    };
+    const tick = (): void => {
+      const now = performance.now();
+      const root = document.documentElement.style;
+      root.setProperty('--panel-sweep-p', tri(now, 3400, 0).toFixed(3));
+      root.setProperty('--panel-pulse-p', tri(now, 1200, 0).toFixed(3));
+      root.setProperty('--panel-bounce-p1', tri(now, 1200, 0).toFixed(3));
+      root.setProperty('--panel-bounce-p2', tri(now, 1200, -180).toFixed(3));
+      root.setProperty('--panel-bounce-p3', tri(now, 1200, -360).toFixed(3));
+    };
+    tick();
+    const timer = window.setInterval(tick, 33);
+    return () => window.clearInterval(timer);
+  }, [active, sendingCurrent]);
   // Grouping and task extraction scan the whole history; with incremental
   // snapshots an unchanged timeline keeps its identity, so these memos let
   // every render that doesn't touch the timeline reuse the last result.
@@ -1879,10 +1965,13 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
               if (group.kind === 'single') return <EntryItem key={group.entry.id} entry={group.entry} running={false} onOpenImage={openImageViewer} display={rowDisplay} />;
               const segments = segmentTurn(group.items);
               const isLiveTurn = index === latestTurnIndex && active;
+              // 插话抬到这一轮的最上面、按条数叠成一列：它们不会被折叠吞掉，
+              // 下面的过程也不再被打断——整条链任何时候都能收起来。
+              const { asides, flow } = liftAsides(segments);
               // A finished turn folds everything before its final sentence into
               // one process row, so the outcome is what stays in sight; while
               // the turn runs, nothing folds — its process is the view.
-              const { head, tail } = splitTurnTail(segments, isLiveTurn);
+              const { head, tail } = splitTurnTail(flow, isLiveTurn);
               // One reply is one box — avatar and clock once at its top, the
               // pieces listed beneath like an unordered list — so alignment is
               // structural, and none of the pieces become rail marks.
@@ -1904,11 +1993,12 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
                     {rowDisplay.showTimestamps && <time className="panel-event-time" dateTime={runAnchor.time}>{timeText(runAnchor.time)}</time>}
                   </div>
                   <div className="panel-event-body">
+                    {asides.length > 0 && <div className="panel-turn-asides">
+                      {asides.map((segment) => <TimelineItem key={segment.entry.id} entry={segment.entry} display={rowDisplay} onOpenImage={openImageViewer} />)}
+                    </div>}
                     {head.length > 0 && <TurnProcess segments={head} renderEntry={renderEntry} renderNote={renderNote} />}
                     {tail.map((segment, segmentIndex) => segment.kind === 'note'
                       ? <RunParagraph key={segment.entry.id} entry={segment.entry} onOpenImage={openImageViewer} />
-                      : segment.kind === 'user'
-                      ? <TimelineItem key={segment.entry.id} entry={segment.entry} display={rowDisplay} onOpenImage={openImageViewer} />
                       : <WorkCluster
                           key={segment.id}
                           items={segment.items}
@@ -1982,7 +2072,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
 
         {!compactEmpty && <TaskStrip key={library?.activeConversationId} tasks={tasks} planMode={Boolean(snapshot?.planMode)} />}
 
-        {!compactEmpty && snapshot?.goal && <GoalBanner goal={snapshot.goal} onClear={() => { void sendGoal('/goal clear'); }} />}
+        {!compactEmpty && snapshot?.goal && <GoalBanner goal={snapshot.goal} onClear={clearGoal} />}
 
         <div className={`panel-compose-dock${composerOpen || composerExit.closing || ask || plan ? ' is-open' : ''}`} ref={composeDockRef}>
           {ask ? (

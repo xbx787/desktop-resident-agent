@@ -55,7 +55,7 @@ async function mount(api: SettingsAPI): Promise<void> {
 function bridge(overrides: Partial<SettingsAPI> = {}): SettingsAPI {
   return {
     get: async () => settings, update: async (patch) => ({ ...settings, ...patch }),
-    version: async () => '0.0.47', setAvatar: async () => {},
+    version: async () => '0.0.47', close: async () => {}, setAvatar: async () => {},
     readAvatar: async () => null, saveModelProfile: async () => {},
     deleteModelProfile: async () => {}, testModelProfile: async () => ({ ok: true, message: '' }),
     memoryList: async () => [memory], memorySetEnabled: async (enabled) => enabled,

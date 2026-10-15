@@ -40,6 +40,13 @@ export interface ConversationRecord {
   pendingMessages: PendingMessage[]
   sdkSessionId: string | null
   goal?: AgentGoal | null
+  /** Plan mode as last known. The CLI re-reports the real state on its next
+   *  init, so this only has to survive the restart in between. */
+  planMode?: boolean
+  /** The composer text as typed, so closing the window never loses a
+   *  half-written message. Attachments are not kept — their staged files do
+   *  not survive the restart. */
+  draft?: string
   /** Running cost of the conversation in yuan (see AppSnapshot.conversationSpentYuan). */
   spentYuan?: number
   /** When the conversation last saw real message activity. Listing order and
@@ -58,6 +65,8 @@ export interface ConversationPatch {
   pendingMessages?: PendingMessage[]
   sdkSessionId?: string | null
   goal?: AgentGoal | null
+  planMode?: boolean
+  draft?: string
   compactionSummary?: string | null
   spentYuan?: number
 }
@@ -753,6 +762,8 @@ export class ConversationStore {
       if (changes.pendingMessages !== undefined) record.pendingMessages = changes.pendingMessages
       if (changes.sdkSessionId !== undefined) record.sdkSessionId = changes.sdkSessionId
       if (changes.goal !== undefined) record.goal = changes.goal
+      if (changes.planMode !== undefined) record.planMode = changes.planMode
+      if (changes.draft !== undefined) record.draft = changes.draft
       if (changes.compactionSummary === null) delete record.compactionSummary
       else if (changes.compactionSummary !== undefined) record.compactionSummary = changes.compactionSummary
       if (changes.spentYuan !== undefined) record.spentYuan = changes.spentYuan

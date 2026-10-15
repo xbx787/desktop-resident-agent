@@ -330,10 +330,12 @@ function createBalanceWindow(): BrowserWindow {
 function createSettingsWindow(): BrowserWindow {
   const win = new BrowserWindow({
     title: '小鲸 设置',
-    width: 520,
-    height: 400,
-    minWidth: 440,
-    minHeight: 340,
+    // 标题栏画在页面里（.settings-header），窗口不带系统边框。
+    frame: false,
+    width: 760,
+    height: 560,
+    minWidth: 560,
+    minHeight: 420,
     show: false,
     backgroundColor: '#172d58',
     autoHideMenuBar: true,
@@ -581,6 +583,10 @@ function registerIpc(): void {
     if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
     return app.getVersion()
   })
+  ipcMain.handle('pet:settings:close', (event) => {
+    if (!settingsTrusted(event)) return
+    settingsWindow?.close()
+  })
   ipcMain.handle('pet:memory:list', (event) => {
     if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
     return memory.list()
@@ -811,6 +817,19 @@ function registerIpc(): void {
     if (typeof approved !== 'boolean') throw new Error('批准结果无效。')
     if (conversationId !== undefined && typeof conversationId !== 'string') throw new Error('会话编号无效。')
     return activeController().answerPlan(id, approved, conversationId as string | undefined)
+  })
+  ipcMain.handle('pet:save-draft', (event, conversationId: unknown, text: unknown) => {
+    if (!trusted(event) || typeof conversationId !== 'string' || typeof text !== 'string') throw new Error('草稿保存请求无效。')
+    return activeController().saveDraft(conversationId, text)
+  })
+  ipcMain.handle('pet:get-draft', (event, conversationId: unknown) => {
+    if (!trusted(event) || typeof conversationId !== 'string') throw new Error('会话编号无效。')
+    return activeController().getDraft(conversationId)
+  })
+  ipcMain.handle('pet:clear-goal', (event, conversationId: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (conversationId !== undefined && typeof conversationId !== 'string') throw new Error('会话编号无效。')
+    return activeController().clearGoal(conversationId as string | undefined)
   })
   ipcMain.handle('pet:stop', (event, conversationId: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')

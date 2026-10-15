@@ -16,6 +16,10 @@ import {
 
 export type SendStrategy = 'queue' | 'steer'
 
+/** A draft longer than one message could ever be is capped instead of rejected
+ *  — the panel saves on a debounce and must never fail loudly mid-typing. */
+const MAX_DRAFT_CHARS = 8_000
+
 export interface CompletedTurn {
   conversationId: string
   userText: string
@@ -75,6 +79,8 @@ export class ConversationController {
   private readonly pausedQueues = new Map<string, string>()
   /** A displayed conversation without a runtime is served from this record. */
   private displayedRecord: ConversationRecord | null = null
+  /** The last goal key written per conversation (see persistGoalChange). */
+  private readonly writtenGoals = new Map<string, string>()
   private operations: Promise<void> = Promise.resolve()
   /** Last seen readiness flags — a cold snapshot still has to answer them. */
   private readiness = { modelReady: false, claudeCodeReady: false }
@@ -231,8 +237,25 @@ export class ConversationController {
     for (const [id, runtime] of this.runtimes) {
       const reason = runtime.getQueuePauseReason()
       if (reason) this.pausedQueues.set(id, reason)
+      this.persistGoalChange(id, runtime)
     }
     this.emit()
+  }
+
+  /** A goal is durable state, not turn state. Writing it only when a turn ends
+   *  loses it whenever the window closes while the loop is mid-run — so every
+   *  change goes to disk right away. The change check is a string compare
+   *  against what was last written, because this runs on every runtime tick. */
+  private persistGoalChange(id: string, runtime: AgentRuntime): void {
+    const goal = runtime.getGoal()
+    const key = goal ? `${goal.condition}\u0000${goal.phase}\u0000${goal.iterations ?? ''}` : ''
+    if (this.writtenGoals.get(id) === key) return
+    this.writtenGoals.set(id, key)
+    void this.serialize(async () => {
+      const record = await this.store.getConversation(id)
+      if (!record || record.archivedAt !== null) return
+      await this.store.updateConversation(id, { goal })
+    }).catch((error: unknown) => this.onBackgroundError(error))
   }
 
   private emit(): void {
@@ -509,6 +532,44 @@ export class ConversationController {
     if (runtime) await runtime.interruptTurn()
   }
 
+  /** Ends a running goal. The CLI only clears one through its own /goal clear
+   *  command, and that command has to travel as a turn of its own: steered
+   *  into the running turn it arrived as plain conversation, the CLI never
+   *  executed it, and the goal stayed — the panel's stop button looked dead.
+   *  So the loop's current turn is interrupted first (queue and pause state
+   *  untouched), then the command is queued behind it; the drain already
+   *  waiting on that turn sends it the moment the turn winds down. */
+  async clearGoal(conversationId?: string): Promise<void> {
+    await this.initialize()
+    const id = conversationId ?? this.activeId
+    if (!id) return
+    const runtime = this.runtimes.get(id)
+    if (!runtime || runtime.getSnapshot().mode !== 'claude_code') return
+    if (runtime.isRunning()) await runtime.interruptTurn()
+    await this.sendMessage('/goal clear', [], 'queue', id)
+  }
+
+  /** The composer text as typed, kept per conversation so closing the window
+   *  never loses a half-written message. The panel saves on a debounce; the
+   *  write publishes nothing — the draft is renderer state and the list
+   *  summaries do not carry it. */
+  async saveDraft(id: string, text: string): Promise<void> {
+    await this.initialize()
+    if (typeof text !== 'string') throw new ConversationStoreError('INVALID_INPUT', '草稿格式无效。')
+    return this.serialize(async () => {
+      const record = await this.store.getConversation(id)
+      if (!record || record.archivedAt !== null) return
+      if ((record.draft ?? '') === text) return
+      await this.store.updateConversation(id, { draft: text.slice(0, MAX_DRAFT_CHARS) })
+    })
+  }
+
+  async getDraft(id: string): Promise<string> {
+    await this.initialize()
+    const record = await this.store.getConversation(id)
+    return record?.draft ?? ''
+  }
+
   async stop(conversationId?: string): Promise<void> {
     await this.initialize()
     const id = conversationId ?? this.activeId
@@ -721,6 +782,7 @@ export class ConversationController {
     this.drains.delete(id)
     this.drainGenerations.delete(id)
     this.pausedQueues.delete(id)
+    this.writtenGoals.delete(id)
     if (this.displayedRecord?.id === id) this.displayedRecord = null
   }
 
@@ -784,6 +846,9 @@ export class ConversationController {
     await this.serialize(async () => {
       const runtime = await this.ensureRuntime(id)
       await runtime.setPlanMode(on)
+      // The switch itself is state worth keeping: closing the window right
+      // after flipping it must not lose it.
+      await this.persistConversation(id)
     })
   }
 

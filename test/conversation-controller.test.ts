@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AgentRuntime } from '../src/main/agent-runtime'
 import { ConversationController } from '../src/main/conversation-controller'
 import { ConversationStore } from '../src/main/conversation-store'
@@ -942,6 +942,83 @@ describe('parallel conversations', () => {
     calls.find((call) => call.text === 'B1')!.resolve({ text: 'B1 答复' })
     await until(() => controller.getSnapshot().conversationLibrary.conversations
       .find((item) => item.id === b.id)?.taskStatus === 'done', 'B done')
+  })
+
+  it('ends a goal by interrupting the loop and sending /goal clear as its own turn', async () => {
+    const calls: Array<{ text: string; resolve: (reply: ModelReply) => void }> = []
+    const interrupted = vi.fn()
+    const model: ModelClient & { interrupt: () => Promise<void> } = {
+      respond: (history) => new Promise((resolve) => {
+        const last = history[history.length - 1]
+        calls.push({ text: typeof last.content === 'string' ? last.content : '', resolve })
+      }),
+      interrupt: async () => { interrupted() }
+    }
+    const store = new ConversationStore(testRoot)
+    const controller = new ConversationController(store,
+      (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model))
+    await controller.initialize()
+
+    await controller.sendMessage('/goal 完成测试')
+    await until(() => controller.getSnapshot().goal?.condition === '完成测试', '目标被记录')
+    await until(() => controller.displayedRuntime()!.isRunning(), '目标回合运行中')
+
+    await controller.clearGoal()
+    // The loop's turn is interrupted first; the command itself never travels
+    // as steered conversation, and it waits behind the running turn.
+    expect(interrupted).toHaveBeenCalled()
+    expect(controller.getSnapshot().timeline.some((entry) => entry.kind === 'user' && entry.text === '/goal clear')).toBe(false)
+
+    // Once the turn winds down the queued command runs as its own turn — that
+    // is the shape the CLI executes as a command instead of plain text.
+    calls[0]!.resolve({ text: '目标回合答复' })
+    await until(() => calls.some((call) => call.text.includes('/goal clear')), '清目标命令作为新回合发出')
+    expect(controller.getSnapshot().goal?.phase).toBe('stopping')
+  })
+
+  it('writes a goal to disk as soon as it appears, before its turn ends', async () => {
+    let finish!: (reply: ModelReply) => void
+    const model: ModelClient = { respond: () => new Promise((resolve) => { finish = resolve }) }
+    const store = new ConversationStore(testRoot)
+    const controller = new ConversationController(store,
+      (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model))
+    await controller.initialize()
+    const id = controller.getSnapshot().conversationLibrary.activeConversationId!
+
+    await controller.sendMessage('/goal 立刻落盘')
+    await until(() => controller.displayedRuntime()!.getGoal()?.condition === '立刻落盘', '目标被记录')
+    // The turn is still hanging (respond never resolved): the goal must already
+    // be on disk — closing the window mid-loop would otherwise lose it.
+    expect(controller.displayedRuntime()!.isRunning()).toBe(true)
+    let stored: string | undefined
+    const deadline = Date.now() + 5_000
+    while (stored !== '立刻落盘' && Date.now() < deadline) {
+      stored = (await store.getConversation(id))?.goal?.condition
+      if (stored !== '立刻落盘') await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    expect(stored).toBe('立刻落盘')
+    finish({ text: '答复' })
+  })
+
+  it('keeps the composer draft on disk so a restart never loses it', async () => {
+    const store = new ConversationStore(testRoot)
+    const controller = new ConversationController(store,
+      (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))
+    await controller.initialize()
+    const id = controller.getSnapshot().conversationLibrary.activeConversationId!
+
+    await controller.saveDraft(id, '写到一半的话')
+    expect(await controller.getDraft(id)).toBe('写到一半的话')
+
+    // A fresh controller (the restart) reads the same text back.
+    const revived = new ConversationController(new ConversationStore(testRoot),
+      (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))
+    await revived.initialize()
+    expect(await revived.getDraft(id)).toBe('写到一半的话')
+
+    // Sending clears it — the empty draft is a real value, not a missing one.
+    await revived.saveDraft(id, '')
+    expect(await revived.getDraft(id)).toBe('')
   })
 
   it('still refuses to delete a conversation while it is running', async () => {

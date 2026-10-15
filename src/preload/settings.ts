@@ -12,6 +12,8 @@ export interface SettingsAPI {
   get(): Promise<ConversationSettings>
   update(patch: Partial<ConversationSettings>): Promise<ConversationSettings>
   version(): Promise<string>
+  /** 设置窗口没有系统边框，标题栏画在页面里——这是它唯一的关闭通道。 */
+  close(): Promise<void>
   /** Stores an avatar image (PNG/JPEG bytes) for `user` or `assistant`. */
   setAvatar(kind: 'user' | 'assistant', bytes: number[]): Promise<void>
   /** Data URL of the stored avatar, or null when none is set. */
@@ -53,7 +55,8 @@ const api: SettingsAPI = {
   growthAdopt: (id) => ipcRenderer.invoke('pet:growth:adopt', id),
   growthPublish: (id) => ipcRenderer.invoke('pet:growth:publish', id),
   growthDiscard: (id) => ipcRenderer.invoke('pet:growth:discard', id),
-  growthUpdateNotes: (id, notes) => ipcRenderer.invoke('pet:growth:update-notes', id, notes)
+  growthUpdateNotes: (id, notes) => ipcRenderer.invoke('pet:growth:update-notes', id, notes),
+  close: () => ipcRenderer.invoke('pet:settings:close')
 }
 
 contextBridge.exposeInMainWorld('whaleSettings', api)

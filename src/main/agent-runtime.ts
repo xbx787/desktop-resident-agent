@@ -159,6 +159,10 @@ export class AgentRuntime {
     this.checkGoalBudget()
   }
 
+  /** The goal alone, without cloning a snapshot — the controller checks it on
+   *  every change tick and a full clone is far too heavy for that. */
+  getGoal(): AgentGoal | null { return this.state.goal ?? null }
+
   getQueuePauseReason(): string | null { return this.queuePauseReason }
 
   resumeQueue(): void { this.queuePauseReason = null }
@@ -346,19 +350,29 @@ export class AgentRuntime {
     // the best context source — even when the last stored turn is an unanswered
     // user message (that turn simply continues inside the resumed session).
     this.sdkSessionId = mode === 'claude_code' ? record.sdkSessionId : null
+    // Plan mode survives the restart: the client records the preference and
+    // builds the next query with it; the CLI re-reports the real state on init.
+    this.state.planMode = record.planMode ?? false
+    if (mode === 'claude_code' && this.state.planMode) {
+      void Promise.resolve(this.claudeCodeModel?.setPlanMode?.(true)).catch(() => undefined)
+    }
 
     if (mode !== 'claude_code') this.state.goal = null
     else this.armGoalTimer()
     this.emit()
   }
 
-  exportConversationState(): Pick<ConversationRecord, 'mode' | 'timeline' | 'history' | 'sdkSessionId' | 'spentYuan'> {
+  exportConversationState(): Pick<ConversationRecord, 'mode' | 'timeline' | 'history' | 'sdkSessionId' | 'spentYuan' | 'goal' | 'planMode'> {
     return {
       mode: this.state.mode,
       timeline: structuredClone(this.state.timeline),
       history: structuredClone(this.history),
       sdkSessionId: this.sdkSessionId,
-      spentYuan: this.state.conversationSpentYuan
+      spentYuan: this.state.conversationSpentYuan,
+      // Both survive a restart: the goal comes back as "unverified" until the
+      // CLI re-confirms it, and plan mode is what the next query is built with.
+      goal: this.state.goal,
+      planMode: this.state.planMode
     }
   }
 

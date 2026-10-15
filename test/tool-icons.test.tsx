@@ -31,7 +31,9 @@ describe('ToolIcon', () => {
   it('draws different shapes per family and ignores letter case', () => {
     const bash = renderToStaticMarkup(<ToolIcon name="Bash" />)
     expect(bash).toContain('panel-tool-icon')
-    expect(bash).toContain('<rect')
+    // 执行命令是一对尖括号：两条臂，不再有终端窗口的外框。
+    expect(bash).toContain('m6.2 5.8 4.4 4.4-4.4 4.4')
+    expect(bash).not.toContain('<rect')
     expect(renderToStaticMarkup(<ToolIcon name="Read" />)).not.toBe(bash)
     expect(renderToStaticMarkup(<ToolIcon name="BASH" />)).toBe(bash)
   })

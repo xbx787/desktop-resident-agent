@@ -44,7 +44,7 @@ body.avatar-window { -webkit-user-select: none; user-select: none; }
   50% { opacity: .55; transform: scale(.85); }
 }
 @media (prefers-reduced-motion: no-preference) {
-  .avatar-task-dot.is-pulsing { animation: avatar-task-pulse 1.2s ease-in-out infinite; }
+  .avatar-task-dot.is-pulsing { opacity: calc(1 - .45 * var(--panel-pulse-p, 0)); transform: scale(calc(1 - .15 * var(--panel-pulse-p, 0))); }
 }
 /* The character renders 10% smaller than her hit region (5% inset per side)
    while the click/drag area stays full size. */
@@ -79,6 +79,10 @@ body.avatar-window { -webkit-user-select: none; user-select: none; }
 @media (prefers-reduced-motion: no-preference) {
   .avatar-portrait { transform-origin: 50% 100%; animation: whale-breath 3.6s ease-in-out infinite; }
 }
+/* 静止（一分钟没有交互）：呼吸停下、窗口不再产生新帧——dwm 也就不再为它
+   反复合成。透明窗口的成本只发生在「有新帧要合成」的时刻，所以静止的窗口
+   本来就是零成本，无需（也无法）在运行时关掉窗口的透明。 */
+body.is-resting .avatar-portrait { animation-play-state: paused; }
 
 body.balance-window .balance-peek { top: 0; left: 0; bottom: auto; }
 body.balance-window .balance-peek::after { top: calc(50% - 6.5px); right: -5px; bottom: auto; border-right: 1px solid rgba(184, 209, 255, .28); border-top: 1px solid rgba(184, 209, 255, .28); border-bottom: 0; }

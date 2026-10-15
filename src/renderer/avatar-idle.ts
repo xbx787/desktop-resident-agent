@@ -40,7 +40,7 @@ export function startIdleFidgets(el: Element | null, reduced = prefersReducedMot
   const schedule = (): void => {
     timer = window.setTimeout(() => {
       if (stopped) return
-      if (!document.hidden) {
+      if (!document.hidden && !document.body.classList.contains('is-resting')) {
         last?.cancel()
         last = target.animate(idleFidgetFrames(), idleFidgetTiming())
       }

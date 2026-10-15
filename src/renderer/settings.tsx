@@ -388,6 +388,7 @@ export function SettingsPage() {
       <span className="settings-mark" aria-hidden="true">鲸</span>
       <div><p>{settings?.assistantName ?? '小鲸'}</p><h1>设置</h1></div>
       {version && <span className="settings-version">v{version}</span>}
+      <button type="button" className="settings-close" aria-label="关闭设置" title="关闭" onClick={() => { void window.whaleSettings.close(); }}>×</button>
     </header>
     <nav className="settings-tabs" role="tablist" aria-label="设置栏目" onKeyDown={(event) => {
       if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return

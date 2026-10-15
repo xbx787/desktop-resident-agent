@@ -147,21 +147,34 @@ export function segmentTurn(items: TimelineEntry[]): TurnSegment[] {
 }
 
 /**
+ * Lifts every steered user line out of the turn's flow, in order. The panel
+ * shows them stacked at the top of the turn; the process underneath then
+ * folds whole, no matter how often it was interrupted — a fold that stopped
+ * at the message left everything after it permanently open, which is exactly
+ * the chain that would not close.
+ */
+export function liftAsides(segments: TurnSegment[]): { asides: Array<Extract<TurnSegment, { kind: 'user' }>>; flow: Array<Exclude<TurnSegment, { kind: 'user' }>> } {
+  const asides: Array<Extract<TurnSegment, { kind: 'user' }>> = []
+  const flow: Array<Exclude<TurnSegment, { kind: 'user' }>> = []
+  for (const segment of segments) {
+    if (segment.kind === 'user') asides.push(segment)
+    else flow.push(segment)
+  }
+  return { asides, flow }
+}
+
+/**
  * A finished turn shows only its final answer: everything before the last
  * model sentence — work clusters and progress sentences alike — folds into
  * one row. A live turn folds nothing, its process is the view. A turn with
- * no sentence after its work keeps its clusters as they are. The fold never
- * reaches past a steered user line: that message stays visible, so an
- * interrupted turn shows everything from it on.
+ * no sentence after its work keeps its clusters as they are. Steered lines
+ * are not part of this input: they travel separately (see liftAsides).
  */
-export function splitTurnTail(segments: TurnSegment[], live: boolean): { head: TurnSegment[]; tail: TurnSegment[] } {
+export function splitTurnTail<T extends TurnSegment>(segments: T[], live: boolean): { head: T[]; tail: T[] } {
   if (live) return { head: [], tail: segments }
   let lastNote = -1
   for (let index = segments.length - 1; index >= 0; index -= 1) {
     if (segments[index].kind === 'note') { lastNote = index; break }
   }
-  let cut = lastNote
-  const firstUser = segments.findIndex((segment) => segment.kind === 'user')
-  if (firstUser >= 0) cut = cut < 0 ? firstUser : Math.min(cut, firstUser)
-  return cut > 0 ? { head: segments.slice(0, cut), tail: segments.slice(cut) } : { head: [], tail: segments }
+  return lastNote > 0 ? { head: segments.slice(0, lastNote), tail: segments.slice(lastNote) } : { head: [], tail: segments }
 }
