@@ -4,7 +4,7 @@ import { AgentRuntime } from '../src/main/agent-runtime'
 import type { DialogueLine, ModelClient, ModelReply } from '../src/main/deepseek'
 import { NoteStore } from '../src/main/note-store'
 import { SideChatController, validateSideChatMessage } from '../src/main/side-chat'
-import type { ConversationSettings } from '../src/shared/contracts'
+import type { ConversationSettings, ConversationSummary } from '../src/shared/contracts'
 
 const settings: ConversationSettings = {
   visibleConversationTabs: 5, autoArchiveAfterDays: 0,
@@ -24,6 +24,8 @@ function harness(model: ModelClient & { steer?: (text: string) => Promise<boolea
   let parentConversationId = 'parent-a'
   const runtimes: AgentRuntime[] = []
   const persistFlags: Array<boolean | undefined> = []
+  const visibleEvents = vi.fn()
+  const statusEvents = vi.fn()
   const history: DialogueLine[] = [
     { role: 'user', content: '主线问题' }, { role: 'assistant', content: '主线答案' }
   ]
@@ -36,11 +38,13 @@ function harness(model: ModelClient & { steer?: (text: string) => Promise<boolea
       return runtime
     },
     () => ({ parentConversationId, mode: 'claude_code', settings, history }),
-    async () => '', undefined, undefined,
+    async () => '', visibleEvents, undefined,
     () => parentConversationId,
-    () => settings
+    () => settings,
+    statusEvents
   )
-  return { side, runtimes, persistFlags, history, setParent: (id: string) => { parentConversationId = id } }
+  return { side, runtimes, persistFlags, history, visibleEvents, statusEvents,
+    setParent: (id: string) => { parentConversationId = id } }
 }
 
 describe('temporary side chat', () => {
@@ -182,22 +186,130 @@ describe('temporary side chat', () => {
     await side.discard(id)
   })
 
-  it('discards on parent switch and rejects stale side operations', async () => {
+  it('keeps each parent side across A → B → A and rejects stale UI commands', async () => {
+    const { side, setParent } = harness({ respond: async () => ({ text: '完成' }) })
+    const aId = side.open().sessionId!
+    await side.send(aId, 'A 问题')
+    await vi.waitFor(() => expect(side.getSnapshot().snapshot?.taskStatus).toBe('done'))
+    const aTimeline = side.getSnapshot().snapshot?.timeline
+    setParent('parent-b')
+    expect(side.getSnapshot()).toMatchObject({ sessionId: null, parentConversationId: 'parent-b' })
+    await expect(side.send(aId, '迟到发送')).rejects.toThrow('已关闭')
+    await side.discard(aId)
+    const bId = side.open().sessionId!
+    expect(bId).not.toBe(aId)
+    setParent('parent-a')
+    expect(side.getSnapshot()).toMatchObject({ sessionId: aId, parentConversationId: 'parent-a' })
+    expect(side.getSnapshot().snapshot?.timeline).toEqual(aTimeline)
+    await side.discardAll()
+  })
+
+  it('runs A and B concurrently with isolated queues and offscreen timelines', async () => {
+    const gates = new Map<string, ReturnType<typeof deferred<ModelReply>>>()
+    const seen: string[] = []
+    const { side, setParent, visibleEvents, statusEvents } = harness({ respond: (lines) => {
+      const text = lines.at(-1)!.content
+      seen.push(text)
+      const gate = deferred<ModelReply>()
+      gates.set(text, gate)
+      return gate.promise
+    } })
+    const aId = side.open().sessionId!
+    await side.send(aId, 'A 运行')
+    await vi.waitFor(() => expect(seen).toContain('A 运行'))
+    await side.send(aId, 'A 排队')
+    setParent('parent-b')
+    const bId = side.open().sessionId!
+    await side.send(bId, 'B 运行')
+    await vi.waitFor(() => expect(seen).toContain('B 运行'))
+    expect(side.isBusy()).toBe(true)
+    expect(side.isBusyForParent('parent-a')).toBe(true)
+    expect(side.isBusyForParent('parent-b')).toBe(true)
+    expect(side.statusForParent('parent-a')).not.toBeNull()
+    setParent('parent-a')
+    expect(side.getSnapshot().sessionId).toBe(aId)
+    expect(side.getSnapshot().pendingMessages.map(({ text }) => text)).toEqual(['A 排队'])
+    const visibleBeforeBReply = visibleEvents.mock.calls.length
+    const statusBeforeBReply = statusEvents.mock.calls.length
+    gates.get('B 运行')!.resolve({ text: 'B 答案' })
+    await vi.waitFor(() => expect(side.isBusyForParent('parent-b')).toBe(false))
+    expect(visibleEvents.mock.calls.length).toBe(visibleBeforeBReply)
+    expect(statusEvents.mock.calls.length).toBeGreaterThan(statusBeforeBReply)
+    expect(side.getSnapshot().snapshot?.timeline.some(({ text }) => text === 'B 答案')).toBe(false)
+    gates.get('A 运行')!.resolve({ text: 'A 答案' })
+    await vi.waitFor(() => expect(seen).toContain('A 排队'))
+    gates.get('A 排队')!.resolve({ text: 'A 排队答案' })
+    await vi.waitFor(() => expect(side.isBusy()).toBe(false))
+    expect(side.getSnapshot().snapshot?.timeline.map(({ text }) => text)).toEqual(['A 运行', 'A 答案', 'A 排队', 'A 排队答案'])
+    setParent('parent-b')
+    expect(side.getSnapshot().sessionId).toBe(bId)
+    expect(side.getSnapshot().snapshot?.timeline.map(({ text }) => text)).toEqual(['B 运行', 'B 答案'])
+    await side.discardAll()
+  })
+
+  it('releases a removed parent while preserving the other side', async () => {
     const reply = deferred<ModelReply>()
     const { side, setParent } = harness({ respond: () => reply.promise })
-    const oldId = side.open().sessionId!
-    await side.send(oldId, '旧侧聊')
-    await vi.waitFor(() => expect(side.getSnapshot().snapshot?.taskStatus).toBe('planning'))
+    side.open()
     setParent('parent-b')
-    expect(side.getSnapshot().sessionId).toBeNull()
-    await side.discard(oldId)
-    const newId = side.open().sessionId!
-    expect(newId).not.toBe(oldId)
-    await side.discard(oldId)
-    expect(side.getSnapshot().sessionId).toBe(newId)
-    await expect(side.send(oldId, '迟到发送')).rejects.toThrow('已关闭')
-    reply.resolve({ text: '旧侧聊迟到回复' })
-    expect(side.getSnapshot().snapshot?.timeline).toEqual([])
-    await side.discard(newId)
+    const bId = side.open().sessionId!
+    await side.send(bId, 'B 运行')
+    await vi.waitFor(() => expect(side.isBusyForParent('parent-b')).toBe(true))
+    setParent('parent-a')
+    await side.discardParent('parent-b')
+    expect(side.isBusyForParent('parent-b')).toBe(false)
+    expect(side.getSnapshot().sessionId).not.toBeNull()
+    setParent('parent-b')
+    expect(side.getSnapshot()).toMatchObject({ sessionId: null, parentConversationId: 'parent-b' })
+    await expect(side.send(bId, '迟到消息')).rejects.toThrow('已关闭')
+    reply.resolve({ text: 'B 迟到回复' })
+    await side.discardAll()
+  })
+
+  it('releases all sides on global configuration change or quit and preserves the empty parent id', async () => {
+    const { side, setParent } = harness({ respond: async () => ({ text: '完成' }) })
+    expect(side.getSnapshot()).toMatchObject({ sessionId: null, parentConversationId: 'parent-a' })
+    const first = side.open().sessionId!
+    setParent('parent-b')
+    const second = side.open().sessionId!
+    await side.discardAll()
+    expect(side.getSnapshot()).toMatchObject({ sessionId: null, parentConversationId: 'parent-b' })
+    setParent('parent-a')
+    expect(side.getSnapshot()).toMatchObject({ sessionId: null, parentConversationId: 'parent-a' })
+    expect(side.open().sessionId).not.toBe(first)
+    setParent('parent-b')
+    expect(side.open().sessionId).not.toBe(second)
+    await side.discardAll()
+  })
+
+  it('prunes an idle child after its parent disappears from the library', async () => {
+    const { side, setParent } = harness({ respond: async () => ({ text: '完成' }) })
+    const aId = side.open().sessionId!
+    setParent('parent-b')
+    side.open()
+    side.discardMissingParents(new Set(['parent-a']))
+    expect(side.getSnapshot()).toMatchObject({ sessionId: null, parentConversationId: 'parent-b' })
+    setParent('parent-a')
+    expect(side.getSnapshot().sessionId).toBe(aId)
+    await side.discardAll()
+  })
+
+  it('projects busy child status into library/search rows without masking active main work', async () => {
+    const gate = deferred<ModelReply>()
+    const { side } = harness({ respond: () => gate.promise })
+    const id = side.open().sessionId!
+    await side.send(id, '仍在侧聊')
+    await vi.waitFor(() => expect(side.isBusyForParent('parent-a')).toBe(true))
+    const summary: ConversationSummary = {
+      id: 'parent-a', title: 'A', createdAt: '', updatedAt: '', lastActivityAt: '',
+      archivedAt: null, pinnedAt: null, mode: 'claude_code', taskStatus: 'done', messageCount: 0, preview: ''
+    }
+    expect(side.withSideStatuses([summary])[0].taskStatus).toMatch(/planning|executing/)
+    expect(side.withSideStatuses([{ ...summary, taskStatus: 'awaiting_approval' }])[0].taskStatus).toBe('awaiting_approval')
+    expect(side.withSideStatuses([{ ...summary, id: 'parent-b' }])[0].taskStatus).toBe('done')
+    gate.resolve({ text: '结束' })
+    await vi.waitFor(() => expect(side.isBusyForParent('parent-a')).toBe(false))
+    expect(side.withSideStatuses([summary])[0].taskStatus).toBe('done')
+    await side.discardAll()
   })
 })

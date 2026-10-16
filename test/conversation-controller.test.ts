@@ -68,6 +68,75 @@ describe('conversation controller', () => {
     expect(controller.displayedConversationEpoch()).toBeGreaterThan(epoch)
   })
 
+  it('notifies a tab switch only after its library and displayed record are ready', async () => {
+    const store = new ConversationStore(testRoot)
+    const first = await store.createConversation('A', 'demo')
+    const second = await store.createConversation('B', 'demo')
+    await store.setActiveConversation(first.id)
+    const controller = new ConversationController(store,
+      (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))
+    await controller.initialize()
+    const observed: Array<{ id: string | null; active: string | null; shown: string | null }> = []
+    controller.setDisplayChangeListener((id) => {
+      const snapshot = controller.getSnapshot()
+      observed.push({ id, active: snapshot.conversationLibrary.activeConversationId,
+        shown: activeSideChatParentId(controller.displayedConversationId(), snapshot.conversationLibrary) })
+    })
+    await controller.selectConversation(second.id)
+    expect(observed.at(-1)).toEqual({ id: second.id, active: second.id, shown: second.id })
+    await controller.archiveConversation(second.id)
+    expect(observed.at(-1)).toEqual({ id: first.id, active: first.id, shown: first.id })
+    await controller.archiveConversation(first.id)
+    expect(observed.at(-1)).toEqual({ id: null, active: null, shown: null })
+  })
+
+  it('blocks single and bulk removal of a busy child and only targets its owner on model change', async () => {
+    const store = new ConversationStore(testRoot)
+    const a = await store.createConversation('A', 'demo')
+    const b = await store.createConversation('B', 'demo')
+    await store.setActiveConversation(a.id)
+    const controller = new ConversationController(store,
+      (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))
+    await controller.initialize()
+    const busy = new Set([b.id])
+    controller.setSideBusyPredicate((id) => busy.has(id))
+    await expect(controller.archiveConversation(b.id)).rejects.toThrow('仍有任务')
+    await expect(controller.deleteConversation(b.id)).rejects.toThrow('仍有任务')
+    expect((await controller.batchManageConversations('archive', [b.id])).outcomes).toEqual([
+      { id: b.id, status: 'skipped', reason: 'busy' }
+    ])
+    expect((await controller.batchManageConversations('delete', [b.id])).outcomes).toEqual([
+      { id: b.id, status: 'skipped', reason: 'busy' }
+    ])
+    const configChanges: Array<string | undefined> = []
+    controller.setRuntimeConfigurationChangeListener((id) => { configChanges.push(id) })
+    await controller.setModelMode('demo', b.id)
+    expect(configChanges).toEqual([b.id])
+    await controller.updateSettings({ effort: 'high' })
+    expect(configChanges).toEqual([b.id, undefined])
+    busy.clear()
+    await controller.archiveConversation(b.id)
+    expect((await store.getConversation(b.id))?.archivedAt).not.toBeNull()
+  })
+
+  it('defers auto-archive while any side child is busy', async () => {
+    const store = new ConversationStore(testRoot)
+    const a = await store.createConversation('A', 'demo')
+    const b = await store.createConversation('B', 'demo')
+    await store.setActiveConversation(a.id)
+    const controller = new ConversationController(store,
+      (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))
+    await controller.initialize()
+    const busy = new Set([b.id])
+    controller.setSideBusyPredicate((id) => busy.has(id))
+    await controller.updateSettings({ autoArchiveAfterDays: 7 })
+    await controller.archiveInactiveConversations(new Date('2100-01-01T00:00:00.000Z'))
+    expect((await store.getConversation(b.id))?.archivedAt).toBeNull()
+    busy.clear()
+    await controller.archiveInactiveConversations(new Date('2100-01-01T00:00:00.000Z'))
+    expect((await store.getConversation(b.id))?.archivedAt).not.toBeNull()
+  })
+
   it('seeds side chat only with committed, visible and nonsensitive turns', async () => {
     const store = new ConversationStore(testRoot)
     const record = await store.createConversation('主线', 'demo')

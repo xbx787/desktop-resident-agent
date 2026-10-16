@@ -150,11 +150,18 @@ const growth = new GrowthExperiments({
  *  travel (see AgentRuntime.takeTimelineDelta). */
 const FULL_TIMELINE_EVERY = 64
 let publishesSinceFullTimeline = FULL_TIMELINE_EVERY
+let lastPublishedSideParent: string | null | undefined
+
+function snapshotWithSideStatuses() {
+  const snapshot = publicSnapshot(activeController().getSnapshot())
+  snapshot.conversationLibrary.conversations = sideChat.withSideStatuses(snapshot.conversationLibrary.conversations)
+  return snapshot
+}
 
 function flushSnapshot(): void {
   if (!avatarWindow || avatarWindow.isDestroyed()) return
   if (!controller) return
-  const snapshot = publicSnapshot(controller.getSnapshot())
+  const snapshot = snapshotWithSideStatuses()
   if (rendererAvatarState) snapshot.avatarState = rendererAvatarState
   // The delta belongs to the displayed conversation's runtime; a cold
   // conversation (no runtime) is a full send by construction.
@@ -167,6 +174,14 @@ function flushSnapshot(): void {
   }
   publishesSinceFullTimeline = full ? FULL_TIMELINE_EVERY : publishesSinceFullTimeline - 1
   avatarWindow.webContents.send('pet:snapshot', snapshot)
+  // A tab switch changes the child that belongs on screen. Send its full
+  // snapshot after the main one so a renderer with stale tab state can still
+  // recover even if side and main events were otherwise reordered.
+  const parentId = activeSideChatParentId(controller.displayedConversationId(), snapshot.conversationLibrary)
+  if (lastPublishedSideParent !== parentId) {
+    lastPublishedSideParent = parentId
+    avatarWindow.webContents.send('pet:side-snapshot', sideChat.takePublishSnapshot())
+  }
 }
 
 // A streaming turn changes state once per model delta. Forwarding every delta makes the
@@ -177,7 +192,13 @@ function flushSnapshot(): void {
 // redraw plus a full-window composite twice over (GPU process + dwm) — the panel's
 // measured ~16% at 20 Hz scales with the commit rate.
 const snapshotScheduler = createSnapshotScheduler(flushSnapshot, 80)
+let reconcilingSideParents = false
 function publishSnapshot(): void {
+  if (controller && !reconcilingSideParents) {
+    reconcilingSideParents = true
+    try { sideChat.discardMissingParents(controller.liveConversationIds()) }
+    finally { reconcilingSideParents = false }
+  }
   snapshotScheduler.publish()
 }
 
@@ -242,14 +263,19 @@ const sideChat = new SideChatController(
   () => memory.contextBlock(),
   () => sideSnapshotScheduler.publish(),
   (error) => console.error('Temporary side chat failed:', error),
-  () => {
-    const owner = activeController()
-    return activeSideChatParentId(owner.displayedConversationId(), owner.getSnapshot().conversationLibrary)
-  },
-  () => activeController().currentSettings()
+  () => activeController().displayedLiveConversationId(),
+  () => activeController().currentSettings(),
+  () => publishSnapshot()
 )
-controller.setDisplayChangeListener(() => { void sideChat.discard() })
-controller.setRuntimeConfigurationChangeListener(() => { void sideChat.discard() })
+controller.setSideBusyPredicate((id) => sideChat.isBusyForParent(id))
+controller.setRuntimeConfigurationChangeListener((id) => {
+  if (id) void sideChat.discardParent(id)
+  else void sideChat.discardAll()
+})
+
+function discardSidesWithoutLiveParents(): void {
+  sideChat.discardMissingParents(activeController().liveConversationIds())
+}
 
 function activeController(): ConversationController {
   if (!controller) throw new Error('会话库尚未就绪。')
@@ -612,6 +638,7 @@ function registerIpc(): void {
     if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
     return activeController().updateSettings(conversationSettingsPatch(patch)).then((settings) => {
       memory.setEnabled(settings.memoryEnabled)
+      discardSidesWithoutLiveParents()
       return publicSettings(settings)
     })
   })
@@ -690,7 +717,7 @@ function registerIpc(): void {
   })
   ipcMain.handle('pet:get-snapshot', (event) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
-    return publicSnapshot(activeController().getSnapshot())
+    return snapshotWithSideStatuses()
   })
   ipcMain.handle('pet:side:get', (event) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
@@ -826,6 +853,7 @@ function registerIpc(): void {
   ipcMain.handle('pet:archive-conversation', async (event, id: unknown) => {
     if (!trusted(event) || typeof id !== 'string') throw new Error('会话编号无效。')
     await activeController().archiveConversation(id)
+    await sideChat.discardParent(id)
   })
   ipcMain.handle('pet:restore-conversation', async (event, id: unknown) => {
     if (!trusted(event) || typeof id !== 'string') throw new Error('会话编号无效。')
@@ -834,8 +862,9 @@ function registerIpc(): void {
   ipcMain.handle('pet:delete-conversation', async (event, id: unknown) => {
     if (!trusted(event) || typeof id !== 'string') throw new Error('会话编号无效。')
     await activeController().deleteConversation(id)
+    await sideChat.discardParent(id)
   })
-  ipcMain.handle('pet:batch-manage-conversations', (event, action: unknown, ids: unknown) => {
+  ipcMain.handle('pet:batch-manage-conversations', async (event, action: unknown, ids: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     if ((action !== 'archive' && action !== 'restore' && action !== 'delete' &&
          action !== 'pin' && action !== 'unpin') ||
@@ -843,7 +872,12 @@ function registerIpc(): void {
         ids.some((id) => typeof id !== 'string' || !id.trim() || id.length > 128)) {
       throw new Error('批量会话请求无效。')
     }
-    return activeController().batchManageConversations(action, ids as string[])
+    const result = await activeController().batchManageConversations(action, ids as string[])
+    if (action === 'archive' || action === 'delete') {
+      await Promise.all(result.outcomes.filter((item) => item.status === 'updated')
+        .map((item) => sideChat.discardParent(item.id)))
+    }
+    return result
   })
   ipcMain.handle('pet:delete-turn', async (event, conversationId: unknown, userEntryId: unknown) => {
     if (!trusted(event) || typeof conversationId !== 'string' || typeof userEntryId !== 'string') throw new Error('删除请求无效。')
@@ -889,10 +923,11 @@ function registerIpc(): void {
     if (!trusted(event) || typeof query !== 'string' || query.length > 120) throw new Error('文件搜索条件无效。')
     return searchWorkspaceFiles(agentWorkspace, query)
   })
-  ipcMain.handle('pet:search-conversations', (event, query: unknown, archived: unknown) => {
+  ipcMain.handle('pet:search-conversations', async (event, query: unknown, archived: unknown) => {
     if (!trusted(event) || typeof query !== 'string' || query.length > 200 ||
         (archived !== undefined && typeof archived !== 'boolean')) throw new Error('搜索条件无效。')
-    return activeController().listConversations({ query, archived: archived as boolean | undefined })
+    const matches = await activeController().listConversations({ query, archived: archived as boolean | undefined })
+    return sideChat.withSideStatuses(matches)
   })
   ipcMain.handle('pet:remove-queued-message', async (event, id: unknown) => {
     if (!trusted(event) || typeof id !== 'string') throw new Error('队列编号无效。')
@@ -1254,7 +1289,7 @@ if (ownsSingleInstance) void app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   controller?.stopAll()
-  void sideChat.discard()
+  void sideChat.discardAll()
   if (balanceWindow && !balanceWindow.isDestroyed()) balanceWindow.destroy()
   balanceWindow = undefined
   tray?.destroy()

@@ -32,12 +32,31 @@ const sideRuntime: AppSnapshot = {
   timeline: [{ id: 'side-entry', kind: 'assistant', time: '2026-10-15T10:01:00.000Z', text: '侧聊里的内容' }]
 }
 
-const emptySide = (): SideChatSnapshot => ({ sessionId: null, parentConversationId: null,
+const emptySide = (parentConversationId = 'main-a'): SideChatSnapshot => ({ sessionId: null, parentConversationId,
   expanded: false, queuePaused: false, snapshot: null, pendingMessages: [] })
 const side = (expanded = true, runtime = sideRuntime): SideChatSnapshot => ({
   sessionId: 'side-1', parentConversationId: 'main-a', expanded, queuePaused: false,
   snapshot: runtime, pendingMessages: []
 })
+
+const sideB = (expanded = true): SideChatSnapshot => ({
+  sessionId: 'side-b', parentConversationId: 'main-b', expanded, queuePaused: false,
+  snapshot: { ...sideRuntime, conversationId: 'side-b',
+    timeline: [{ id: 'side-b-entry', kind: 'assistant', time: '2026-10-15T10:04:00.000Z', text: 'B 侧聊里的内容' }] },
+  pendingMessages: []
+})
+
+function selectedMain(id: 'main-a' | 'main-b'): AppSnapshot {
+  const first = mainSnapshot.conversationLibrary!.conversations[0]
+  const second = { ...first, id: 'main-b', title: 'B 主线', preview: 'B 的对话' }
+  return {
+    ...mainSnapshot, conversationId: id, timelineRevision: id === 'main-a' ? 1 : 2,
+    timeline: id === 'main-a' ? mainSnapshot.timeline
+      : [{ id: 'main-b-entry', kind: 'assistant', time: '2026-10-15T10:03:00.000Z', text: 'B 主线里的内容' }],
+    conversationLibrary: { ...mainSnapshot.conversationLibrary!, activeConversationId: id,
+      conversations: [first, second] }
+  }
+}
 
 function switchedMain(action: 'archive' | 'delete'): AppSnapshot {
   const first = mainSnapshot.conversationLibrary!.conversations[0]
@@ -163,6 +182,10 @@ describe('temporary side chat stays in the same panel', () => {
     return input!
   }
 
+  async function publishSide(next: SideChatSnapshot): Promise<void> {
+    await act(async () => { for (const listener of sideListeners) listener(next) })
+  }
+
   it('opens /side without adding a main message and routes later sends to the side runtime', async () => {
     await mount()
     const input = await editor()
@@ -190,6 +213,119 @@ describe('temporary side chat stays in the same panel', () => {
     await act(async () => click(host.querySelector('button[aria-label^="展开临时侧聊"]')!))
     expect(input.value).toBe('侧聊草稿')
     expect(saveDraft.mock.calls.every(([_, value]) => value !== '侧聊草稿')).toBe(true)
+  })
+
+  it.each(['side-first', 'main-first'] as const)(
+    'restores each parent side draft, attachment, and composer state across A -> B -> A when %s', async (order) => {
+      await mount(selectedMain('main-a'))
+      await editor()
+      await publishSide(side())
+      await act(async () => { type((await editor()), 'A 侧聊未发出的内容'); drop(host, 'A-note.docx') })
+      await act(async () => click(host.querySelector('button[aria-label="收起输入框"]')!))
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 250)) })
+      expect(host.querySelector('textarea[aria-label="输入消息"]')).toBeNull()
+
+      if (order === 'side-first') {
+        await publishSide(sideB())
+        expect(host.textContent).toContain('侧聊里的内容')
+        await mount(selectedMain('main-b'))
+      } else {
+        await mount(selectedMain('main-b'))
+        expect(host.textContent).toContain('B 主线里的内容')
+        await publishSide(sideB())
+      }
+      expect(host.textContent).toContain('B 侧聊里的内容')
+      expect((await editor()).value).toBe('')
+      await act(async () => { type((await editor()), 'B 侧聊未发出的内容'); drop(host, 'B-note.pdf') })
+
+      if (order === 'side-first') {
+        await publishSide(side())
+        expect((await editor()).value).toBe('B 侧聊未发出的内容')
+        await mount(selectedMain('main-a'))
+      } else {
+        await mount(selectedMain('main-a'))
+        await publishSide(side())
+      }
+      expect(host.textContent).toContain('侧聊里的内容')
+      expect(host.textContent).not.toContain('B 侧聊里的内容')
+      expect(host.querySelector('textarea[aria-label="输入消息"]')).toBeNull()
+      const aInput = await editor()
+      expect(aInput.value).toBe('A 侧聊未发出的内容')
+      expect(host.querySelector('[aria-label="已添加附件"]')?.textContent).toContain('A-note')
+      expect(host.querySelector('[aria-label="已添加附件"]')?.textContent).not.toContain('B-note')
+
+      await mount(selectedMain('main-b'))
+      expect((await editor()).value).toBe('B 侧聊未发出的内容')
+      expect(host.querySelector('[aria-label="已添加附件"]')?.textContent).toContain('B-note')
+      expect(host.querySelector('[aria-label="已添加附件"]')?.textContent).not.toContain('A-note')
+      expect(saveDraft.mock.calls.every(([_, value]) => !value.includes('侧聊未发出的内容'))).toBe(true)
+    }
+  )
+
+  it.each(['side-first', 'main-first'] as const)(
+    'keeps A folded side when B has no side and %s event arrives first', async (order) => {
+      await mount(selectedMain('main-a'))
+      await editor()
+      await publishSide(side())
+      await act(async () => type((await editor()), '折叠的 A 侧聊草稿'))
+      await act(async () => click(host.querySelector('button[aria-label="收起侧聊，返回主线"]')!))
+      expect(host.querySelector('button[aria-label^="展开临时侧聊"]')).not.toBeNull()
+      if (order === 'side-first') {
+        await publishSide(emptySide('main-b'))
+        expect(host.querySelector('button[aria-label^="展开临时侧聊"]')).not.toBeNull()
+        await mount(selectedMain('main-b'))
+      } else {
+        await mount(selectedMain('main-b'))
+        await publishSide(emptySide('main-b'))
+      }
+      expect(host.querySelector('[aria-label="临时侧聊"]')).toBeNull()
+      expect((await editor()).value).toBe('B 保存的草稿')
+      await mount(selectedMain('main-a'))
+      expect(host.querySelector('button[aria-label^="展开临时侧聊"]')).not.toBeNull()
+      await act(async () => click(host.querySelector('button[aria-label^="展开临时侧聊"]')!))
+      expect((await editor()).value).toBe('折叠的 A 侧聊草稿')
+    }
+  )
+
+  it('does not reuse a discarded side draft for a new side session under the same parent', async () => {
+    await mount(selectedMain('main-a'))
+    await editor()
+    await publishSide(side())
+    await act(async () => type((await editor()), '旧侧聊草稿'))
+    await publishSide(emptySide('main-a'))
+    await publishSide({ ...side(), sessionId: 'side-new', snapshot: { ...sideRuntime, conversationId: 'side-new' } })
+    expect((await editor()).value).toBe('')
+  })
+
+  it('returns a late A file preparation to A after switching to B side', async () => {
+    await mount(selectedMain('main-a'))
+    await editor()
+    await publishSide(side())
+    let finishFile!: (attachment: { name: string; content: string; path: string }) => void
+    prepareDroppedFile.mockImplementationOnce(() => new Promise((resolve) => { finishFile = resolve }))
+    await act(async () => { drop(host, 'late-A.docx') })
+    await mount(selectedMain('main-b'))
+    await publishSide(sideB())
+    await act(async () => finishFile({ name: 'late-A.docx', content: '', path: 'C:\\workspace\\late-A.docx' }))
+    expect(host.querySelector('[aria-label="已添加附件"]')).toBeNull()
+    await mount(selectedMain('main-a'))
+    expect(host.querySelector('[aria-label="已添加附件"]')?.textContent).toContain('late-A')
+  })
+
+  it('lets B send while A side submission is still waiting', async () => {
+    let releaseA!: () => void
+    sendSide.mockImplementation((id: string) => id === 'side-1'
+      ? new Promise<void>((resolve) => { releaseA = resolve }) : Promise.resolve())
+    await mount(selectedMain('main-a'))
+    await editor()
+    await publishSide(side())
+    await act(async () => { const input = await editor(); type(input, 'A 正在发送'); enter(input) })
+    expect(sendSide).toHaveBeenCalledWith('side-1', 'A 正在发送', [], 'queue')
+    await mount(selectedMain('main-b'))
+    await publishSide(sideB())
+    await act(async () => { const input = await editor(); type(input, 'B 可以发送'); enter(input) })
+    expect(sendSide).toHaveBeenCalledWith('side-b', 'B 可以发送', [], 'queue')
+    await act(async () => releaseA())
   })
 
   it('uses Escape to stop only the expanded side task', async () => {
@@ -297,12 +433,12 @@ describe('temporary side chat stays in the same panel', () => {
     await act(async () => { for (const listener of sideListeners) listener(side()) })
     await act(async () => type(input, 'A 侧聊草稿'))
     if (order === 'side-first') {
-      await act(async () => { for (const listener of sideListeners) listener(emptySide()) })
-      expect(input.value).toBe('A 私有草稿')
+      await act(async () => { for (const listener of sideListeners) listener(emptySide('main-b')) })
+      expect(input.value).toBe('A 侧聊草稿')
       await mount(switchedMain(action))
     } else {
       await mount(switchedMain(action))
-      await act(async () => { for (const listener of sideListeners) listener(emptySide()) })
+      await act(async () => { for (const listener of sideListeners) listener(emptySide('main-b')) })
     }
     const nextInput = await editor()
     expect(nextInput.value).toBe('B 保存的草稿')

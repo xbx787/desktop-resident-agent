@@ -448,13 +448,14 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
   const sideExpanded = Boolean(sideSessionId && sideChat?.expanded && sideChat.snapshot);
   const snapshot = sideExpanded ? sideChat!.snapshot : mainSnapshot;
   const sideChatRef = useRef<SideChatSnapshot | null>(null);
+  const sideSnapshots = useRef(new Map<string, SideChatSnapshot>());
   const destinationRef = useRef<'main' | 'side'>('main');
-  const sideComposerStash = useRef<StashedComposer<DroppedAttachment>>({ draft: '', attachments: [] });
+  const sideComposerStash = useRef(new Map<string, StashedComposer<DroppedAttachment>>());
   const mainComposerOpenRef = useRef(false);
-  const sideComposerOpenRef = useRef(true);
+  const sideComposerOpenRef = useRef(new Map<string, boolean>());
   const applySideSnapshotRef = useRef<(next: SideChatSnapshot) => void>(() => undefined);
-  const sideSubmitLockRef = useRef<string | null>(null);
-  const [sideSending, setSideSending] = useState(false);
+  const sideSubmitLockRef = useRef(new Set<string>());
+  const [sideSendingIds, setSideSendingIds] = useState<Set<string>>(() => new Set());
   const [expanded, setExpanded] = useState(false);
   const [bubbleWidth, setBubbleWidth] = useState(0);
   const resizePending = useRef(false);
@@ -515,7 +516,10 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
   const [composerOpen, setComposerOpenRaw] = useState(false);
   function setComposerOpen(open: boolean) {
     if (!open) composerExit.beginClose();
-    if (destinationRef.current === 'side') sideComposerOpenRef.current = open;
+    if (destinationRef.current === 'side') {
+      const id = sideChatRef.current?.sessionId;
+      if (id) sideComposerOpenRef.current.set(id, open);
+    }
     else mainComposerOpenRef.current = open;
     setComposerOpenRaw(open);
   }
@@ -582,10 +586,45 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
   const pendingNewConversationRef = useRef(false);
   const library = mainSnapshot?.conversationLibrary;
   const activeConversationIdRef = useRef<string | null>(library?.activeConversationId ?? null);
+  function sideSessionExists(sessionId: string): boolean {
+    return [...sideSnapshots.current.values()].some((item) => item.sessionId === sessionId);
+  }
+  function forgetSideSession(sessionId: string | null | undefined): void {
+    if (!sessionId) return;
+    sideComposerStash.current.delete(sessionId);
+    sideComposerOpenRef.current.delete(sessionId);
+  }
+  function forgetParentSide(parentId: string): void {
+    const saved = sideSnapshots.current.get(parentId);
+    if (!saved) return;
+    if (activeConversationIdRef.current === parentId) {
+      applySideSnapshotRef.current({ sessionId: null, parentConversationId: parentId, expanded: false,
+        queuePaused: false, snapshot: null, pendingMessages: [] });
+    }
+    sideSnapshots.current.delete(parentId);
+    forgetSideSession(saved.sessionId);
+  }
+  function rememberVisibleSide(): void {
+    if (destinationRef.current !== 'side') return;
+    const sessionId = sideChatRef.current?.sessionId;
+    if (!sessionId || !sideSessionExists(sessionId)) return;
+    const current = composerStateRef.current;
+    stashComposerState(sideComposerStash.current, sessionId, current.draft, current.attachments);
+    sideComposerOpenRef.current.set(sessionId, composerOpen);
+  }
   useLayoutEffect(() => {
     const nextId = library?.activeConversationId ?? null;
     const previousId = activeConversationIdRef.current;
+    if (library) {
+      const valid = new Set(library.conversations.filter((item) => item.archivedAt === null).map((item) => item.id));
+      for (const [parentId, saved] of sideSnapshots.current) {
+        if (valid.has(parentId)) continue;
+        sideSnapshots.current.delete(parentId);
+        forgetSideSession(saved.sessionId);
+      }
+    }
     if (previousId !== nextId) {
+      rememberVisibleSide();
       const carryNewDraft = pendingNewConversationRef.current && previousId === null && nextId !== null && destinationRef.current === 'main';
       if (destinationRef.current === 'main' && previousId) {
         if (library?.conversations.some((item) => item.id === previousId)) {
@@ -601,8 +640,6 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
       activeConversationIdRef.current = nextId;
       destinationRef.current = 'main';
       sideChatRef.current = null;
-      sideComposerStash.current = { draft: '', attachments: [] };
-      sideComposerOpenRef.current = true;
       setSideChat(null);
       if (carryNewDraft) {
         stashComposerState(composerStash.current, nextId, composerStateRef.current.draft, composerStateRef.current.attachments);
@@ -624,34 +661,42 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
       setContextMenuOpen(false);
       pendingNewConversationRef.current = false;
       draftRestoredRef.current = false;
+      const targetSide = nextId ? sideSnapshots.current.get(nextId) : null;
+      if (targetSide) applySideSnapshotRef.current(targetSide);
       return;
     }
-    if (sideChatRef.current?.sessionId && sideChatRef.current.parentConversationId !== nextId) {
-      applySideSnapshotRef.current({ sessionId: null, parentConversationId: null, expanded: false,
-        queuePaused: false, snapshot: null, pendingMessages: [] });
-    }
-  }, [library?.activeConversationId]);
+  }, [library?.activeConversationId, library?.conversations]);
   applySideSnapshotRef.current = (next) => {
-    if (next.sessionId && next.parentConversationId !== activeConversationIdRef.current) return;
+    const parentId = next.parentConversationId;
+    if (!parentId) return;
+    if (library && !library.conversations.some((item) => item.id === parentId && item.archivedAt === null)) return;
+    const saved = sideSnapshots.current.get(parentId);
+    if (next.sessionId && saved?.sessionId === next.sessionId && next.snapshot &&
+        saved.snapshot && next.snapshot.timelineRevision < saved.snapshot.timelineRevision) return;
+    if (saved?.sessionId && saved.sessionId !== next.sessionId) forgetSideSession(saved.sessionId);
+    sideSnapshots.current.set(parentId, next);
+    if (parentId !== activeConversationIdRef.current) return;
     const previousSide = sideChatRef.current;
-    if (next.sessionId && previousSide?.sessionId === next.sessionId && next.snapshot &&
-        previousSide.snapshot && next.snapshot.timelineRevision < previousSide.snapshot.timelineRevision) return;
     const nextDestination = next.sessionId && next.expanded && next.snapshot &&
       next.parentConversationId === activeConversationIdRef.current ? 'side' : 'main';
     const previousDestination = destinationRef.current;
     sideChatRef.current = next;
-    if (nextDestination !== previousDestination) {
+    if (nextDestination !== previousDestination ||
+        (nextDestination === 'side' && previousSide?.sessionId !== next.sessionId)) {
       const current = composerStateRef.current;
-      if (previousDestination === 'side') {
-        sideComposerStash.current = { draft: current.draft, attachments: [...current.attachments] };
+      if (previousDestination === 'side' && previousSide?.sessionId &&
+          previousSide.sessionId === next.sessionId) {
+        stashComposerState(sideComposerStash.current, previousSide.sessionId, current.draft, current.attachments);
       } else {
-        const id = activeConversationIdRef.current;
-        stashComposerState(composerStash.current, id, current.draft, current.attachments);
-        flushDraft(id, current.draft);
-        if (id) goalPromptStash.current.set(id, goalPrompting);
+        if (previousDestination === 'main') {
+          const id = activeConversationIdRef.current;
+          stashComposerState(composerStash.current, id, current.draft, current.attachments);
+          flushDraft(id, current.draft);
+          if (id) goalPromptStash.current.set(id, goalPrompting);
+        }
       }
       const restored = nextDestination === 'side'
-        ? sideComposerStash.current
+        ? restoreComposerState(sideComposerStash.current, next.sessionId)
         : restoreComposerState(composerStash.current, activeConversationIdRef.current);
       composerStateRef.current = { draft: restored.draft, attachments: [...restored.attachments] };
       setDraft(restored.draft);
@@ -663,12 +708,9 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
       setEffortMenuOpen(false);
       setContextMenuOpen(false);
       setGoalPrompting(nextDestination === 'main' && Boolean(goalPromptStash.current.get(activeConversationIdRef.current ?? '')));
-      setComposerOpenRaw(nextDestination === 'side' ? sideComposerOpenRef.current : mainComposerOpenRef.current);
+      setComposerOpenRaw(nextDestination === 'side'
+        ? sideComposerOpenRef.current.get(next.sessionId!) ?? true : mainComposerOpenRef.current);
       destinationRef.current = nextDestination;
-    }
-    if (!next.sessionId) {
-      sideComposerStash.current = { draft: '', attachments: [] };
-      sideComposerOpenRef.current = true;
     }
     setSideChat(next);
   };
@@ -712,7 +754,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
     item.id, item.title, item.archivedAt, item.pinnedAt, item.updatedAt, item.messageCount
   ]) ?? []);
   const librarySearchKey = JSON.stringify([libraryQuery.trim(), libraryArchived, libraryRevision]);
-  const sendingCurrent = sideExpanded ? sideSending : sendingConversationIds.has(library?.activeConversationId ?? null);
+  const sendingCurrent = sideExpanded ? sideSendingIds.has(sideSessionId!) : sendingConversationIds.has(library?.activeConversationId ?? null);
   const contextUsage = snapshot?.contextUsage;
   const contextCompacting = compactBusy || Boolean(snapshot?.contextCompacting);
   const recentSessions = (library?.conversations ?? []).filter((item) => !item.archivedAt);
@@ -1075,7 +1117,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
 
   async function sendSide(strategy: 'queue' | 'steer'): Promise<void> {
     const sessionId = sideChatRef.current?.sessionId;
-    if (!sessionId || sideSubmitLockRef.current === sessionId || contextCompacting) return;
+    if (!sessionId || sideSubmitLockRef.current.has(sessionId) || contextCompacting) return;
     const message = draft.trim() || (attachments.length ? '请阅读附件并帮助我。' : '');
     if (!message) return;
     const commandError = sideOnlySlashError(message);
@@ -1095,9 +1137,9 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
     const sentDraft = draft;
     const sentAttachments = attachments;
     const payload = attachments.map(({ name, content, path }) => ({ name, content, path }));
-    sideSubmitLockRef.current = sessionId;
-    setSideSending(true);
-    sideComposerStash.current = { draft: '', attachments: [] };
+    sideSubmitLockRef.current.add(sessionId);
+    setSideSendingIds(new Set(sideSubmitLockRef.current));
+    stashComposerState(sideComposerStash.current, sessionId, '', []);
     composerStateRef.current = { draft: '', attachments: [] };
     setDraft('');
     setAttachments([]);
@@ -1109,19 +1151,18 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
     } catch {
       accepted = false;
     } finally {
-      if (sideSubmitLockRef.current === sessionId) {
-        sideSubmitLockRef.current = null;
-        setSideSending(false);
-      }
+      sideSubmitLockRef.current.delete(sessionId);
+      setSideSendingIds(new Set(sideSubmitLockRef.current));
     }
-    if (accepted || sideChatRef.current?.sessionId !== sessionId) return;
-    const current = destinationRef.current === 'side' ? composerStateRef.current : sideComposerStash.current;
+    if (accepted || !sideSessionExists(sessionId)) return;
+    const stillHere = destinationRef.current === 'side' && sideChatRef.current?.sessionId === sessionId;
+    const current = stillHere ? composerStateRef.current : restoreComposerState(sideComposerStash.current, sessionId);
     const restored = {
       draft: mergeComposerDraft(sentDraft, current.draft),
       attachments: mergeComposerAttachments(sentAttachments, current.attachments)
     };
-    sideComposerStash.current = restored;
-    if (destinationRef.current === 'side') {
+    stashComposerState(sideComposerStash.current, sessionId, restored.draft, restored.attachments);
+    if (stillHere) {
       composerStateRef.current = restored;
       setDraft(restored.draft);
       setAttachments(restored.attachments);
@@ -1217,7 +1258,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
     const prepared = await Promise.allSettled(files.slice(0, remaining).map((file) => prepareFileAttachment(bridge, file)));
     const failed = prepared.find((result) => result.status === 'rejected');
     if (failed?.status === 'rejected' && originIsCurrent()) setAttachmentError(failed.reason instanceof Error ? failed.reason.message : '文件读取失败。');
-    if (origin === 'side' && (!originSideId || sideChatRef.current?.sessionId !== originSideId)) return;
+    if (origin === 'side' && (!originSideId || !sideSessionExists(originSideId))) return;
     const mergePrepared = (current: DroppedAttachment[]): DroppedAttachment[] => {
       const next = [...current];
       for (const result of prepared) {
@@ -1227,9 +1268,10 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
       return next;
     };
     if (originIsCurrent()) setAttachments(mergePrepared);
-    else if (origin === 'side') sideComposerStash.current = {
-      ...sideComposerStash.current, attachments: mergePrepared(sideComposerStash.current.attachments)
-    };
+    else if (origin === 'side' && originSideId) {
+      const saved = restoreComposerState(sideComposerStash.current, originSideId);
+      stashComposerState(sideComposerStash.current, originSideId, saved.draft, mergePrepared(saved.attachments));
+    }
     else if (originConversationId) {
       const stashed = restoreComposerState(composerStash.current, originConversationId);
       stashComposerState(composerStash.current, originConversationId, stashed.draft, mergePrepared(stashed.attachments));
@@ -1386,12 +1428,12 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
     const accepted = await run((bridge) => sideId
       ? bridge.removeSideQueuedMessage(sideId, message.id) : bridge.removeQueuedMessage(message.id));
     if (!accepted) return;
-    if (sideId && sideChatRef.current?.sessionId !== sideId) return;
+    if (sideId && !sideSessionExists(sideId)) return;
     const stillHere = destinationRef.current === origin && (origin === 'side'
       ? sideChatRef.current?.sessionId === sideId
       : activeConversationIdRef.current === conversationId);
     const current = stillHere ? composerStateRef.current : origin === 'side'
-      ? sideComposerStash.current : restoreComposerState(composerStash.current, conversationId);
+      ? restoreComposerState(sideComposerStash.current, sideId) : restoreComposerState(composerStash.current, conversationId);
     const recalled = message.text;
     const next: StashedComposer<DroppedAttachment> = {
       draft: current.draft.trim() ? `${recalled}\n\n${current.draft}` : recalled,
@@ -1404,7 +1446,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
       next.attachments.push({ id: crypto.randomUUID(), ...attachment });
     }
     if (!stillHere) {
-      if (origin === 'side') sideComposerStash.current = next;
+      if (origin === 'side') stashComposerState(sideComposerStash.current, sideId, next.draft, next.attachments);
       else if (conversationId) stashComposerState(composerStash.current, conversationId, next.draft, next.attachments);
       return;
     }
@@ -1580,7 +1622,10 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
       const missing = outcomes.filter((item) => item.status === 'skipped' && item.reason === 'not_found');
       const resolved = new Set(outcomes.filter((item) => item.status === 'updated' || !unresolved.includes(item)).map((item) => item.id));
       setSelectedSessionIds((current) => new Set([...current].filter((id) => !resolved.has(id))));
-      if (action === 'delete') for (const item of updated) composerStash.current.delete(item.id);
+      if (action === 'delete' || action === 'archive') for (const item of updated) {
+        forgetParentSide(item.id);
+        if (action === 'delete') composerStash.current.delete(item.id);
+      }
       if (unresolved.length === 0) {
         setMultiSelect(false);
         clearSelection();
@@ -1607,10 +1652,10 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
         return;
       }
       pendingNewConversationRef.current = true;
+      rememberVisibleSide();
       activeConversationIdRef.current = null;
       destinationRef.current = 'main';
       sideChatRef.current = null;
-      sideComposerStash.current = { draft: '', attachments: [] };
       setSideChat(null);
       setLibraryOpen(false);
       composerStateRef.current = { draft: '', attachments: [] };
@@ -1676,10 +1721,10 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
       ? (bridge: PetAPI) => bridge.selectConversation(item.id)
       : (bridge: PetAPI) => bridge.restoreConversation(item.id);
     await libraryAction(operation, () => {
+      rememberVisibleSide();
       activeConversationIdRef.current = item.id;
       destinationRef.current = 'main';
       sideChatRef.current = null;
-      sideComposerStash.current = { draft: '', attachments: [] };
       setSideChat(null);
       setLibraryOpen(false);
       setSessionMenuOpen(false);
@@ -1694,6 +1739,8 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
         setCaretIndex(saved.draft.length);
         setAttachmentError(saved.attachments.length > 5 ? '已保留全部附件；一次最多发送 5 个，请先移除多余附件。' : null);
         setComposerOpen(Boolean(saved.draft || saved.attachments.length || goalDraftOpen));
+        const targetSide = sideSnapshots.current.get(item.id);
+        if (targetSide) applySideSnapshotRef.current(targetSide);
         return;
       }
       // 内存里没有这个会话的草稿（应用重启后的第一次切换）：从会话记录
@@ -1718,6 +1765,8 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
         setCaretIndex(text.length);
         setComposerOpen(true);
       }).catch(() => undefined);
+      const targetSide = sideSnapshots.current.get(item.id);
+      if (targetSide) applySideSnapshotRef.current(targetSide);
     });
   }
 
@@ -2108,7 +2157,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
         running={statusRunning(tabMenu.item)}
         current={tabMenu.item.id === library?.activeConversationId}
         onRename={() => { openLibrary(); setRenameDraft(tabMenu.item.title); setRenameId(tabMenu.item.id); }}
-        onArchive={() => { void libraryAction((bridge) => bridge.archiveConversation(tabMenu.item.id)); }}
+        onArchive={() => { void libraryAction((bridge) => bridge.archiveConversation(tabMenu.item.id), () => forgetParentSide(tabMenu.item.id)); }}
         onDelete={() => { openLibrary(); setDeleteId(tabMenu.item.id); }}
         onClose={() => setTabMenu(null)}
       />}
@@ -2164,7 +2213,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                 <button type="submit" className="panel-session-save" aria-label="保存名称" title="保存名称" disabled={libraryBusy}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m4.8 10.6 3.4 3.4 7-7.4" /></svg></button><button type="button" onClick={() => setRenameId(null)}>取消</button>
               </form> : !multiSelect && deleteId === item.id ? <div className="panel-session-confirm">
                 <span>永久删除“{item.title}”？</span>
-                <button type="button" disabled={libraryBusy} onClick={() => { void libraryAction((bridge) => bridge.deleteConversation(item.id), () => { composerStash.current.delete(item.id); setDeleteId(null); }); }}>确认删除</button>
+                <button type="button" disabled={libraryBusy} onClick={() => { void libraryAction((bridge) => bridge.deleteConversation(item.id), () => { forgetParentSide(item.id); composerStash.current.delete(item.id); setDeleteId(null); }); }}>确认删除</button>
                 <button type="button" onClick={() => setDeleteId(null)}>取消</button>
               </div> : <>
                 <button type="button" className={`panel-session-main${multiSelect ? ' is-selecting' : ''}`} disabled={libraryBusy} aria-pressed={multiSelect ? selectedSessionIds.has(item.id) : undefined} aria-label={multiSelect ? `${selectedSessionIds.has(item.id) ? '取消选择' : '选择'} ${item.title}` : undefined} onKeyDown={(event) => { if (event.altKey && event.key === 'Enter') { event.preventDefault(); toggleSelected(item.id); } }} onClick={(event) => { if (multiSelect || event.altKey) toggleSelected(item.id); else void selectConversation(item); }}>
@@ -2174,7 +2223,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                 {!multiSelect && <div className="panel-session-actions">
                   {!item.archivedAt && <button type="button" aria-label={item.pinnedAt ? '取消置顶' : '置顶会话'} title={item.pinnedAt ? '取消置顶' : '置顶会话'} disabled={libraryBusy} onClick={() => { void libraryAction((bridge) => bridge.setConversationPinned(item.id, !item.pinnedAt)); }}><PinIcon pinned={Boolean(item.pinnedAt)} /></button>}
                   <button type="button" aria-label={`重命名 ${item.title}`} title="重命名" onClick={() => { setRenameId(item.id); setRenameDraft(item.title); }}><EditIcon /></button>
-                  <button type="button" aria-label={`${item.archivedAt ? '恢复' : '归档'} ${item.title}`} title={statusRunning(item) ? '这个会话还在运行，结束后才能归档' : item.archivedAt ? '恢复' : '归档'} disabled={libraryBusy || statusRunning(item)} onClick={() => { void libraryAction((bridge) => item.archivedAt ? bridge.restoreConversation(item.id) : bridge.archiveConversation(item.id)); }}><ArchiveIcon restore={Boolean(item.archivedAt)} /></button>
+                  <button type="button" aria-label={`${item.archivedAt ? '恢复' : '归档'} ${item.title}`} title={statusRunning(item) ? '这个会话还在运行，结束后才能归档' : item.archivedAt ? '恢复' : '归档'} disabled={libraryBusy || statusRunning(item)} onClick={() => { void libraryAction((bridge) => item.archivedAt ? bridge.restoreConversation(item.id) : bridge.archiveConversation(item.id), () => { if (!item.archivedAt) forgetParentSide(item.id); }); }}><ArchiveIcon restore={Boolean(item.archivedAt)} /></button>
                   <button type="button" aria-label={`删除 ${item.title}`} title={statusRunning(item) ? '这个会话还在运行，结束后才能删除' : '删除'} disabled={libraryBusy || statusRunning(item)} onClick={() => setDeleteId(item.id)}><DeleteIcon /></button>
                 </div>}
                 {!multiSelect && <div className="panel-session-meta" aria-hidden="true">

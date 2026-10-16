@@ -88,7 +88,8 @@ export class ConversationController {
   private readiness = { modelReady: false, claudeCodeReady: false }
   private turnHooks: ConversationTurnHooks = {}
   private onDisplayedConversationChange?: (id: string | null) => void
-  private onRuntimeConfigurationChange?: () => void
+  private onRuntimeConfigurationChange?: (conversationId?: string) => void
+  private isSideBusy: (conversationId: string) => boolean = () => false
   private displayEpoch = 0
 
   constructor(
@@ -107,18 +108,35 @@ export class ConversationController {
     for (const runtime of this.runtimes.values()) runtime.setMemoryContextProvider(hooks.memoryContext)
   }
 
-  /** A temporary side chat is owned by one displayed conversation. All paths
-   * that change the displayed ID go through setDisplayed or followActive. */
+  /** Side chats are owned by their main conversation. All paths that change
+   * the displayed ID go through setDisplayed or followActive. */
   setDisplayChangeListener(listener: (id: string | null) => void): void {
     this.onDisplayedConversationChange = listener
   }
 
-  setRuntimeConfigurationChangeListener(listener: () => void): void {
+  setRuntimeConfigurationChangeListener(listener: (conversationId?: string) => void): void {
     this.onRuntimeConfigurationChange = listener
+  }
+
+  setSideBusyPredicate(predicate: (conversationId: string) => boolean): void {
+    this.isSideBusy = predicate
   }
 
   displayedConversationId(): string | null { return this.activeId }
   displayedConversationEpoch(): number { return this.displayEpoch }
+
+  /** Cheap parent guard for hot side-stream callbacks: avoid cloning the
+   * entire main timeline just to check the displayed tab's membership. */
+  displayedLiveConversationId(): string | null {
+    const id = this.activeId
+    if (!id || this.library?.activeConversationId !== id) return null
+    return this.library.conversations.some((record) => record.id === id && record.archivedAt === null) ? id : null
+  }
+
+  liveConversationIds(): ReadonlySet<string> {
+    return new Set(this.library?.conversations.filter((record) => record.archivedAt === null)
+      .map((record) => record.id) ?? [])
+  }
 
   currentSettings(): ConversationSettings {
     if (!this.library) throw new Error('会话库尚未就绪。')
@@ -350,9 +368,14 @@ export class ConversationController {
 
   private assertIdle(id: string): void {
     const runtime = this.runtimes.get(id)
-    if ((runtime?.isRunning() ?? false) || (this.pending.get(id)?.length ?? 0) > 0 || this.drains.has(id)) {
+    if ((runtime?.isRunning() ?? false) || (this.pending.get(id)?.length ?? 0) > 0 ||
+        this.drains.has(id) || this.isSideBusy(id)) {
       throw new Error('这个会话仍有任务或待发送消息，请先等待完成或停止。')
     }
+  }
+
+  private hasBusySide(): boolean {
+    return this.library?.conversations.some((record) => record.archivedAt === null && this.isSideBusy(record.id)) ?? false
   }
 
   private async refreshLibrary(): Promise<void> {
@@ -416,14 +439,14 @@ export class ConversationController {
     if (!record) {
       record = await this.store.createConversation('新对话', 'claude_code')
     }
+    const nextLibrary = await this.store.getState()
     const previousId = this.activeId
     this.activeId = record.id
     if (previousId !== record.id) {
       this.displayEpoch += 1
-      this.onDisplayedConversationChange?.(record.id)
     }
     if (!this.pending.has(record.id)) this.pending.set(record.id, structuredClone(record.pendingMessages))
-    this.library = await this.store.getState()
+    this.library = nextLibrary
     const runtime = this.runtimes.get(record.id)
     if (runtime) {
       // Coming back to a live conversation: the publisher owes a full timeline.
@@ -432,6 +455,7 @@ export class ConversationController {
     } else {
       this.displayedRecord = record
     }
+    if (previousId !== record.id) this.onDisplayedConversationChange?.(record.id)
     this.emit()
     return record
   }
@@ -774,6 +798,9 @@ export class ConversationController {
         if (queue.length) blocked.add(id)
       }
       for (const id of this.drains.keys()) blocked.add(id)
+      if (action === 'archive' || action === 'delete') {
+        for (const id of ids) if (this.isSideBusy(id)) blocked.add(id)
+      }
       const result = await this.store.batchManageConversations(action, ids, blocked)
       for (const outcome of result.outcomes) {
         if (outcome.status !== 'updated' || (action !== 'archive' && action !== 'delete')) continue
@@ -821,9 +848,11 @@ export class ConversationController {
     else {
       if (!nextId && this.activeId) {
         this.displayEpoch += 1
+        await this.refreshLibrary()
         this.onDisplayedConversationChange?.(null)
+      } else {
+        await this.refreshLibrary()
       }
-      await this.refreshLibrary()
     }
   }
 
@@ -844,7 +873,7 @@ export class ConversationController {
     await this.initialize()
     return this.serialize(async () => {
       const settings = await this.store.updateSettings(patch)
-      if (patch.autoArchiveAfterDays !== undefined) await this.store.archiveInactiveConversations()
+      if (patch.autoArchiveAfterDays !== undefined && !this.hasBusySide()) await this.store.archiveInactiveConversations()
       if (patch.userName !== undefined || patch.assistantName !== undefined) {
         const identity = { userName: settings.userName, assistantName: settings.assistantName }
         for (const runtime of this.runtimes.values()) runtime.setIdentity(identity)
@@ -879,7 +908,7 @@ export class ConversationController {
   async archiveInactiveConversations(now?: Date): Promise<ConversationLibraryState> {
     await this.initialize()
     return this.serialize(async () => {
-      await this.store.archiveInactiveConversations(now)
+      if (!this.hasBusySide()) await this.store.archiveInactiveConversations(now)
       await this.refreshLibrary()
       return structuredClone(this.library!)
     })
@@ -894,7 +923,7 @@ export class ConversationController {
       const runtime = await this.ensureRuntime(id)
       runtime.setModelMode(mode)
       await this.persistConversation(id)
-      if (id === this.activeId) this.onRuntimeConfigurationChange?.()
+      this.onRuntimeConfigurationChange?.(id)
     })
   }
 
