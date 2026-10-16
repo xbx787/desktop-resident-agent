@@ -940,7 +940,10 @@ export class ConversationStore {
     })
   }
 
-  async archiveInactiveConversations(now: Date = new Date()): Promise<ConversationLibraryState> {
+  async archiveInactiveConversations(
+    now: Date = new Date(),
+    isBusy: (conversationId: string) => boolean = () => false
+  ): Promise<ConversationLibraryState> {
     if (!(now instanceof Date) || !Number.isFinite(now.getTime())) {
       throw new ConversationStoreError('INVALID_INPUT', '当前时间无效。')
     }
@@ -954,7 +957,8 @@ export class ConversationStore {
       const cutoff = now.getTime() - days * 86_400_000
       for (const record of draft.conversations) {
         if (record.archivedAt !== null || record.pinnedAt !== null ||
-            record.id === draft.activeConversationId || record.pendingMessages.length > 0) continue
+            record.id === draft.activeConversationId || record.pendingMessages.length > 0 ||
+            isBusy(record.id)) continue
         const active = Date.parse(record.lastActivityAt ?? record.updatedAt)
         if (Number.isFinite(active) && active < cutoff) record.archivedAt = now.toISOString()
       }

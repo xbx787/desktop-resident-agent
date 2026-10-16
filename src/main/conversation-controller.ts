@@ -374,8 +374,16 @@ export class ConversationController {
     }
   }
 
-  private hasBusySide(): boolean {
-    return this.library?.conversations.some((record) => record.archivedAt === null && this.isSideBusy(record.id)) ?? false
+  private isBusyForAutoArchive(id: string): boolean {
+    return this.isSideBusy(id) || (this.runtimes.get(id)?.isRunning() ?? false) ||
+      this.drains.has(id) || (this.pending.get(id)?.length ?? 0) > 0
+  }
+
+  private async autoArchiveInactive(now?: Date): Promise<void> {
+    const state = await this.store.archiveInactiveConversations(now, (id) => this.isBusyForAutoArchive(id))
+    for (const record of state.conversations) {
+      if (record.archivedAt !== null) this.releaseRuntime(record.id)
+    }
   }
 
   private async refreshLibrary(): Promise<void> {
@@ -873,7 +881,7 @@ export class ConversationController {
     await this.initialize()
     return this.serialize(async () => {
       const settings = await this.store.updateSettings(patch)
-      if (patch.autoArchiveAfterDays !== undefined && !this.hasBusySide()) await this.store.archiveInactiveConversations()
+      if (patch.autoArchiveAfterDays !== undefined) await this.autoArchiveInactive()
       if (patch.userName !== undefined || patch.assistantName !== undefined) {
         const identity = { userName: settings.userName, assistantName: settings.assistantName }
         for (const runtime of this.runtimes.values()) runtime.setIdentity(identity)
@@ -908,7 +916,7 @@ export class ConversationController {
   async archiveInactiveConversations(now?: Date): Promise<ConversationLibraryState> {
     await this.initialize()
     return this.serialize(async () => {
-      if (!this.hasBusySide()) await this.store.archiveInactiveConversations(now)
+      await this.autoArchiveInactive(now)
       await this.refreshLibrary()
       return structuredClone(this.library!)
     })
