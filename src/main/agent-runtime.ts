@@ -102,7 +102,7 @@ export class AgentRuntime {
     }
   }
 
-  setModelMode(mode: ModelMode): void {
+  setModelMode(mode: ModelMode, silent = false): void {
     if (this.isRunning()) throw new Error('任务进行中时不能切换模型。')
     if (mode === 'live' && !this.configuredModel) throw new Error('尚未配置 DeepSeek API Key。')
     if (mode === 'claude_code' && !this.claudeCodeModel) throw new Error('Claude Code 或 DeepSeek API Key 尚未就绪。')
@@ -119,12 +119,23 @@ export class AgentRuntime {
     this.state.contextUsage = { status: 'unavailable' }
     this.state.taskMetrics = undefined
     this.state.modelReady = Boolean(this.configuredModel)
-    this.add('system', mode === 'claude_code' ? '已切换到 Claude Code + DeepSeek。' : mode === 'live' ? '已切换到 DeepSeek Flash。' : '已切换到演示模式。')
+    if (silent) this.emit()
+    else this.add('system', mode === 'claude_code' ? '已切换到 Claude Code + DeepSeek。' : mode === 'live' ? '已切换到 DeepSeek Flash。' : '已切换到演示模式。')
   }
 
   /** Memory is added only to the model request copy, never to the visible or saved history. */
   setMemoryContextProvider(provider?: () => Promise<string>): void {
     this.memoryContextProvider = provider
+  }
+
+  /** Starts an ephemeral child with a copy of settled model dialogue only.
+   * Visible entries and, crucially, the parent's SDK session ID are not copied. */
+  seedHistory(history: readonly DialogueLine[]): void {
+    if (this.isRunning() || this.state.timeline.length || this.history.length) {
+      throw new Error('只能给新的临时对话设置历史。')
+    }
+    this.history.push(...structuredClone(history))
+    this.sdkSessionId = null
   }
 
   /** Planned-first sessions: research and propose before touching anything. */
@@ -288,6 +299,7 @@ export class AgentRuntime {
   /** Adds guidance to the active SDK turn at its next native execution boundary. */
   async steerMessage(rawText: string, attachments: UserAttachment[] = [], sessionContext = ''): Promise<boolean> {
     if (!this.isBusy() || this.state.mode !== 'claude_code') return false
+    const generation = this.generation
     if (!validAttachmentList(attachments)) return false
     const text = rawText.trim()
     const context = attachmentContext(attachments)
@@ -298,8 +310,10 @@ export class AgentRuntime {
     const expandedText = this.workspaceRoot
       ? await expandFileMentions(text, this.workspaceRoot, { maxFileBytes: 32 * 1024, maxTotalBytes: 48 * 1024 })
       : { prompt: text }
+    if (generation !== this.generation || !this.isBusy()) return false
     const expandedPrompt = [expandedText.prompt, context, sessionContext].filter(Boolean).join('\n\n')
     if (!await model.steer(expandedPrompt)) return false
+    if (generation !== this.generation || !this.isBusy()) return false
     this.history.push({ role: 'user', content: prompt, ...(sessionContext ? { sessionContext } : {}) })
     // Native guidance continues the same SDK task in place: the message joins
     // the running turn — no second avatar, no rail mark — and the turn's
@@ -622,6 +636,16 @@ export class AgentRuntime {
     this.closeThinkingEntries()
     this.finishRunningTools('已停止')
     this.add('system', reason ?? (this.state.mode === 'claude_code' ? '已请求停止 Claude Code；正在执行的外部动作可能仍会完成。' : '任务已停止，待批准的操作已取消。'))
+  }
+
+  /** Releases the SDK query as well as cancelling the current turn. Closing a
+   * temporary conversation needs this; stop alone deliberately keeps a main
+   * conversation's SDK session resumable. */
+  async dispose(): Promise<void> {
+    this.stop()
+    this.contextGeneration += 1
+    const client = this.claudeCodeModel as (ModelClient & { dispose?: () => Promise<void> | void }) | undefined
+    await client?.dispose?.()
   }
 
   /** Removes one turn from the timeline and the model history, and drops the

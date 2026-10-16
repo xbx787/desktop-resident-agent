@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type AnimationEvent, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import type { AppSnapshot, BubbleLayout, ClaudeWorkflowOption, ContextUsageSnapshot, ConversationSummary, EffortLevel, ModelMode, ModelProfile, PendingMessage, PetAPI, ProposedAction, TaskMetrics, TaskStatus, TimelineEntry, UserAttachment } from '../shared/contracts';
+import type { AppSnapshot, BubbleLayout, ClaudeWorkflowOption, ContextUsageSnapshot, ConversationSummary, EffortLevel, ModelMode, ModelProfile, PendingMessage, PetAPI, ProposedAction, SideChatSnapshot, TaskMetrics, TaskStatus, TimelineEntry, UserAttachment } from '../shared/contracts';
 import { isImageAttachmentName } from '../shared/image-preview';
 import { EFFORT_LABELS } from '../shared/effort';
 import { EffortSlider } from './effort-slider';
@@ -46,6 +46,17 @@ const taskLabels: Record<TaskStatus, string> = {
   failed: '执行失败',
   cancelled: '已停止',
 };
+
+const MAIN_ONLY_SIDE_COMMANDS = new Set(['new', 'side', 'btw', 'sessions', 'model', 'help', 'goal', 'compact']);
+
+function sideOnlySlashError(text: string): string | null {
+  const name = /^\/([a-z][a-z0-9_-]*)(?=\s|$)/iu.exec(text.trim())?.[1]?.toLowerCase();
+  if (!name || !MAIN_ONLY_SIDE_COMMANDS.has(name)) return null;
+  return name === 'side' || name === 'btw'
+    ? '当前已在临时侧聊；先收起，再从主线开启。'
+    : name === 'compact' ? '请使用侧聊上下文菜单中的「压缩上下文」。'
+    : `/${name} 仅适用于主线，请先收起侧聊。`;
+}
 
 const kindLabels: Record<TimelineEntry['kind'], string> = {
   user: '你',
@@ -430,7 +441,20 @@ function useExitAnimation(durationMs: number) {
  *  render would defeat the memo comparisons downstream. */
 const EMPTY_TAB_ORDER: string[] = [];
 
-export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps) {
+export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: PanelBubbleProps) {
+  const [sideChat, setSideChat] = useState<SideChatSnapshot | null>(null);
+  const sideSessionId = sideChat?.parentConversationId === (mainSnapshot?.conversationLibrary?.activeConversationId ?? null)
+    ? sideChat?.sessionId ?? null : null;
+  const sideExpanded = Boolean(sideSessionId && sideChat?.expanded && sideChat.snapshot);
+  const snapshot = sideExpanded ? sideChat!.snapshot : mainSnapshot;
+  const sideChatRef = useRef<SideChatSnapshot | null>(null);
+  const destinationRef = useRef<'main' | 'side'>('main');
+  const sideComposerStash = useRef<StashedComposer<DroppedAttachment>>({ draft: '', attachments: [] });
+  const mainComposerOpenRef = useRef(false);
+  const sideComposerOpenRef = useRef(true);
+  const applySideSnapshotRef = useRef<(next: SideChatSnapshot) => void>(() => undefined);
+  const sideSubmitLockRef = useRef<string | null>(null);
+  const [sideSending, setSideSending] = useState(false);
   const [expanded, setExpanded] = useState(false);
   const [bubbleWidth, setBubbleWidth] = useState(0);
   const resizePending = useRef(false);
@@ -491,6 +515,8 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const [composerOpen, setComposerOpenRaw] = useState(false);
   function setComposerOpen(open: boolean) {
     if (!open) composerExit.beginClose();
+    if (destinationRef.current === 'side') sideComposerOpenRef.current = open;
+    else mainComposerOpenRef.current = open;
     setComposerOpenRaw(open);
   }
   // One-line fallback until fitEditorHeight measures the editor; the same
@@ -553,11 +579,115 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const voiceManagerRef = useRef<VoiceManager | null>(null);
   const submitLockRef = useRef<Set<string | null>>(new Set());
   const workflowCacheRef = useRef<ClaudeWorkflowOption[] | null>(null);
-  const library = snapshot?.conversationLibrary;
+  const pendingNewConversationRef = useRef(false);
+  const library = mainSnapshot?.conversationLibrary;
   const activeConversationIdRef = useRef<string | null>(library?.activeConversationId ?? null);
   useLayoutEffect(() => {
-    activeConversationIdRef.current = library?.activeConversationId ?? null;
+    const nextId = library?.activeConversationId ?? null;
+    const previousId = activeConversationIdRef.current;
+    if (previousId !== nextId) {
+      const carryNewDraft = pendingNewConversationRef.current && previousId === null && nextId !== null && destinationRef.current === 'main';
+      if (destinationRef.current === 'main' && previousId) {
+        if (library?.conversations.some((item) => item.id === previousId)) {
+          const current = composerStateRef.current;
+          stashComposerState(composerStash.current, previousId, current.draft, current.attachments);
+          flushDraft(previousId, current.draft);
+          goalPromptStash.current.set(previousId, goalPrompting);
+        } else {
+          composerStash.current.delete(previousId);
+          goalPromptStash.current.delete(previousId);
+        }
+      }
+      activeConversationIdRef.current = nextId;
+      destinationRef.current = 'main';
+      sideChatRef.current = null;
+      sideComposerStash.current = { draft: '', attachments: [] };
+      sideComposerOpenRef.current = true;
+      setSideChat(null);
+      if (carryNewDraft) {
+        stashComposerState(composerStash.current, nextId, composerStateRef.current.draft, composerStateRef.current.attachments);
+      } else {
+        const restored = restoreComposerState(composerStash.current, nextId);
+        composerStateRef.current = restored;
+        setDraft(restored.draft);
+        setAttachments(restored.attachments);
+        setCaretIndex(restored.draft.length);
+        const goalDraftOpen = Boolean(nextId && goalPromptStash.current.get(nextId));
+        setGoalPrompting(goalDraftOpen);
+        mainComposerOpenRef.current = Boolean(restored.draft || restored.attachments.length || goalDraftOpen);
+        setComposerOpenRaw(mainComposerOpenRef.current);
+      }
+      setAttachmentError(null);
+      setDismissedSuggestion(null);
+      setModelPickerOpen(false);
+      setEffortMenuOpen(false);
+      setContextMenuOpen(false);
+      pendingNewConversationRef.current = false;
+      draftRestoredRef.current = false;
+      return;
+    }
+    if (sideChatRef.current?.sessionId && sideChatRef.current.parentConversationId !== nextId) {
+      applySideSnapshotRef.current({ sessionId: null, parentConversationId: null, expanded: false,
+        queuePaused: false, snapshot: null, pendingMessages: [] });
+    }
   }, [library?.activeConversationId]);
+  applySideSnapshotRef.current = (next) => {
+    if (next.sessionId && next.parentConversationId !== activeConversationIdRef.current) return;
+    const previousSide = sideChatRef.current;
+    if (next.sessionId && previousSide?.sessionId === next.sessionId && next.snapshot &&
+        previousSide.snapshot && next.snapshot.timelineRevision < previousSide.snapshot.timelineRevision) return;
+    const nextDestination = next.sessionId && next.expanded && next.snapshot &&
+      next.parentConversationId === activeConversationIdRef.current ? 'side' : 'main';
+    const previousDestination = destinationRef.current;
+    sideChatRef.current = next;
+    if (nextDestination !== previousDestination) {
+      const current = composerStateRef.current;
+      if (previousDestination === 'side') {
+        sideComposerStash.current = { draft: current.draft, attachments: [...current.attachments] };
+      } else {
+        const id = activeConversationIdRef.current;
+        stashComposerState(composerStash.current, id, current.draft, current.attachments);
+        flushDraft(id, current.draft);
+        if (id) goalPromptStash.current.set(id, goalPrompting);
+      }
+      const restored = nextDestination === 'side'
+        ? sideComposerStash.current
+        : restoreComposerState(composerStash.current, activeConversationIdRef.current);
+      composerStateRef.current = { draft: restored.draft, attachments: [...restored.attachments] };
+      setDraft(restored.draft);
+      setAttachments([...restored.attachments]);
+      setCaretIndex(restored.draft.length);
+      setAttachmentError(null);
+      setDismissedSuggestion(null);
+      setModelPickerOpen(false);
+      setEffortMenuOpen(false);
+      setContextMenuOpen(false);
+      setGoalPrompting(nextDestination === 'main' && Boolean(goalPromptStash.current.get(activeConversationIdRef.current ?? '')));
+      setComposerOpenRaw(nextDestination === 'side' ? sideComposerOpenRef.current : mainComposerOpenRef.current);
+      destinationRef.current = nextDestination;
+    }
+    if (!next.sessionId) {
+      sideComposerStash.current = { draft: '', attachments: [] };
+      sideComposerOpenRef.current = true;
+    }
+    setSideChat(next);
+  };
+  useEffect(() => {
+    let mounted = true;
+    let sawEvent = false;
+    let bridge: PetAPI;
+    try { bridge = petBridge(); } catch { return; }
+    if (typeof bridge.onSideChatSnapshot !== 'function' || typeof bridge.getSideChat !== 'function') return;
+    const unsubscribe = bridge.onSideChatSnapshot((next) => {
+      if (!mounted) return;
+      sawEvent = true;
+      applySideSnapshotRef.current(next);
+    });
+    void bridge.getSideChat().then((next) => {
+      if (mounted && !sawEvent) applySideSnapshotRef.current(next);
+    }).catch(() => undefined);
+    return () => { mounted = false; unsubscribe(); };
+  }, []);
   const rowDisplay: RowDisplay = {
     showTimestamps: library?.settings.showMessageTimestamps ?? true,
     avatars: { user: library?.settings.userAvatar ?? null, assistant: library?.settings.assistantAvatar ?? null }
@@ -582,7 +712,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     item.id, item.title, item.archivedAt, item.pinnedAt, item.updatedAt, item.messageCount
   ]) ?? []);
   const librarySearchKey = JSON.stringify([libraryQuery.trim(), libraryArchived, libraryRevision]);
-  const sendingCurrent = sendingConversationIds.has(library?.activeConversationId ?? null);
+  const sendingCurrent = sideExpanded ? sideSending : sendingConversationIds.has(library?.activeConversationId ?? null);
   const contextUsage = snapshot?.contextUsage;
   const contextCompacting = compactBusy || Boolean(snapshot?.contextCompacting);
   const recentSessions = (library?.conversations ?? []).filter((item) => !item.archivedAt);
@@ -600,6 +730,16 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const suggestionTrigger = detectComposerTrigger(draft, caretIndex);
   const suggestionKey = suggestionTrigger ? `${suggestionTrigger.kind}:${suggestionTrigger.start}:${suggestionTrigger.query}` : null;
   const suggestionOpen = Boolean(suggestionKey && suggestionKey !== dismissedSuggestion && composerOpen);
+  function refreshContextUsage(): void {
+    try {
+      const bridge = petBridge();
+      void (sideExpanded && sideSessionId
+        ? bridge.getSideChatContextUsage(sideSessionId)
+        : bridge.getContextUsage()).catch(() => undefined);
+    } catch {
+      // The static HTML preview has no desktop bridge.
+    }
+  }
 
   useEffect(() => {
     let bridge: PetAPI;
@@ -661,7 +801,13 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
         : bridge.listClaudeWorkflows().then((options) => { workflowCacheRef.current = options; return options; });
       void fetchOptions.then((options) => {
         if (cancelled) return;
-        setSuggestionItems(workflowSuggestionItems(options, suggestionTrigger));
+        const available = sideExpanded
+          ? options.filter((option) => option.kind !== 'command' || !MAIN_ONLY_SIDE_COMMANDS.has(option.name.replace(/^\//u, '').toLowerCase()))
+          : options;
+        setSuggestionItems(workflowSuggestionItems(available.map((option) =>
+          !sideExpanded && option.kind === 'command' && (option.name === 'side' || option.name === 'btw')
+            ? { ...option, description: '填写问题后开启临时侧聊；空命令不会开启' }
+            : option), suggestionTrigger));
       }).catch(() => { if (!cancelled) { setSuggestionItems([]); setSuggestionFailed(true); } }).finally(() => { if (!cancelled) setSuggestionLoading(false); });
     } else {
       const sessions = sessionSuggestionItems(library?.conversations ?? [], suggestionTrigger.query, library?.activeConversationId ?? null);
@@ -680,7 +826,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
       }, 120);
     }
     return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer); };
-  }, [suggestionKey, suggestionOpen, libraryRevision]);
+  }, [suggestionKey, suggestionOpen, libraryRevision, sideExpanded]);
 
   useEffect(() => {
     if (!sessionMenuOpen) return;
@@ -710,17 +856,13 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     document.addEventListener('pointerdown', closeOnOutsideClick, true);
     document.addEventListener('keydown', closeOnEscape);
     window.addEventListener('blur', closeOnWindowBlur);
-    try {
-      void petBridge().getContextUsage().catch(() => undefined);
-    } catch {
-      // The static HTML preview has no desktop bridge.
-    }
+    refreshContextUsage();
     return () => {
       document.removeEventListener('pointerdown', closeOnOutsideClick, true);
       document.removeEventListener('keydown', closeOnEscape);
       window.removeEventListener('blur', closeOnWindowBlur);
     };
-  }, [modelPickerOpen, library?.activeConversationId, snapshot?.mode]);
+  }, [modelPickerOpen, library?.activeConversationId, snapshot?.mode, sideSessionId, sideExpanded]);
 
   useEffect(() => {
     if (!effortMenuOpen) return;
@@ -750,11 +892,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   useEffect(() => {
     if (!contextMenuOpen) return;
     // The panel shows the freshest reading, the same way the model menu does.
-    try {
-      void petBridge().getContextUsage().catch(() => undefined);
-    } catch {
-      // The static HTML preview has no desktop bridge.
-    }
+    refreshContextUsage();
     const closeOnOutsideClick = (event: PointerEvent) => {
       if (!contextMenuRef.current?.contains(event.target as Node)) setContextMenuOpen(false);
     };
@@ -767,30 +905,22 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
       document.removeEventListener('pointerdown', closeOnOutsideClick, true);
       document.removeEventListener('keydown', closeOnEscape);
     };
-  }, [contextMenuOpen]);
+  }, [contextMenuOpen, sideSessionId, sideExpanded]);
 
   // The meter has to be right the moment a conversation appears, not only after a
   // turn finishes: loading a conversation resets it to "unreadable", and waiting
   // for the next reply (or opening the model picker) left it blank for minutes.
   useEffect(() => {
     if (snapshot?.mode !== 'claude_code') return;
-    try {
-      void petBridge().getContextUsage().catch(() => undefined);
-    } catch {
-      // The static HTML preview has no desktop bridge.
-    }
-  }, [library?.activeConversationId, snapshot?.mode]);
+    refreshContextUsage();
+  }, [library?.activeConversationId, snapshot?.mode, sideSessionId, sideExpanded]);
 
   // A finished turn just changed the context: refresh the meter on its own
   // instead of waiting for someone to open the model picker.
   useEffect(() => {
     if (!snapshot?.taskMetrics?.finishedAt || snapshot?.mode !== 'claude_code') return;
-    try {
-      void petBridge().getContextUsage().catch(() => undefined);
-    } catch {
-      // The static HTML preview has no desktop bridge.
-    }
-  }, [snapshot?.taskMetrics?.finishedAt, snapshot?.mode]);
+    refreshContextUsage();
+  }, [snapshot?.taskMetrics?.finishedAt, snapshot?.mode, sideSessionId, sideExpanded]);
 
   useEffect(() => {
     if (!libraryOpen || !libraryQuery.trim()) {
@@ -866,7 +996,9 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
           onError: (message) => { if (active) setVoiceError(message); },
           onRequestText: async (text) => {
             if (!active) return;
-            await bridge.sendMessage(text);
+            const sideId = destinationRef.current === 'side' ? sideChatRef.current?.sessionId : null;
+            if (sideId) await bridge.sendSideChatMessage(sideId, text);
+            else await bridge.sendMessage(text);
           },
         }, voiceConfig);
         voiceManagerRef.current = manager;
@@ -882,7 +1014,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   }, []);
 
   useEffect(() => {
-    voiceManagerRef.current?.updateFromSnapshot(snapshot ?? {
+    voiceManagerRef.current?.updateFromSnapshot(mainSnapshot ?? {
       mode: 'demo',
       modelReady: false,
       claudeCodeReady: false,
@@ -891,7 +1023,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
       timeline: [],
       timelineRevision: 0,
     });
-  }, [snapshot]);
+  }, [mainSnapshot]);
 
   useEffect(() => {
     if (!composerOpen) return;
@@ -910,7 +1042,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
 
   function restoreRejectedSubmission(originId: string | null, sentDraft: string,
     sentAttachments: DroppedAttachment[], goal = false): void {
-    const stillHere = activeConversationIdRef.current === originId;
+    const stillHere = destinationRef.current === 'main' && activeConversationIdRef.current === originId;
     const current = stillHere ? composerStateRef.current : restoreComposerState(composerStash.current, originId);
     const restored = {
       draft: mergeComposerDraft(sentDraft, current.draft),
@@ -941,7 +1073,68 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     setSendingConversationIds(new Set(submitLockRef.current));
   }
 
+  async function sendSide(strategy: 'queue' | 'steer'): Promise<void> {
+    const sessionId = sideChatRef.current?.sessionId;
+    if (!sessionId || sideSubmitLockRef.current === sessionId || contextCompacting) return;
+    const message = draft.trim() || (attachments.length ? '请阅读附件并帮助我。' : '');
+    if (!message) return;
+    const commandError = sideOnlySlashError(message);
+    if (commandError) {
+      setAttachmentError(commandError);
+      return;
+    }
+    if (attachments.length > 5) {
+      setAttachmentError('一次最多发送 5 个附件，请先移除多余附件。');
+      return;
+    }
+    const attachmentSize = attachments.reduce((sum, item) => sum + item.content.length + (item.path?.length ?? 0) + item.name.length + 100, 0);
+    if (message.length + attachmentSize > 8_000) {
+      setAttachmentError('消息与附件内容合计不能超过 8000 字，请移除较大的文件。');
+      return;
+    }
+    const sentDraft = draft;
+    const sentAttachments = attachments;
+    const payload = attachments.map(({ name, content, path }) => ({ name, content, path }));
+    sideSubmitLockRef.current = sessionId;
+    setSideSending(true);
+    sideComposerStash.current = { draft: '', attachments: [] };
+    composerStateRef.current = { draft: '', attachments: [] };
+    setDraft('');
+    setAttachments([]);
+    setAttachmentError(null);
+    followFeedRef.current = true;
+    let accepted = false;
+    try {
+      accepted = await run((bridge) => bridge.sendSideChatMessage(sessionId, message, payload, strategy));
+    } catch {
+      accepted = false;
+    } finally {
+      if (sideSubmitLockRef.current === sessionId) {
+        sideSubmitLockRef.current = null;
+        setSideSending(false);
+      }
+    }
+    if (accepted || sideChatRef.current?.sessionId !== sessionId) return;
+    const current = destinationRef.current === 'side' ? composerStateRef.current : sideComposerStash.current;
+    const restored = {
+      draft: mergeComposerDraft(sentDraft, current.draft),
+      attachments: mergeComposerAttachments(sentAttachments, current.attachments)
+    };
+    sideComposerStash.current = restored;
+    if (destinationRef.current === 'side') {
+      composerStateRef.current = restored;
+      setDraft(restored.draft);
+      setAttachments(restored.attachments);
+      setComposerOpen(true);
+      setAttachmentError('临时侧聊发送失败，草稿已恢复。');
+    }
+  }
+
   async function send(strategy: 'queue' | 'steer' = 'queue') {
+    if (destinationRef.current === 'side') {
+      await sendSide(strategy);
+      return;
+    }
     if (goalPrompting) {
       const goal = draft.trim();
       const originId = activeConversationIdRef.current;
@@ -1008,24 +1201,39 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   }
 
   async function addFiles(files: File[]) {
+    const origin = destinationRef.current;
+    const originSideId = origin === 'side' ? sideChatRef.current?.sessionId : null;
+    const originConversationId = origin === 'main' ? activeConversationIdRef.current : null;
+    const originIsCurrent = () => destinationRef.current === origin && (origin === 'side'
+      ? sideChatRef.current?.sessionId === originSideId
+      : activeConversationIdRef.current === originConversationId);
     setAttachmentError(null);
     const remaining = Math.max(0, 5 - attachments.length);
     if (!remaining) { setAttachmentError('一次最多添加 5 个文件。'); return; }
     if (files.length > remaining) setAttachmentError('一次最多添加 5 个文件。');
     let bridge: PetAPI;
     try { bridge = petBridge(); }
-    catch { setAttachmentError('文件服务尚未就绪。'); return; }
+    catch { if (originIsCurrent()) setAttachmentError('文件服务尚未就绪。'); return; }
     const prepared = await Promise.allSettled(files.slice(0, remaining).map((file) => prepareFileAttachment(bridge, file)));
     const failed = prepared.find((result) => result.status === 'rejected');
-    if (failed?.status === 'rejected') setAttachmentError(failed.reason instanceof Error ? failed.reason.message : '文件读取失败。');
-    setAttachments((current) => {
+    if (failed?.status === 'rejected' && originIsCurrent()) setAttachmentError(failed.reason instanceof Error ? failed.reason.message : '文件读取失败。');
+    if (origin === 'side' && (!originSideId || sideChatRef.current?.sessionId !== originSideId)) return;
+    const mergePrepared = (current: DroppedAttachment[]): DroppedAttachment[] => {
       const next = [...current];
       for (const result of prepared) {
         if (result.status !== 'fulfilled' || next.length >= 5) continue;
         if (!next.some((item) => item.path === result.value.path)) next.push({ id: crypto.randomUUID(), ...result.value });
       }
       return next;
-    });
+    };
+    if (originIsCurrent()) setAttachments(mergePrepared);
+    else if (origin === 'side') sideComposerStash.current = {
+      ...sideComposerStash.current, attachments: mergePrepared(sideComposerStash.current.attachments)
+    };
+    else if (originConversationId) {
+      const stashed = restoreComposerState(composerStash.current, originConversationId);
+      stashComposerState(composerStash.current, originConversationId, stashed.draft, mergePrepared(stashed.attachments));
+    }
   }
 
   /** Fetch an image chip's bytes once; later hovers reuse the data URL. */
@@ -1066,13 +1274,15 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   }
 
   async function chooseEffort(level: EffortLevel) {
+    if (destinationRef.current === 'side') return;
     if (snapshot?.effort === level) return;
     await run((bridge) => bridge.setEffort(level));
   }
 
   async function choosePlanMode(on: boolean) {
     if (Boolean(snapshot?.planMode) === on) return;
-    await run((bridge) => bridge.setPlanMode(on));
+    const sideId = destinationRef.current === 'side' ? sideChatRef.current?.sessionId : null;
+    await run((bridge) => sideId ? bridge.setSideChatPlanMode(sideId, on) : bridge.setPlanMode(on));
   }
 
   /** Goal mode is the CLI's own /goal: the command starts the stop-hook loop.
@@ -1110,11 +1320,13 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   }
 
   async function chooseModel(mode: ModelMode) {
-    const accepted = await run((bridge) => bridge.setModelMode(mode));
+    const sideId = destinationRef.current === 'side' ? sideChatRef.current?.sessionId : null;
+    const accepted = await run((bridge) => sideId ? bridge.setSideChatModelMode(sideId, mode) : bridge.setModelMode(mode));
     if (accepted) setModelPickerOpen(false);
   }
 
   async function switchModelProfile(id: string): Promise<void> {
+    if (destinationRef.current === 'side') return;
     await run((bridge) => bridge.setModelProfile(id));
   }
 
@@ -1122,7 +1334,8 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     if (compactBusy || snapshot?.contextCompacting) return;
     setCompactBusy(true);
     try {
-      const accepted = await run((bridge) => bridge.compactConversation());
+      const sideId = destinationRef.current === 'side' ? sideChatRef.current?.sessionId : null;
+      const accepted = await run((bridge) => sideId ? bridge.compactSideChat(sideId) : bridge.compactConversation());
       if (accepted) setModelPickerOpen(false);
     } finally {
       setCompactBusy(false);
@@ -1138,7 +1351,10 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     const id = snapshot?.proposal?.id;
     if (!id || busy || sendingCurrent) return;
     setBusy(approved ? 'approve' : 'reject');
-    await run((bridge) => approved ? bridge.approveAction(id) : bridge.rejectAction(id));
+    const sideId = destinationRef.current === 'side' ? sideChatRef.current?.sessionId : null;
+    await run((bridge) => sideId
+      ? approved ? bridge.approveSideChatAction(sideId, id) : bridge.rejectSideChatAction(sideId, id)
+      : approved ? bridge.approveAction(id) : bridge.rejectAction(id));
     setBusy(null);
   }
 
@@ -1146,26 +1362,56 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
     if (busy) return;
     setBusy('stop');
     voiceManagerRef.current?.stopSpeaking();
-    await run((bridge) => bridge.stop());
+    const sideId = destinationRef.current === 'side' ? sideChatRef.current?.sessionId : null;
+    await run((bridge) => sideId ? bridge.stopSideChat(sideId) : bridge.stop());
     setBusy(null);
   }
 
+  async function setSideExpanded(expanded: boolean): Promise<void> {
+    const sessionId = sideChatRef.current?.sessionId;
+    if (!sessionId) return;
+    await run(async (bridge) => { await bridge.setSideChatExpanded(sessionId, expanded); });
+  }
+
+  async function discardSide(): Promise<void> {
+    const sessionId = sideChatRef.current?.sessionId;
+    if (!sessionId) return;
+    await run((bridge) => bridge.discardSideChat(sessionId));
+  }
+
   async function editQueuedMessage(message: PendingMessage) {
-    const accepted = await run((bridge) => bridge.removeQueuedMessage(message.id));
+    const origin = destinationRef.current;
+    const sideId = origin === 'side' ? sideChatRef.current?.sessionId : null;
+    const conversationId = origin === 'main' ? activeConversationIdRef.current : null;
+    const accepted = await run((bridge) => sideId
+      ? bridge.removeSideQueuedMessage(sideId, message.id) : bridge.removeQueuedMessage(message.id));
     if (!accepted) return;
+    if (sideId && sideChatRef.current?.sessionId !== sideId) return;
+    const stillHere = destinationRef.current === origin && (origin === 'side'
+      ? sideChatRef.current?.sessionId === sideId
+      : activeConversationIdRef.current === conversationId);
+    const current = stillHere ? composerStateRef.current : origin === 'side'
+      ? sideComposerStash.current : restoreComposerState(composerStash.current, conversationId);
     const recalled = message.text;
-    setDraft((current) => current.trim() ? `${recalled}\n\n${current}` : recalled);
-    if (message.attachments.length) {
-      const next = [...attachments];
-      let dropped = false;
-      for (const attachment of message.attachments) {
-        if (next.length >= 5) { dropped = true; continue; }
-        if (next.some((item) => item.name === attachment.name && (item.path ?? '') === (attachment.path ?? ''))) continue;
-        next.push({ id: crypto.randomUUID(), ...attachment });
-      }
-      if (dropped) setAttachmentError('最多 5 个附件，部分附件未剪切回。');
-      setAttachments(next);
+    const next: StashedComposer<DroppedAttachment> = {
+      draft: current.draft.trim() ? `${recalled}\n\n${current.draft}` : recalled,
+      attachments: [...current.attachments]
+    };
+    let dropped = false;
+    for (const attachment of message.attachments) {
+      if (next.attachments.length >= 5) { dropped = true; continue; }
+      if (next.attachments.some((item) => item.name === attachment.name && (item.path ?? '') === (attachment.path ?? ''))) continue;
+      next.attachments.push({ id: crypto.randomUUID(), ...attachment });
     }
+    if (!stillHere) {
+      if (origin === 'side') sideComposerStash.current = next;
+      else if (conversationId) stashComposerState(composerStash.current, conversationId, next.draft, next.attachments);
+      return;
+    }
+    composerStateRef.current = next;
+    setDraft(next.draft);
+    setAttachments(next.attachments);
+    if (dropped) setAttachmentError('最多 5 个附件，部分附件未剪切回。');
     setComposerOpen(true);
     const recalledEnd = recalled.length;
     setCaretIndex(recalledEnd);
@@ -1349,11 +1595,23 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
 
   async function createConversation() {
     const currentId = activeConversationIdRef.current;
-    flushDraft(currentId, composerStateRef.current.draft);
-    stashComposerState(composerStash.current, currentId, composerStateRef.current.draft, composerStateRef.current.attachments);
-    if (currentId) goalPromptStash.current.set(currentId, goalPrompting);
+    const mainComposer = destinationRef.current === 'main'
+      ? composerStateRef.current : restoreComposerState(composerStash.current, currentId);
+    flushDraft(currentId, mainComposer.draft);
+    stashComposerState(composerStash.current, currentId, mainComposer.draft, mainComposer.attachments);
+    if (currentId && destinationRef.current === 'main') goalPromptStash.current.set(currentId, goalPrompting);
     await libraryAction((bridge) => bridge.createConversation(), () => {
+      if (activeConversationIdRef.current !== currentId) {
+        setLibraryOpen(false);
+        setComposerOpen(true);
+        return;
+      }
+      pendingNewConversationRef.current = true;
       activeConversationIdRef.current = null;
+      destinationRef.current = 'main';
+      sideChatRef.current = null;
+      sideComposerStash.current = { draft: '', attachments: [] };
+      setSideChat(null);
       setLibraryOpen(false);
       composerStateRef.current = { draft: '', attachments: [] };
       setDraft('');
@@ -1372,9 +1630,14 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
 
   // 输入停一下即落盘：关窗或关机不会丢半句话。附件不存——它们的临时文件不跨重启。
   useEffect(() => {
+    if (destinationRef.current !== 'main') return;
     const id = library?.activeConversationId;
-    if (!id) return;
-    const timer = window.setTimeout(() => { flushDraft(id, draft); }, 800);
+    if (!id || activeConversationIdRef.current !== id || composerStateRef.current.draft !== draft) return;
+    const timer = window.setTimeout(() => {
+      if (destinationRef.current === 'main' && activeConversationIdRef.current === id && composerStateRef.current.draft === draft) {
+        flushDraft(id, draft);
+      }
+    }, 800);
     return () => window.clearTimeout(timer);
   }, [draft, library?.activeConversationId]);
 
@@ -1382,30 +1645,42 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   // 优先（它是这次运行中最新的），只有它没有记录时才碰磁盘。
   const draftRestoredRef = useRef(false);
   useEffect(() => {
+    if (destinationRef.current !== 'main') return;
     const id = library?.activeConversationId;
     if (!id || draftRestoredRef.current || composerStash.current.has(id)) return;
     draftRestoredRef.current = true;
     let bridge: PetAPI;
     try { bridge = petBridge(); } catch { return; }
     void bridge.getDraft(id).then((text) => {
-      if (!text || composerStateRef.current.draft || activeConversationIdRef.current !== id) return;
+      if (!text || activeConversationIdRef.current !== id) return;
+      if (destinationRef.current === 'side') {
+        if (!composerStash.current.has(id)) stashComposerState(composerStash.current, id, text, []);
+        return;
+      }
+      if (composerStateRef.current.draft) return;
       composerStateRef.current = { draft: text, attachments: [] };
       setDraft(text);
       setCaretIndex(text.length);
       setComposerOpen(true);
     }).catch(() => undefined);
-  }, [library?.activeConversationId]);
+  }, [library?.activeConversationId, sideExpanded]);
 
   async function selectConversation(item: ConversationSummary) {
     const currentId = activeConversationIdRef.current;
-    flushDraft(currentId, composerStateRef.current.draft);
-    stashComposerState(composerStash.current, currentId, composerStateRef.current.draft, composerStateRef.current.attachments);
-    if (currentId) goalPromptStash.current.set(currentId, goalPrompting);
+    const mainComposer = destinationRef.current === 'main'
+      ? composerStateRef.current : restoreComposerState(composerStash.current, currentId);
+    flushDraft(currentId, mainComposer.draft);
+    stashComposerState(composerStash.current, currentId, mainComposer.draft, mainComposer.attachments);
+    if (currentId && destinationRef.current === 'main') goalPromptStash.current.set(currentId, goalPrompting);
     const operation = item.archivedAt === null
       ? (bridge: PetAPI) => bridge.selectConversation(item.id)
       : (bridge: PetAPI) => bridge.restoreConversation(item.id);
     await libraryAction(operation, () => {
       activeConversationIdRef.current = item.id;
+      destinationRef.current = 'main';
+      sideChatRef.current = null;
+      sideComposerStash.current = { draft: '', attachments: [] };
+      setSideChat(null);
       setLibraryOpen(false);
       setSessionMenuOpen(false);
       const goalDraftOpen = goalPromptStash.current.get(item.id) ?? false;
@@ -1432,7 +1707,12 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
       let bridge: PetAPI;
       try { bridge = petBridge(); } catch { return; }
       void bridge.getDraft(item.id).then((text) => {
-        if (!text || composerStateRef.current.draft || activeConversationIdRef.current !== item.id) return;
+        if (!text || activeConversationIdRef.current !== item.id) return;
+        if (destinationRef.current === 'side') {
+          if (!composerStash.current.has(item.id)) stashComposerState(composerStash.current, item.id, text, []);
+          return;
+        }
+        if (composerStateRef.current.draft) return;
         composerStateRef.current = { draft: text, attachments: [] };
         setDraft(text);
         setCaretIndex(text.length);
@@ -1473,18 +1753,22 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
       : [{ key: 'all', label: null, conversations: visibleConversations }];
 
   const status = snapshot?.proposal ? 'awaiting_approval' : snapshot?.taskStatus ?? 'idle';
+  const sideStatus = sideSessionId
+    ? sideChat?.snapshot?.proposal ? 'awaiting_approval' : sideChat?.snapshot?.taskStatus ?? 'idle'
+    : 'idle';
   // Live per-conversation statuses arrive through the library summaries now,
   // so every tab dot is truthful — the displayed conversation included.
   const conversationStatus = (item: ConversationSummary): TaskStatus => item.taskStatus;
   const statusRunning = (item: ConversationSummary): boolean => ['planning', 'awaiting_approval', 'executing', 'verifying'].includes(conversationStatus(item));
   const active = ['planning', 'awaiting_approval', 'executing', 'verifying'].includes(status);
   const statusLive = status === 'planning' || status === 'executing' || status === 'verifying';
-  const queuedCount = snapshot?.pendingMessages?.length ?? 0;
+  const pendingMessages = sideExpanded ? sideChat?.pendingMessages ?? [] : snapshot?.pendingMessages ?? [];
+  const queuedCount = pendingMessages.length;
   const empty = !libraryOpen && !sendingCurrent && !error && !voiceError && status === 'idle' && !snapshot?.currentTask && !snapshot?.timeline.length && !snapshot?.proposal && queuedCount === 0;
   // With no conversation left the bubble keeps its full shape: the ball form
   // has no tab strip and no room for the "+", and starting fresh is exactly
   // what the owner wants to do next.
-  const compactEmpty = empty && !expanded && !modelPickerOpen && !suggestionOpen && recentSessions.length > 0;
+  const compactEmpty = empty && !sideSessionId && !expanded && !modelPickerOpen && !suggestionOpen && recentSessions.length > 0;
   const layout: BubbleLayout = !compactEmpty ? 'full' : !composerOpen ? 'empty' : attachments.length ? 'composer_attachments' : 'composer';
   const compactComposerHeight = 112 + composerHeight + (attachments.length ? 26 : 0);
   // 30fps 的呼吸式动效：扫光与脉冲点改用 CSS 变量推进，值每 1/30 秒走一步——
@@ -1798,7 +2082,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
   const plan = snapshot?.plan ?? null;
 
   return (
-    <section className={`panel-bubble${compactEmpty ? ' is-empty' : ''}${expanded ? ' is-expanded' : ''}${composerOpen || composerExit.closing || ask || plan ? ' is-composing' : ''}${attachments.length ? ' has-attachments' : ''}${modelPickerOpen ? ' is-choosing-model' : ''}`} style={compactEmpty && (composerOpen || composerExit.closing) ? { height: compactComposerHeight } : undefined} aria-label="交互气泡" hidden={!visible} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => {
+    <section className={`panel-bubble${compactEmpty ? ' is-empty' : ''}${expanded ? ' is-expanded' : ''}${sideExpanded ? ' is-side-chat' : ''}${composerOpen || composerExit.closing || ask || plan ? ' is-composing' : ''}${attachments.length ? ' has-attachments' : ''}${modelPickerOpen ? ' is-choosing-model' : ''}`} style={compactEmpty && (composerOpen || composerExit.closing) ? { height: compactComposerHeight } : undefined} aria-label="交互气泡" hidden={!visible} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => {
       if (!event.dataTransfer.files.length) return;
       event.preventDefault();
       if (libraryOpen) return;
@@ -1918,6 +2202,14 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
           </div>}
         </aside>}
         <div className="panel-chat-main">
+        {sideSessionId && <div className={`panel-side-strip${sideExpanded ? ' is-expanded' : ''}`} aria-label="临时侧聊">
+          {sideExpanded ? <>
+            <button type="button" className="panel-side-back" aria-label="收起侧聊，返回主线" title="返回主线，侧聊继续保留" onClick={() => { void setSideExpanded(false); }}><BackIcon /><span>主线</span></button>
+            <span className="panel-side-name"><i className={`panel-task-dot panel-task-dot-${sideStatus}`} aria-hidden="true" />临时侧聊</span>
+            {sideChat?.queuePaused && <span className="panel-side-paused" title={sideChat.pauseReason || '发送新消息后继续处理保留的队列'}>已停止，队列保留</span>}
+          </> : <button type="button" className="panel-side-chip" aria-label={`展开临时侧聊，${sideChat?.queuePaused ? '已停止，队列保留' : taskLabels[sideStatus]}`} title={sideChat?.queuePaused ? '已停止，队列保留；点击展开' : '展开临时侧聊'} onClick={() => { void setSideExpanded(true); }}><i className={`panel-task-dot panel-task-dot-${sideStatus}`} aria-hidden="true" />侧聊</button>}
+          <button type="button" className="panel-side-discard" aria-label="结束并丢弃临时侧聊" title="结束临时侧聊，记录不进入会话库" onClick={() => { void discardSide(); }}>×</button>
+        </div>}
         {status !== 'idle' && (
           <div className="panel-status-row">
             <span className={`panel-status panel-status-${status}`} role="status"><i />{statusLive ? <span className="panel-live-label">{taskLabels[status]}</span> : taskLabels[status]}</span>
@@ -1935,6 +2227,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
             // Reaching the top pulls in the next stretch of older history.
             if (feed.scrollTop < 240) loadEarlier();
           }}>
+            {sideExpanded && <p className="panel-side-intro">临时侧聊，记录不进入会话库</p>}
             {visibleGroups.map((group, index) => {
               if (group.kind === 'single') return <EntryItem key={group.entry.id} entry={group.entry} running={false} onOpenImage={openImageViewer} display={rowDisplay} />;
               const segments = segmentTurn(group.items);
@@ -1956,7 +2249,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
               // "Latest reply" is the turn's final entry itself: a mid-turn
               const runAnchor = group.items[0];
               return <div className="panel-turn" key={group.user.id}>
-                <TimelineItem entry={group.user} display={rowDisplay} onAvatarMenu={(event) => showTurnMenu(event, group.user.id, turnMenuTitle(group.user), isLiveTurn)} />
+                <TimelineItem entry={group.user} display={rowDisplay} onAvatarMenu={sideExpanded ? undefined : (event) => showTurnMenu(event, group.user.id, turnMenuTitle(group.user), isLiveTurn)} />
                 {/* 插话夹在自己的消息和这条回复之间，按条数叠成一列——它们是
                     消息，不是小鲸气泡里的东西；过程依旧整条可折叠。 */}
                 {asides.length > 0 && <div className="panel-turn-asides">
@@ -1964,7 +2257,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
                 </div>}
                 {runAnchor && <article className="panel-event panel-event-assistant is-run" data-entry-id={firstReplyId ?? runAnchor.id}
                   aria-label={`${kindLabels.assistant}，${timeText(runAnchor.time)}`}>
-                  <div className="panel-event-avatar" aria-hidden="true" onContextMenu={(event) => showTurnMenu(event, group.user.id, turnMenuTitle(group.user), isLiveTurn)}>
+                  <div className="panel-event-avatar" aria-hidden="true" onContextMenu={sideExpanded ? undefined : (event) => showTurnMenu(event, group.user.id, turnMenuTitle(group.user), isLiveTurn)}>
                     <AvatarGlyph kind="assistant" fallback="鲸" name={rowDisplay.avatars.assistant} />
                     {rowDisplay.showTimestamps && <time className="panel-event-time" dateTime={runAnchor.time}>{timeText(runAnchor.time)}</time>}
                   </div>
@@ -2032,33 +2325,33 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
           </button>}
         </div>
 
-        {(snapshot?.pendingMessages?.length ?? 0) > 0 && <div className="panel-queue" aria-label="待发送消息">
-          <div className="panel-queue-heading">待发送 <strong>{snapshot?.pendingMessages?.length}</strong></div>
-          <div className="panel-queue-list">{snapshot?.pendingMessages?.map((message) => <div key={message.id} className="panel-queue-item">
+        {pendingMessages.length > 0 && <div className="panel-queue" aria-label="待发送消息">
+          <div className="panel-queue-heading">待发送 <strong>{pendingMessages.length}</strong></div>
+          <div className="panel-queue-list">{pendingMessages.map((message) => <div key={message.id} className="panel-queue-item">
             <span title={message.text}>{message.text || `附件 ${message.attachments.length} 个`}</span>
-            <button type="button" aria-label={`引导：${message.text.slice(0, 20)}`} title="引导（插队发送）" onClick={() => { void run((bridge) => bridge.steerQueuedMessage(message.id)); }}><ReturnIcon /></button>
+            <button type="button" aria-label={`引导：${message.text.slice(0, 20)}`} title="引导（插队发送）" onClick={() => { const id = sideExpanded ? sideSessionId : null; void run((bridge) => id ? bridge.steerSideQueuedMessage(id, message.id) : bridge.steerQueuedMessage(message.id)); }}><ReturnIcon /></button>
             <button type="button" aria-label={`修改待发送消息：${message.text.slice(0, 20)}`} title="修改" onClick={() => { void editQueuedMessage(message); }}><EditIcon /></button>
-            <button type="button" aria-label={`移除待发送消息：${message.text.slice(0, 20)}`} title="从队列移除" onClick={() => { void run((bridge) => bridge.removeQueuedMessage(message.id)); }}>×</button>
+            <button type="button" aria-label={`移除待发送消息：${message.text.slice(0, 20)}`} title="从队列移除" onClick={() => { const id = sideExpanded ? sideSessionId : null; void run((bridge) => id ? bridge.removeSideQueuedMessage(id, message.id) : bridge.removeQueuedMessage(message.id)); }}>×</button>
           </div>)}</div>
         </div>}
 
-        {!compactEmpty && <TaskStrip key={library?.activeConversationId} tasks={tasks} planMode={Boolean(snapshot?.planMode)} />}
+        {!compactEmpty && <TaskStrip key={sideExpanded ? sideSessionId : library?.activeConversationId} tasks={tasks} planMode={Boolean(snapshot?.planMode)} />}
 
-        {!compactEmpty && snapshot?.goal && <GoalBanner goal={snapshot.goal} onClear={clearGoal} />}
+        {!compactEmpty && !sideExpanded && snapshot?.goal && <GoalBanner goal={snapshot.goal} onClear={clearGoal} />}
 
         <div className={`panel-compose-dock${composerOpen || composerExit.closing || ask || plan ? ' is-open' : ''}`} ref={composeDockRef}>
           {ask ? (
             <AskQuestionPanel
               key={ask.id}
               request={ask}
-              onSubmit={(answers) => run((bridge) => bridge.answerQuestion(ask.id, answers))}
-              onSkip={() => run((bridge) => bridge.answerQuestion(ask.id, null))}
+              onSubmit={(answers) => run((bridge) => sideExpanded && sideSessionId ? bridge.answerSideChatQuestion(sideSessionId, ask.id, answers) : bridge.answerQuestion(ask.id, answers))}
+              onSkip={() => run((bridge) => sideExpanded && sideSessionId ? bridge.answerSideChatQuestion(sideSessionId, ask.id, null) : bridge.answerQuestion(ask.id, null))}
             />
           ) : plan ? (
             <PlanApprovalPanel
               key={plan.id}
               request={plan}
-              onDecide={(approved) => run((bridge) => bridge.answerPlan(plan.id, approved))}
+              onDecide={(approved) => run((bridge) => sideExpanded && sideSessionId ? bridge.answerSideChatPlan(sideSessionId, plan.id, approved) : bridge.answerPlan(plan.id, approved))}
             />
           ) : composerOpen || composerExit.closing ? (
           <form className={`panel-composer${composerOpen ? '' : ' is-closing'}`} ref={composerRef} onAnimationEnd={composerExit.endClose} onSubmit={(event) => { event.preventDefault(); void send('queue'); }} onKeyDown={(event) => {
@@ -2093,7 +2386,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
                   maxLength={8000}
                   rows={1}
                   style={{ height: composerHeight }}
-                  placeholder={goalPrompting ? '请输入当前的目标，回车设定' : '输入消息…'}
+                  placeholder={sideExpanded ? '在临时侧聊中提问…' : goalPrompting ? '请输入当前的目标，回车设定' : '输入消息…'}
                   aria-controls={suggestionOpen ? 'panel-composer-suggestions' : undefined}
                   aria-expanded={suggestionOpen && (suggestionLoading || suggestionItems.length > 0)}
                   aria-activedescendant={suggestionOpen && suggestionItems.length > 0 ? `panel-suggestion-${suggestionSelected}` : undefined}
@@ -2142,11 +2435,13 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
                     onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); setModelPickerOpen(false); } }}>
                     <div className="panel-popover-heading">模型</div>
                     <div className="panel-model-list" role="radiogroup" aria-label="选择模型配置">
+                      {sideExpanded && <div className="panel-model-empty">临时侧聊沿用开启时的模型。回到主线可切换配置。</div>}
                       {(library?.settings.modelProfiles ?? []).length === 0 &&
                         <div className="panel-model-empty">还没有模型配置——<button type="button" className="panel-model-empty-link" onClick={() => { void run((bridge) => bridge.openOnboarding()); }}>打开配置向导</button></div>}
                       {(library?.settings.modelProfiles ?? []).map((profile) => (
                         <button key={profile.id} type="button" role="radio" aria-checked={profile.id === library?.settings.activeModelProfileId}
                           className={`panel-model-pick${profile.id === library?.settings.activeModelProfileId ? ' is-active' : ''}`}
+                          disabled={sideExpanded}
                           onClick={() => { void switchModelProfile(profile.id); }}>
                           <span>{profile.name}</span>{profile.id === library?.settings.activeModelProfileId && <span className="panel-model-check">✓</span>}
                         </button>))}
@@ -2162,7 +2457,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
                         <span>计划模式</span>
                         <span className="panel-mode-switch" aria-hidden="true" />
                       </button>
-                      <button type="button" role="switch" aria-checked={goalPrompting || Boolean(snapshot?.goal)} className={`panel-mode-toggle${goalPrompting || snapshot?.goal ? ' is-on' : ''}`} disabled={snapshot?.mode !== 'claude_code'}
+                      <button type="button" role="switch" aria-checked={goalPrompting || Boolean(snapshot?.goal)} className={`panel-mode-toggle${goalPrompting || snapshot?.goal ? ' is-on' : ''}`} disabled={sideExpanded || snapshot?.mode !== 'claude_code'}
                         title={goalPrompting || snapshot?.goal ? '关闭目标模式' : '打开后在输入框里写下目标并回车'}
                         onClick={toggleGoal}>
                         <span>目标模式</span>
@@ -2171,7 +2466,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
                     </div>
                   </div>
                 </div>
-                <div className="panel-effort-wrap" ref={effortMenuRef}>
+                {!sideExpanded && <div className="panel-effort-wrap" ref={effortMenuRef}>
                   <button type="button" className={`panel-tool-button panel-effort-button${snapshot?.effort && snapshot.effort !== 'max' ? ' is-on' : ''}`} aria-label={`思考强度：${EFFORT_LABELS[snapshot?.effort ?? 'max']}`} aria-haspopup="dialog" aria-expanded={effortMenuOpen} title={`思考强度：${EFFORT_LABELS[snapshot?.effort ?? 'max']}`} disabled={!snapshot} onClick={() => setEffortMenuOpen((open) => !open)}>
                     <EffortIcon />
                     <span className="panel-effort-badge">{EFFORT_LABELS[snapshot?.effort ?? 'max']}</span>
@@ -2181,7 +2476,7 @@ export function PanelBubble({ visible, snapshot, error, run }: PanelBubbleProps)
                     <div className="panel-popover-heading">思考强度</div>
                     <EffortSlider value={snapshot?.effort ?? 'max'} disabled={!snapshot} onCommit={chooseEffort} />
                   </div>
-                </div>
+                </div>}
                 <div className="panel-context-wrap" ref={contextMenuRef}>
                   <ContextMeter usage={contextUsage} compacting={contextCompacting} open={contextMenuOpen} onToggle={() => setContextMenuOpen((open) => !open)} />
                   <div className={`panel-context-menu${contextMenuOpen ? ' is-open' : ''}`} role="dialog" aria-label="上下文" aria-hidden={!contextMenuOpen} inert={!contextMenuOpen}

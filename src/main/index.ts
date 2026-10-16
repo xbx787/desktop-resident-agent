@@ -3,6 +3,7 @@ import { mkdirSync, promises as fsp } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { AgentRuntime } from './agent-runtime'
+import { SideChatController, activeSideChatParentId } from './side-chat'
 import { isAskAnswers } from './ask-questions'
 import { ConversationController } from './conversation-controller'
 import { MemoryService, type MemoryProvider } from './memory-service'
@@ -184,12 +185,12 @@ function publishSnapshot(): void {
 // from a saved model profile instead of the launch environment.
 // One runtime (and one engine connection) per conversation that actually
 // runs; the controller creates them on demand through this factory.
-const createRuntime = (onChange: () => void): AgentRuntime => new AgentRuntime(
+const createRuntime = (onChange: () => void, persistSession = true): AgentRuntime => new AgentRuntime(
   new NoteStore(projectRoot),
   apiKey ? new DeepSeekClient(apiKey) : undefined,
   onChange,
   claudeExecutable
-    ? new ClaudeAgentClient(claudeExecutable, claudeKey ?? '', agentWorkspace, path.join(dataRoot, 'claude'), windowsMcpServers)
+    ? new ClaudeAgentClient(claudeExecutable, claudeKey ?? '', agentWorkspace, path.join(dataRoot, 'claude'), windowsMcpServers, persistSession)
     : undefined,
   agentWorkspace
 )
@@ -219,6 +220,36 @@ controller.setTurnHooks({
     }
   }
 })
+
+const sideSnapshotScheduler = createSnapshotScheduler(() => {
+  if (avatarWindow && !avatarWindow.isDestroyed()) {
+    avatarWindow.webContents.send('pet:side-snapshot', sideChat.takePublishSnapshot())
+  }
+}, 80)
+const sideChat = new SideChatController(
+  createRuntime,
+  () => {
+    const owner = activeController()
+    const snapshot = owner.getSnapshot()
+    const parentConversationId = activeSideChatParentId(owner.displayedConversationId(), snapshot.conversationLibrary)
+    return {
+      parentConversationId,
+      mode: snapshot.mode,
+      settings: snapshot.conversationLibrary.settings,
+      history: parentConversationId ? owner.captureSideChatHistory() : []
+    }
+  },
+  () => memory.contextBlock(),
+  () => sideSnapshotScheduler.publish(),
+  (error) => console.error('Temporary side chat failed:', error),
+  () => {
+    const owner = activeController()
+    return activeSideChatParentId(owner.displayedConversationId(), owner.getSnapshot().conversationLibrary)
+  },
+  () => activeController().currentSettings()
+)
+controller.setDisplayChangeListener(() => { void sideChat.discard() })
+controller.setRuntimeConfigurationChangeListener(() => { void sideChat.discard() })
 
 function activeController(): ConversationController {
   if (!controller) throw new Error('会话库尚未就绪。')
@@ -561,6 +592,11 @@ async function readAvatarDataUrl(kind: 'user' | 'assistant'): Promise<string | n
 
 function registerIpc(): void {
   const trusted = (event: Electron.IpcMainInvokeEvent): boolean => event.sender.id === avatarWindow?.webContents.id
+  const resolveAttachments = async (items: UserAttachment[]): Promise<UserAttachment[]> => Promise.all(items.map(async (item) => {
+    if (!item.path) return item
+    const file = await verifyDroppedFilePath(item.path)
+    return { ...item, path: file.path, name: file.name }
+  }))
   // The settings window manages model profiles and avatars too — the data
   // lives beside its own settings — so those channels accept either window.
   // Everything else stays avatar-only on purpose.
@@ -623,7 +659,7 @@ function registerIpc(): void {
   })
   ipcMain.handle('pet:growth:adopt', async (event, id: unknown) => {
     if (!settingsTrusted(event) || typeof id !== 'string') throw new Error('采纳请求无效。')
-    if (!activeController().allConversationsIdle()) throw new Error('请等其他会话完成或停止后再采纳。')
+    if (!activeController().allConversationsIdle() || sideChat.isBusy()) throw new Error('请等其他会话和临时侧聊完成或停止后再采纳。')
     const adopted = await growth.adopt(id)
     if (adopted.version) restartWhenIdle(adopted.version)
     return adopted
@@ -656,6 +692,77 @@ function registerIpc(): void {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     return publicSnapshot(activeController().getSnapshot())
   })
+  ipcMain.handle('pet:side:get', (event) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    return sideChat.getSnapshot()
+  })
+  ipcMain.handle('pet:side:open', (event) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    return sideChat.open()
+  })
+  ipcMain.handle('pet:side:set-expanded', (event, sessionId: unknown, expanded: unknown) => {
+    if (!trusted(event) || typeof sessionId !== 'string' || typeof expanded !== 'boolean') throw new Error('临时侧聊状态无效。')
+    return sideChat.setExpanded(sessionId, expanded)
+  })
+  ipcMain.handle('pet:side:discard', (event, sessionId: unknown) => {
+    if (!trusted(event) || typeof sessionId !== 'string') throw new Error('临时侧聊编号无效。')
+    return sideChat.discard(sessionId)
+  })
+  ipcMain.handle('pet:side:send', async (event, sessionId: unknown, text: unknown, attachments: unknown, strategy: unknown) => {
+    if (!trusted(event) || typeof sessionId !== 'string' || typeof text !== 'string' ||
+        !validAttachmentList(attachments ?? []) ||
+        (strategy !== undefined && strategy !== 'queue' && strategy !== 'steer')) throw new Error('临时侧聊消息无效。')
+    const resolved = await resolveAttachments((attachments ?? []) as UserAttachment[])
+    await sideChat.send(sessionId, text, resolved, strategy as 'queue' | 'steer' | undefined)
+  })
+  ipcMain.handle('pet:side:stop', (event, sessionId: unknown) => {
+    if (!trusted(event) || typeof sessionId !== 'string') throw new Error('临时侧聊编号无效。')
+    sideChat.stop(sessionId)
+  })
+  ipcMain.handle('pet:side:interrupt', (event, sessionId: unknown) => {
+    if (!trusted(event) || typeof sessionId !== 'string') throw new Error('临时侧聊编号无效。')
+    return sideChat.interrupt(sessionId)
+  })
+  ipcMain.handle('pet:side:remove-queued', (event, sessionId: unknown, messageId: unknown) => {
+    if (!trusted(event) || typeof sessionId !== 'string' || typeof messageId !== 'string') throw new Error('队列编号无效。')
+    sideChat.removeQueued(sessionId, messageId)
+  })
+  ipcMain.handle('pet:side:steer-queued', (event, sessionId: unknown, messageId: unknown) => {
+    if (!trusted(event) || typeof sessionId !== 'string' || typeof messageId !== 'string') throw new Error('队列编号无效。')
+    return sideChat.steerQueued(sessionId, messageId)
+  })
+  ipcMain.handle('pet:side:approve-action', (event, sessionId: unknown, id: unknown) => {
+    if (!trusted(event) || typeof sessionId !== 'string' || typeof id !== 'string') throw new Error('操作编号无效。')
+    return sideChat.approveAction(sessionId, id)
+  })
+  ipcMain.handle('pet:side:reject-action', (event, sessionId: unknown, id: unknown) => {
+    if (!trusted(event) || typeof sessionId !== 'string' || typeof id !== 'string') throw new Error('操作编号无效。')
+    sideChat.rejectAction(sessionId, id)
+  })
+  ipcMain.handle('pet:side:answer-question', (event, sessionId: unknown, id: unknown, answers: unknown) => {
+    if (!trusted(event) || typeof sessionId !== 'string' || typeof id !== 'string' || !isAskAnswers(answers)) throw new Error('答案格式无效。')
+    return sideChat.answerQuestion(sessionId, id, answers)
+  })
+  ipcMain.handle('pet:side:answer-plan', (event, sessionId: unknown, id: unknown, approved: unknown) => {
+    if (!trusted(event) || typeof sessionId !== 'string' || typeof id !== 'string' || typeof approved !== 'boolean') throw new Error('批准结果无效。')
+    return sideChat.answerPlan(sessionId, id, approved)
+  })
+  ipcMain.handle('pet:side:get-context-usage', (event, sessionId: unknown) => {
+    if (!trusted(event) || typeof sessionId !== 'string') throw new Error('临时侧聊编号无效。')
+    return sideChat.getContextUsage(sessionId)
+  })
+  ipcMain.handle('pet:side:compact', (event, sessionId: unknown) => {
+    if (!trusted(event) || typeof sessionId !== 'string') throw new Error('临时侧聊编号无效。')
+    return sideChat.compact(sessionId)
+  })
+  ipcMain.handle('pet:side:set-model-mode', (event, sessionId: unknown, mode: unknown) => {
+    if (!trusted(event) || typeof sessionId !== 'string' || (mode !== 'demo' && mode !== 'live' && mode !== 'claude_code')) throw new Error('模型选项无效。')
+    sideChat.setModelMode(sessionId, mode)
+  })
+  ipcMain.handle('pet:side:set-plan-mode', (event, sessionId: unknown, on: unknown) => {
+    if (!trusted(event) || typeof sessionId !== 'string' || typeof on !== 'boolean') throw new Error('计划模式设置无效。')
+    return sideChat.setPlanMode(sessionId, on)
+  })
   ipcMain.handle('pet:send-message', async (event, text: unknown, attachments: unknown, strategy: unknown, conversationId: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     if (conversationId !== undefined && typeof conversationId !== 'string') throw new Error('会话编号无效。')
@@ -666,6 +773,20 @@ function registerIpc(): void {
     if (strategy !== undefined && strategy !== 'queue' && strategy !== 'steer') throw new Error('发送方式无效。')
     const slash = parseAppSlashCommand(text)
     if (slash) {
+      if (slash.name === 'side' || slash.name === 'btw') {
+        const originId = activeController().displayedConversationId()
+        const originEpoch = activeController().displayedConversationEpoch()
+        if (conversationId !== undefined && conversationId !== originId) {
+          throw new Error('主会话已切换，请重新发送。')
+        }
+        const resolved = await resolveAttachments((attachments ?? []) as UserAttachment[])
+        if (activeController().displayedConversationId() !== originId ||
+            activeController().displayedConversationEpoch() !== originEpoch) throw new Error('主会话已切换，请重新发送。')
+        // An attachment alone is a valid first question. The controller
+        // validates before opening and rolls back a failed send atomically.
+        await sideChat.openWithMessage(slash.args, resolved)
+        return
+      }
       if ((attachments as Array<unknown> | undefined)?.length) throw new Error('应用命令不能附带文件。')
       if (slash.name !== 'new' && slash.args) throw new Error(`/${slash.name} 不接受额外参数。`)
       if (slash.name === 'new') {
@@ -678,11 +799,7 @@ function registerIpc(): void {
       }
       return
     }
-    const resolved = await Promise.all(((attachments ?? []) as UserAttachment[]).map(async (item) => {
-      if (!item.path) return item
-      const file = await verifyDroppedFilePath(item.path)
-      return { ...item, path: file.path, name: file.name }
-    }))
+    const resolved = await resolveAttachments((attachments ?? []) as UserAttachment[])
     await activeController().sendMessage(text, resolved, strategy as 'queue' | 'steer' | undefined, conversationId as string | undefined)
   })
   ipcMain.handle('pet:create-conversation', async (event, title: unknown) => {
@@ -1137,6 +1254,7 @@ if (ownsSingleInstance) void app.whenReady().then(async () => {
 
 app.on('before-quit', () => {
   controller?.stopAll()
+  void sideChat.discard()
   if (balanceWindow && !balanceWindow.isDestroyed()) balanceWindow.destroy()
   balanceWindow = undefined
   tray?.destroy()

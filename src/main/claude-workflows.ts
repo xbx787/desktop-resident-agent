@@ -31,13 +31,15 @@ const VALID_NAME = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/
 /** Commands implemented by the app itself; SDK commands are appended at runtime. */
 export const APP_SLASH_COMMANDS: readonly ClaudeWorkflowOption[] = [
   { name: 'new', description: '新建对话，保留原对话', kind: 'command', source: 'builtin' },
+  { name: 'side', description: '展开临时侧聊，不写入主会话', kind: 'command', source: 'builtin' },
+  { name: 'btw', description: '展开临时侧聊', kind: 'command', source: 'builtin' },
   { name: 'sessions', description: '打开会话库', kind: 'command', source: 'builtin' },
   { name: 'model', description: '打开模型与上下文面板', kind: 'command', source: 'builtin' },
   { name: 'help', description: '查看可用命令', kind: 'command', source: 'builtin' },
   { name: 'compact', description: '压缩当前对话上下文', kind: 'command', source: 'builtin' }
 ]
 
-export type AppSlashCommandName = 'new' | 'sessions' | 'model' | 'help' | 'compact'
+export type AppSlashCommandName = 'new' | 'side' | 'btw' | 'sessions' | 'model' | 'help' | 'compact'
 
 export function parseAppSlashCommand(input: string): { name: AppSlashCommandName; args: string } | null {
   if (typeof input !== 'string') return null

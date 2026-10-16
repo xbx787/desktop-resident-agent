@@ -185,6 +185,32 @@ describe('Claude Agent SDK persistent streaming session', () => {
     } finally { await client.dispose() }
   })
 
+  it('does not persist or resume an ephemeral side session after its query is released', async () => {
+    const sent: string[] = []
+    queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* (message) {
+      sent.push(String(message.message.content))
+      yield { type: 'result', subtype: 'success', is_error: false, result: '已处理', session_id: sessionId,
+        user_message_uuids: [message.uuid], queued_turn_count: 0 }
+    }))
+    const client = new ClaudeAgentClient(executable, 'test-key', process.cwd(), undefined, {}, false)
+    try {
+      await client.respond([{ role: 'user', content: '第一次' }], new AbortController().signal)
+      expect((queryMock.mock.calls[0][0] as Request).options.persistSession).toBe(false)
+      await client.dispose()
+      expect((await client.getContextUsage(sessionId)).status).toBe('unavailable')
+      await expect(client.compact(sessionId)).rejects.toThrow('不能恢复后压缩')
+      await client.respond([
+        { role: 'user', content: '第一次' }, { role: 'assistant', content: '已处理' },
+        { role: 'user', content: '第二次' }
+      ], new AbortController().signal, undefined, sessionId)
+      expect(queryMock).toHaveBeenCalledTimes(2)
+      expect((queryMock.mock.calls[1][0] as Request).options.resume).toBeUndefined()
+      expect((queryMock.mock.calls[1][0] as Request).options.persistSession).toBe(false)
+      expect(sent[1]).toContain('第一次')
+      expect(sent[1]).toContain('第二次')
+    } finally { await client.dispose() }
+  })
+
   it('keeps more than the last twelve turns in a session-less transcript prompt', async () => {
     const sent: string[] = []
     queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* (message) {

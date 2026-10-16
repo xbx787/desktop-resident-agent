@@ -1,0 +1,322 @@
+// @vitest-environment jsdom
+import { act } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { AppSnapshot, ConversationSettings, PetAPI, SideChatSnapshot } from '../src/shared/contracts'
+import { PanelBubble } from '../src/renderer/panel'
+
+(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+const settings: ConversationSettings = {
+  visibleConversationTabs: 5, autoArchiveAfterDays: 0, goalMaxIterations: 30, goalMaxMinutes: 180,
+  memoryEnabled: true, effort: 'high', modelProfiles: [], activeModelProfileId: null,
+  enableAutoTitleGeneration: true, showMessageTimestamps: true, userName: '主人', assistantName: '小鲸',
+  userAvatar: null, assistantAvatar: null, tabOrder: []
+}
+
+const mainSnapshot: AppSnapshot = {
+  mode: 'claude_code', avatarState: 'idle', taskStatus: 'idle', modelReady: true, claudeCodeReady: true,
+  conversationId: 'main-a', timelineRevision: 1,
+  timeline: [{ id: 'main-entry', kind: 'assistant', time: '2026-10-15T10:00:00.000Z', text: '主线里的内容' }],
+  conversationLibrary: {
+    settings, activeConversationId: 'main-a',
+    conversations: [{ id: 'main-a', title: '主线', createdAt: '2026-10-15T10:00:00.000Z',
+      updatedAt: '2026-10-15T10:00:00.000Z', lastActivityAt: '2026-10-15T10:00:00.000Z',
+      archivedAt: null, pinnedAt: null, mode: 'claude_code', taskStatus: 'idle', messageCount: 1, preview: '' }]
+  }
+}
+
+const sideRuntime: AppSnapshot = {
+  mode: 'claude_code', avatarState: 'idle', taskStatus: 'idle', modelReady: true, claudeCodeReady: true,
+  conversationId: 'side-1', timelineRevision: 1,
+  timeline: [{ id: 'side-entry', kind: 'assistant', time: '2026-10-15T10:01:00.000Z', text: '侧聊里的内容' }]
+}
+
+const emptySide = (): SideChatSnapshot => ({ sessionId: null, parentConversationId: null,
+  expanded: false, queuePaused: false, snapshot: null, pendingMessages: [] })
+const side = (expanded = true, runtime = sideRuntime): SideChatSnapshot => ({
+  sessionId: 'side-1', parentConversationId: 'main-a', expanded, queuePaused: false,
+  snapshot: runtime, pendingMessages: []
+})
+
+function switchedMain(action: 'archive' | 'delete'): AppSnapshot {
+  const first = mainSnapshot.conversationLibrary!.conversations[0]
+  const second = { ...first, id: 'main-b', title: 'B 主线', preview: 'B 的对话' }
+  return {
+    ...mainSnapshot, conversationId: 'main-b', timelineRevision: 2,
+    timeline: [{ id: 'main-b-entry', kind: 'assistant', time: '2026-10-15T10:03:00.000Z', text: 'B 主线里的内容' }],
+    conversationLibrary: {
+      ...mainSnapshot.conversationLibrary!, activeConversationId: 'main-b',
+      conversations: action === 'archive'
+        ? [{ ...first, archivedAt: '2026-10-15T10:03:00.000Z' }, second]
+        : [second]
+    }
+  }
+}
+
+function click(element: Element): void {
+  element.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+}
+
+function type(editor: HTMLTextAreaElement, value: string): void {
+  Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!.call(editor, value)
+  editor.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+function enter(editor: HTMLTextAreaElement): void {
+  editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+}
+
+function drop(host: HTMLElement, name: string): void {
+  const event = new Event('drop', { bubbles: true, cancelable: true })
+  Object.defineProperty(event, 'dataTransfer', { value: { files: [new File(['hello'], name)], types: ['Files'] } })
+  host.querySelector('.panel-bubble')!.dispatchEvent(event)
+}
+
+describe('temporary side chat stays in the same panel', () => {
+  let host: HTMLDivElement
+  let root: Root
+  let bridge: PetAPI
+  let sideListeners: Set<(next: SideChatSnapshot) => void>
+  let sendMain: ReturnType<typeof vi.fn>
+  let sendSide: ReturnType<typeof vi.fn>
+  let saveDraft: ReturnType<typeof vi.fn>
+  let getDraft: ReturnType<typeof vi.fn>
+  let stopMain: ReturnType<typeof vi.fn>
+  let stopSide: ReturnType<typeof vi.fn>
+  let removeSideQueuedMessage: ReturnType<typeof vi.fn>
+  let removeQueuedMessage: ReturnType<typeof vi.fn>
+  let listClaudeWorkflows: ReturnType<typeof vi.fn>
+  let prepareDroppedFile: ReturnType<typeof vi.fn>
+  let sideRuntimeState: AppSnapshot
+
+  beforeEach(() => {
+    vi.stubGlobal('ResizeObserver', class { observe(): void {} disconnect(): void {} })
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => window.setTimeout(callback, 0))
+    Element.prototype.scrollIntoView = vi.fn()
+    sideListeners = new Set()
+    sideRuntimeState = sideRuntime
+    host = document.createElement('div')
+    document.body.appendChild(host)
+    root = createRoot(host)
+    saveDraft = vi.fn(async () => undefined)
+    getDraft = vi.fn(async (id: string) => id === 'main-b' ? 'B 保存的草稿' : '')
+    sendSide = vi.fn(async () => undefined)
+    stopMain = vi.fn(async () => undefined)
+    stopSide = vi.fn(async () => undefined)
+    removeSideQueuedMessage = vi.fn(async () => undefined)
+    removeQueuedMessage = vi.fn(async () => undefined)
+    listClaudeWorkflows = vi.fn(async () => [
+      ...['new', 'side', 'btw', 'sessions', 'model', 'help', 'compact', 'goal', 'review'].map((name) =>
+        ({ name, description: '', kind: 'command' as const, source: 'builtin' as const }))
+    ])
+    prepareDroppedFile = vi.fn(async (filePath: string) => ({ name: filePath.split('\\').at(-1)!, content: '', path: filePath }))
+    sendMain = vi.fn(async (text: string) => {
+      if (/^\/(?:side|btw)(?:\s|$)/u.test(text)) for (const listener of sideListeners) listener(side())
+    })
+    const setSideChatExpanded = vi.fn(async (_id: string, expanded: boolean) => {
+      const next = side(expanded, sideRuntimeState)
+      for (const listener of sideListeners) listener(next)
+      return next
+    })
+    bridge = new Proxy({
+      sendMessage: sendMain, sendSideChatMessage: sendSide, stop: stopMain, stopSideChat: stopSide,
+      removeSideQueuedMessage, removeQueuedMessage,
+      getPathForFile: (file: File) => `C:\\workspace\\${file.name}`,
+      prepareDroppedFile, listClaudeWorkflows,
+      saveDraft, getDraft, getSideChat: async () => emptySide(), setSideChatExpanded,
+      onSideChatSnapshot: (listener: (next: SideChatSnapshot) => void) => {
+        sideListeners.add(listener)
+        return () => { sideListeners.delete(listener) }
+      }
+    } as Record<string, unknown>, {
+      get(target, property: string) {
+        if (property in target) return target[property]
+        if (property.startsWith('on')) return () => () => {}
+        if (property === 'getDraft') return async () => ''
+        if (property === 'getContextUsage' || property === 'getSideChatContextUsage') return async () => ({ status: 'unavailable' })
+        if (property === 'readAvatar') return async () => null
+        if (property === 'listClaudeWorkflows' || property === 'searchWorkspaceFiles') return async () => []
+        return async () => undefined
+      }
+    }) as unknown as PetAPI
+    ;(window as unknown as { pet: PetAPI }).pet = bridge
+  })
+
+  afterEach(async () => {
+    await act(async () => root.unmount())
+    host.remove()
+    vi.unstubAllGlobals()
+  })
+
+  async function mount(snapshot: AppSnapshot = mainSnapshot): Promise<void> {
+    await act(async () => root.render(<PanelBubble visible snapshot={snapshot} error={null}
+      run={async (action) => { try { await action(bridge); return true } catch { return false } }} />))
+  }
+
+  async function editor(): Promise<HTMLTextAreaElement> {
+    let input = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="输入消息"]')
+    if (!input) {
+      await act(async () => click(host.querySelector('.panel-compose-trigger')!))
+      input = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="输入消息"]')
+    }
+    return input!
+  }
+
+  it('opens /side without adding a main message and routes later sends to the side runtime', async () => {
+    await mount()
+    const input = await editor()
+    await act(async () => { type(input, '/side 先问个旁支问题'); enter(input) })
+    expect(sendMain).toHaveBeenCalledWith('/side 先问个旁支问题', [], 'queue', 'main-a')
+    expect(host.textContent).toContain('侧聊里的内容')
+    expect(host.textContent).not.toContain('主线里的内容')
+    expect(host.textContent).toContain('临时侧聊，记录不进入会话库')
+    await act(async () => { type(input, '继续侧聊'); enter(input) })
+    expect(sendSide).toHaveBeenCalledWith('side-1', '继续侧聊', [], 'queue')
+    expect(sendMain).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps separate drafts and never persists a side draft as the main draft', async () => {
+    await mount()
+    const input = await editor()
+    await act(async () => { type(input, '主线草稿') })
+    await act(async () => { for (const listener of sideListeners) listener(side()) })
+    expect(input.value).toBe('')
+    await act(async () => { type(input, '侧聊草稿') })
+    await act(async () => click(host.querySelector('button[aria-label="收起侧聊，返回主线"]')!))
+    expect(input.value).toBe('主线草稿')
+    expect(host.textContent).toContain('主线里的内容')
+    expect(host.textContent).not.toContain('侧聊里的内容')
+    await act(async () => click(host.querySelector('button[aria-label^="展开临时侧聊"]')!))
+    expect(input.value).toBe('侧聊草稿')
+    expect(saveDraft.mock.calls.every(([_, value]) => value !== '侧聊草稿')).toBe(true)
+  })
+
+  it('uses Escape to stop only the expanded side task', async () => {
+    await mount()
+    await act(async () => { for (const listener of sideListeners) listener(side(true, { ...sideRuntime, taskStatus: 'executing' })) })
+    await act(async () => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })) })
+    expect(stopSide).toHaveBeenCalledWith('side-1')
+    expect(stopMain).not.toHaveBeenCalled()
+  })
+
+  it('keeps dropped files in the side draft while the main composer is selected', async () => {
+    await mount()
+    await editor()
+    await act(async () => { for (const listener of sideListeners) listener(side()) })
+    await act(async () => { drop(host, 'brief.docx') })
+    expect(host.querySelector('[aria-label="已添加附件"]')?.textContent).toContain('brief')
+    await act(async () => click(host.querySelector('button[aria-label="收起侧聊，返回主线"]')!))
+    expect(host.querySelector('[aria-label="已添加附件"]')).toBeNull()
+    await act(async () => click(host.querySelector('button[aria-label^="展开临时侧聊"]')!))
+    expect(host.querySelector('[aria-label="已添加附件"]')?.textContent).toContain('brief')
+    await act(async () => { type((await editor()), '看看文件'); enter((await editor())) })
+    expect(sendSide).toHaveBeenCalledWith('side-1', '看看文件', [
+      { name: 'brief.docx', content: '', path: 'C:\\workspace\\brief.docx' }
+    ], 'queue')
+    let finishFile!: (attachment: { name: string; content: string; path: string }) => void
+    prepareDroppedFile.mockImplementationOnce(() => new Promise((resolve) => { finishFile = resolve }))
+    await act(async () => { drop(host, 'later.txt') })
+    await act(async () => click(host.querySelector('button[aria-label="收起侧聊，返回主线"]')!))
+    await act(async () => finishFile({ name: 'later.txt', content: '', path: 'C:\\workspace\\later.txt' }))
+    expect(host.querySelector('[aria-label="已添加附件"]')).toBeNull()
+    await act(async () => click(host.querySelector('button[aria-label^="展开临时侧聊"]')!))
+    expect(host.querySelector('[aria-label="已添加附件"]')?.textContent).toContain('later')
+  })
+
+  it('restores the visible main draft when opening /side fails after a side snapshot arrived', async () => {
+    sendMain.mockImplementation(async () => {
+      for (const listener of sideListeners) listener(side())
+      for (const listener of sideListeners) listener(emptySide())
+      throw new Error('source rejected')
+    })
+    await mount()
+    const input = await editor()
+    await act(async () => { type(input, '/side 失败后保留的问题'); enter(input) })
+    expect(input.value).toBe('/side 失败后保留的问题')
+    expect(host.textContent).toContain('主线里的内容')
+    expect(host.querySelector('[aria-label="临时侧聊"]')).toBeNull()
+    expect(sendSide).not.toHaveBeenCalled()
+    expect(saveDraft.mock.calls.some(([id, value]) => id === 'main-a' && value === '/side 失败后保留的问题')).toBe(false)
+  })
+
+  it('shows a running collapsed side chip and keeps main-only slash commands out of side suggestions', async () => {
+    await mount()
+    const input = await editor()
+    await act(async () => { type(input, '/'); })
+    expect(host.querySelector('[aria-label="选择命令"]')?.textContent).toContain('填写问题后开启临时侧聊')
+    sideRuntimeState = { ...sideRuntime, taskStatus: 'executing' }
+    await act(async () => { for (const listener of sideListeners) listener(side(true, sideRuntimeState)) })
+    await act(async () => click(host.querySelector('button[aria-label="收起侧聊，返回主线"]')!))
+    expect(host.querySelector('button[aria-label="展开临时侧聊，正在执行"]')).not.toBeNull()
+    await act(async () => click(host.querySelector('button[aria-label^="展开临时侧聊"]')!))
+    await act(async () => { type(input, '/'); })
+    const choices = host.querySelector('[aria-label="选择命令"]')?.textContent ?? ''
+    expect(choices).toContain('/review')
+    for (const name of ['new', 'side', 'btw', 'sessions', 'model', 'help', 'goal', 'compact']) {
+      expect(choices).not.toContain(`/${name}`)
+    }
+    await act(async () => { type(input, '/new') })
+    await act(async () => { enter(input) })
+    expect(input.value).toBe('/new')
+    expect(host.textContent).toContain('/new 仅适用于主线')
+    expect(sendSide).not.toHaveBeenCalled()
+    expect(sendMain).not.toHaveBeenCalled()
+  })
+
+  it('restores a side queued text attachment to its own composer after a collapse, then resends the content', async () => {
+    await mount()
+    const queued = { id: 'side-queue-1', text: '待发正文', createdAt: '2026-10-15T10:02:00.000Z',
+      attachments: [{ name: 'note.txt', content: '只给侧聊的文字', path: 'C:\\workspace\\note.txt' }] }
+    await act(async () => { for (const listener of sideListeners) listener({ ...side(), pendingMessages: [queued] }) })
+    let releaseRemove!: () => void
+    removeSideQueuedMessage.mockImplementationOnce(() => new Promise<void>((resolve) => { releaseRemove = resolve }))
+    await act(async () => click(host.querySelector('button[aria-label="修改待发送消息：待发正文"]')!))
+    await act(async () => click(host.querySelector('button[aria-label="收起侧聊，返回主线"]')!))
+    await act(async () => releaseRemove())
+    expect((await editor()).value).toBe('')
+    expect(host.querySelector('[aria-label="已添加附件"]')).toBeNull()
+    await act(async () => click(host.querySelector('button[aria-label^="展开临时侧聊"]')!))
+    const sideInput = await editor()
+    expect(sideInput.value).toBe('待发正文')
+    expect(host.querySelector('[aria-label="已添加附件"]')?.textContent).toContain('note')
+    await act(async () => enter(sideInput))
+    expect(removeSideQueuedMessage).toHaveBeenCalledWith('side-1', 'side-queue-1')
+    expect(removeQueuedMessage).not.toHaveBeenCalled()
+    expect(sendSide).toHaveBeenCalledWith('side-1', '待发正文', queued.attachments, 'queue')
+    expect(sendMain).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['archive', 'side-first'],
+    ['delete', 'main-first']
+  ] as const)('keeps A draft out of B after %s when %s snapshot arrives first', async (action, order) => {
+    await mount()
+    const input = await editor()
+    await act(async () => type(input, 'A 私有草稿'))
+    await act(async () => { for (const listener of sideListeners) listener(side()) })
+    await act(async () => type(input, 'A 侧聊草稿'))
+    if (order === 'side-first') {
+      await act(async () => { for (const listener of sideListeners) listener(emptySide()) })
+      expect(input.value).toBe('A 私有草稿')
+      await mount(switchedMain(action))
+    } else {
+      await mount(switchedMain(action))
+      await act(async () => { for (const listener of sideListeners) listener(emptySide()) })
+    }
+    const nextInput = await editor()
+    expect(nextInput.value).toBe('B 保存的草稿')
+    expect(host.textContent).toContain('B 主线里的内容')
+    expect(host.querySelector('[data-entry-id="main-entry"]')).toBeNull()
+    expect(host.querySelector('[aria-label="临时侧聊"]')).toBeNull()
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 850)) })
+    expect(saveDraft.mock.calls.every(([id, value]) => id !== 'main-b' || value !== 'A 私有草稿')).toBe(true)
+    expect(saveDraft.mock.calls.every(([id, value]) => id !== 'main-b' || value !== 'A 侧聊草稿')).toBe(true)
+    if (action === 'archive') {
+      await act(async () => { for (const listener of sideListeners) listener(side()) })
+      await mount(mainSnapshot)
+      expect((await editor()).value).toBe('A 私有草稿')
+      expect(host.querySelector('[aria-label="临时侧聊"]')).toBeNull()
+    }
+  })
+})

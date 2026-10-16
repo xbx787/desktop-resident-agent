@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import type { AppSnapshot, AskAnswers, ContextUsageSnapshot, ConversationBatchAction, ConversationBatchResult, ModelMode, ModelProfile, TimelineEntry, UserAttachment } from '../shared/contracts'
 import { deleteTurnEntries, type AgentRuntime } from './agent-runtime'
+import type { DialogueLine } from './deepseek'
+import { containsSensitiveData } from './memory-service'
 import { attachmentContext, validAttachmentList } from './local-context'
 import { snapshotSessionMentions } from './session-context'
 import {
@@ -85,6 +87,9 @@ export class ConversationController {
   /** Last seen readiness flags — a cold snapshot still has to answer them. */
   private readiness = { modelReady: false, claudeCodeReady: false }
   private turnHooks: ConversationTurnHooks = {}
+  private onDisplayedConversationChange?: (id: string | null) => void
+  private onRuntimeConfigurationChange?: () => void
+  private displayEpoch = 0
 
   constructor(
     private readonly store: ConversationStore,
@@ -100,6 +105,76 @@ export class ConversationController {
   setTurnHooks(hooks: ConversationTurnHooks): void {
     this.turnHooks = hooks
     for (const runtime of this.runtimes.values()) runtime.setMemoryContextProvider(hooks.memoryContext)
+  }
+
+  /** A temporary side chat is owned by one displayed conversation. All paths
+   * that change the displayed ID go through setDisplayed or followActive. */
+  setDisplayChangeListener(listener: (id: string | null) => void): void {
+    this.onDisplayedConversationChange = listener
+  }
+
+  setRuntimeConfigurationChangeListener(listener: () => void): void {
+    this.onRuntimeConfigurationChange = listener
+  }
+
+  displayedConversationId(): string | null { return this.activeId }
+  displayedConversationEpoch(): number { return this.displayEpoch }
+
+  currentSettings(): ConversationSettings {
+    if (!this.library) throw new Error('会话库尚未就绪。')
+    return this.library.settings
+  }
+
+  /** A bounded cold copy of visible, settled dialogue for a temporary child.
+   * It excludes tool output, expanded attachments, hidden session context and
+   * the parent's SDK session ID. The child will never display these seed lines. */
+  captureSideChatHistory(): DialogueLine[] {
+    const id = this.activeId
+    if (!id) return []
+    const runtime = this.runtimes.get(id)
+    const runtimeSnapshot = runtime?.getSnapshot()
+    const timeline = runtimeSnapshot?.timeline ??
+      (this.displayedRecord?.id === id ? this.displayedRecord.timeline : [])
+    const status = runtimeSnapshot?.taskStatus ?? this.displayedRecord?.taskStatus
+    const history = runtime?.exportConversationState().history ??
+      (this.displayedRecord?.id === id ? this.displayedRecord.history : [])
+    const historyUsers = history.map((line, at) => line.role === 'user' ? at : -1).filter((at) => at >= 0)
+    const settled: DialogueLine[] = []
+    let turn: DialogueLine[] = []
+    let sensitiveTurn = false
+    let turnStart = 0
+    let seenUsers = 0
+    const flush = (complete: boolean): void => {
+      const start = historyUsers[turnStart]
+      const end = historyUsers[seenUsers] ?? history.length
+      // Streaming assistant fragments can remain visible after a failed or
+      // stopped turn. Only a final assistant committed to model history proves
+      // the turn actually settled.
+      const committedReply = start !== undefined && history.slice(start, end).some((line) => line.role === 'assistant')
+      if (complete && committedReply && !sensitiveTurn && turn.some((line) => line.role === 'user') &&
+          turn.some((line) => line.role === 'assistant')) settled.push(...turn)
+      turn = []
+      sensitiveTurn = false
+      turnStart = seenUsers
+    }
+    for (const entry of timeline) {
+      if (entry.kind === 'user' && !entry.interrupted) flush(true)
+      if (entry.kind !== 'user' && entry.kind !== 'assistant') continue
+      if (entry.kind === 'user') seenUsers += 1
+      const content = entry.text.trim()
+      if (containsSensitiveData(content)) sensitiveTurn = true
+      if (!content || sensitiveTurn) continue
+      turn.push({ role: entry.kind, content })
+    }
+    flush(status === 'done')
+    const result: DialogueLine[] = []
+    let remaining = 16_000
+    for (const line of settled.slice(-20).reverse()) {
+      if (line.content.length > remaining) break
+      result.unshift(line)
+      remaining -= line.content.length
+    }
+    return result
   }
 
   allConversationsIdle(): boolean {
@@ -217,8 +292,11 @@ export class ConversationController {
     }
     // Cold conversation: served from its record, full timeline, idle.
     const record = this.displayedRecord?.id === id ? this.displayedRecord : null
+    const savedMode = record?.mode ?? 'claude_code'
+    const availableMode = savedMode === 'claude_code' && this.readiness.claudeCodeReady ? 'claude_code'
+      : savedMode === 'live' && this.readiness.modelReady ? 'live' : 'demo'
     return {
-      mode: record?.mode ?? 'claude_code',
+      mode: availableMode,
       avatarState: 'idle',
       taskStatus: record?.taskStatus ?? 'idle',
       timeline: structuredClone(record?.timeline ?? []),
@@ -338,7 +416,12 @@ export class ConversationController {
     if (!record) {
       record = await this.store.createConversation('新对话', 'claude_code')
     }
+    const previousId = this.activeId
     this.activeId = record.id
+    if (previousId !== record.id) {
+      this.displayEpoch += 1
+      this.onDisplayedConversationChange?.(record.id)
+    }
     if (!this.pending.has(record.id)) this.pending.set(record.id, structuredClone(record.pendingMessages))
     this.library = await this.store.getState()
     const runtime = this.runtimes.get(record.id)
@@ -735,7 +818,13 @@ export class ConversationController {
     const state = await this.store.getState()
     const nextId = state.activeConversationId
     if (nextId && nextId !== this.activeId) await this.setDisplayed(nextId)
-    else await this.refreshLibrary()
+    else {
+      if (!nextId && this.activeId) {
+        this.displayEpoch += 1
+        this.onDisplayedConversationChange?.(null)
+      }
+      await this.refreshLibrary()
+    }
   }
 
   /** A conversation that leaves the list lets its runtime (and SDK query) go. */
@@ -761,6 +850,10 @@ export class ConversationController {
         for (const runtime of this.runtimes.values()) runtime.setIdentity(identity)
       }
       await this.refreshLibrary()
+      if (patch.modelProfiles !== undefined || patch.activeModelProfileId !== undefined ||
+          patch.userName !== undefined || patch.assistantName !== undefined || patch.effort !== undefined) {
+        this.onRuntimeConfigurationChange?.()
+      }
       return settings
     })
   }
@@ -801,6 +894,7 @@ export class ConversationController {
       const runtime = await this.ensureRuntime(id)
       runtime.setModelMode(mode)
       await this.persistConversation(id)
+      if (id === this.activeId) this.onRuntimeConfigurationChange?.()
     })
   }
 
@@ -842,6 +936,7 @@ export class ConversationController {
       await this.store.updateSettings({ modelProfiles, activeModelProfileId })
       await this.refreshLibrary()
       if (activeModelProfileId === resolved.id) this.applyModelProfile(resolved)
+      this.onRuntimeConfigurationChange?.()
     })
   }
 
@@ -853,6 +948,7 @@ export class ConversationController {
       await this.store.updateSettings({ modelProfiles })
       await this.refreshLibrary()
       this.applyModelProfile(this.activeProfile())
+      this.onRuntimeConfigurationChange?.()
     })
   }
 
@@ -865,6 +961,7 @@ export class ConversationController {
       await this.store.updateSettings({ activeModelProfileId: id })
       await this.refreshLibrary()
       this.applyModelProfile(this.activeProfile())
+      this.onRuntimeConfigurationChange?.()
     })
   }
 

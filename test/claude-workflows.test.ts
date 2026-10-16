@@ -30,11 +30,14 @@ async function write(relativePath: string, content: string): Promise<void> {
 
 describe('Claude workflow metadata and native dispatch', () => {
   it('exposes app commands with exact dispatch and no accidental matching', () => {
-    expect(APP_SLASH_COMMANDS.map((item) => item.name)).toEqual(['new', 'sessions', 'model', 'help', 'compact'])
+    expect(APP_SLASH_COMMANDS.map((item) => item.name)).toEqual(['new', 'side', 'btw', 'sessions', 'model', 'help', 'compact'])
     expect(parseAppSlashCommand('/new  方案讨论 ')).toEqual({ name: 'new', args: '方案讨论' })
+    expect(parseAppSlashCommand('/side 临时问题')).toEqual({ name: 'side', args: '临时问题' })
+    expect(parseAppSlashCommand('/BTW')).toEqual({ name: 'btw', args: '' })
     expect(parseAppSlashCommand('/COMPACT')).toEqual({ name: 'compact', args: '' })
     expect(parseAppSlashCommand('/sessions')).toEqual({ name: 'sessions', args: '' })
     expect(parseAppSlashCommand('/newer')).toBeNull()
+    expect(parseAppSlashCommand('/sidebar')).toBeNull()
     expect(parseAppSlashCommand('请执行 /new')).toBeNull()
   })
   it('lists commands and skills by effective name while returning no instruction body', async () => {

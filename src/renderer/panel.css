@@ -79,6 +79,20 @@
 }
 .panel-chat-body { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; }
 .panel-chat-main { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.panel-side-strip { display: flex; align-items: center; justify-content: flex-end; gap: 7px; flex: none; min-height: 29px; padding: 2px 12px; border-bottom: 1px solid rgba(177, 205, 255, .12); background: rgba(16, 35, 75, .26); }
+.panel-side-strip.is-expanded { justify-content: flex-start; background: rgba(47, 86, 154, .22); }
+.panel-side-strip button { display: inline-flex; align-items: center; justify-content: center; flex: none; min-height: 24px; padding: 0 6px; border: 0; border-radius: 7px; color: #dbe9ff; background: transparent; font-size: 10px; }
+.panel-side-strip button:hover { color: #fff; background: rgba(160, 195, 255, .16); }
+.panel-side-back { gap: 3px; }
+.panel-side-back svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.panel-side-name, .panel-side-chip { display: inline-flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; }
+.panel-side-name { color: #dceaff; font-size: 10px; font-weight: 600; }
+.panel-side-strip .panel-side-chip { padding: 0 8px; border: 1px solid rgba(173, 205, 255, .27); border-radius: 14px; background: rgba(111, 161, 239, .13); }
+.panel-side-strip .panel-side-discard { width: 24px; padding: 0; margin-left: auto; color: #b8ccef; font-size: 16px; line-height: 1; }
+.panel-side-strip:not(.is-expanded) .panel-side-discard { margin-left: 0; }
+.panel-side-paused { min-width: 0; margin-left: auto; overflow: hidden; color: #eac18d; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.panel-side-intro { margin: 2px 0 12px; padding: 0 2px; color: #9db9e6; font-size: 10px; line-height: 1.45; }
+.panel-bubble.is-side-chat .panel-composer { border-color: rgba(155, 195, 255, .42); }
 
 .panel-chat-header { position: relative; z-index: 5; display: flex; align-items: end; gap: 6px; flex: none; min-width: 0; height: 43px; padding: 7px 83px 0 10px; border-bottom: 1px solid rgba(188, 212, 255, .14); }
 .panel-library-toggle { display: grid; place-items: center; flex: none; width: 28px; height: 28px; margin-bottom: 4px; padding: 0; border: 0; border-radius: 9px; color: #d3e2ff; background: rgba(178, 203, 251, .09); }

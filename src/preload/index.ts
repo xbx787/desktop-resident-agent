@@ -1,8 +1,30 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { AppSnapshot, PetAPI, SlashUiAction } from '../shared/contracts'
+import type { AppSnapshot, PetAPI, SideChatSnapshot, SlashUiAction } from '../shared/contracts'
 
 const api: PetAPI = {
   getSnapshot: () => ipcRenderer.invoke('pet:get-snapshot'),
+  getSideChat: () => ipcRenderer.invoke('pet:side:get'),
+  openSideChat: () => ipcRenderer.invoke('pet:side:open'),
+  setSideChatExpanded: (sessionId, expanded) => ipcRenderer.invoke('pet:side:set-expanded', sessionId, expanded),
+  discardSideChat: (sessionId) => ipcRenderer.invoke('pet:side:discard', sessionId),
+  sendSideChatMessage: (sessionId, text, attachments, strategy) => ipcRenderer.invoke('pet:side:send', sessionId, text, attachments, strategy),
+  stopSideChat: (sessionId) => ipcRenderer.invoke('pet:side:stop', sessionId),
+  interruptSideChat: (sessionId) => ipcRenderer.invoke('pet:side:interrupt', sessionId),
+  removeSideQueuedMessage: (sessionId, messageId) => ipcRenderer.invoke('pet:side:remove-queued', sessionId, messageId),
+  steerSideQueuedMessage: (sessionId, messageId) => ipcRenderer.invoke('pet:side:steer-queued', sessionId, messageId),
+  approveSideChatAction: (sessionId, id) => ipcRenderer.invoke('pet:side:approve-action', sessionId, id),
+  rejectSideChatAction: (sessionId, id) => ipcRenderer.invoke('pet:side:reject-action', sessionId, id),
+  answerSideChatQuestion: (sessionId, id, answers) => ipcRenderer.invoke('pet:side:answer-question', sessionId, id, answers),
+  answerSideChatPlan: (sessionId, id, approved) => ipcRenderer.invoke('pet:side:answer-plan', sessionId, id, approved),
+  getSideChatContextUsage: (sessionId) => ipcRenderer.invoke('pet:side:get-context-usage', sessionId),
+  compactSideChat: (sessionId) => ipcRenderer.invoke('pet:side:compact', sessionId),
+  setSideChatModelMode: (sessionId, mode) => ipcRenderer.invoke('pet:side:set-model-mode', sessionId, mode),
+  setSideChatPlanMode: (sessionId, on) => ipcRenderer.invoke('pet:side:set-plan-mode', sessionId, on),
+  onSideChatSnapshot: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, snapshot: SideChatSnapshot): void => callback(snapshot)
+    ipcRenderer.on('pet:side-snapshot', listener)
+    return () => ipcRenderer.removeListener('pet:side-snapshot', listener)
+  },
   sendMessage: (text, attachments, strategy, conversationId) => ipcRenderer.invoke('pet:send-message', text, attachments, strategy, conversationId),
   getPathForFile: (file) => webUtils.getPathForFile(file),
   prepareDroppedFile: (filePath) => ipcRenderer.invoke('pet:prepare-dropped-file', filePath),

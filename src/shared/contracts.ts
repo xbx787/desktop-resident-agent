@@ -318,6 +318,18 @@ export interface AppSnapshot {
   plan?: PlanApprovalRequest | null
 }
 
+/** An in-memory side conversation attached to the currently displayed chat.
+ * The model state is public UI data; its history and credentials stay in main. */
+export interface SideChatSnapshot {
+  sessionId: string | null
+  parentConversationId: string | null
+  expanded: boolean
+  queuePaused: boolean
+  pauseReason?: string
+  snapshot: AppSnapshot | null
+  pendingMessages: PendingMessage[]
+}
+
 export interface VoiceConfig {
   siliconFlowAvailable?: boolean
   siliconFlowModel?: string
@@ -326,6 +338,24 @@ export interface VoiceConfig {
 
 export interface PetAPI {
   getSnapshot(): Promise<AppSnapshot>
+  getSideChat(): Promise<SideChatSnapshot>
+  openSideChat(): Promise<SideChatSnapshot>
+  setSideChatExpanded(sessionId: string, expanded: boolean): Promise<SideChatSnapshot>
+  discardSideChat(sessionId: string): Promise<void>
+  sendSideChatMessage(sessionId: string, text: string, attachments?: UserAttachment[], strategy?: 'queue' | 'steer'): Promise<void>
+  stopSideChat(sessionId: string): Promise<void>
+  interruptSideChat(sessionId: string): Promise<void>
+  removeSideQueuedMessage(sessionId: string, messageId: string): Promise<void>
+  steerSideQueuedMessage(sessionId: string, messageId: string): Promise<void>
+  approveSideChatAction(sessionId: string, id: string): Promise<void>
+  rejectSideChatAction(sessionId: string, id: string): Promise<void>
+  answerSideChatQuestion(sessionId: string, id: string, answers: AskAnswers | null): Promise<void>
+  answerSideChatPlan(sessionId: string, id: string, approved: boolean): Promise<void>
+  getSideChatContextUsage(sessionId: string): Promise<ContextUsageSnapshot>
+  compactSideChat(sessionId: string): Promise<void>
+  setSideChatModelMode(sessionId: string, mode: ModelMode): Promise<void>
+  setSideChatPlanMode(sessionId: string, on: boolean): Promise<void>
+  onSideChatSnapshot(callback: (snapshot: SideChatSnapshot) => void): () => void
   /** `conversationId` targets a specific conversation; omitted = the one
    *  currently displayed. Every turn-scoped call below follows that rule. */
   sendMessage(text: string, attachments?: UserAttachment[], strategy?: 'queue' | 'steer', conversationId?: string): Promise<void>

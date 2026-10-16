@@ -4,6 +4,7 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { AgentRuntime } from '../src/main/agent-runtime'
 import { ConversationController } from '../src/main/conversation-controller'
+import { activeSideChatParentId } from '../src/main/side-chat'
 import { ConversationStore } from '../src/main/conversation-store'
 import type { ModelClient, ModelReply } from '../src/main/deepseek'
 import type { ModelProfile } from '../src/shared/contracts'
@@ -38,6 +39,68 @@ async function until(check: () => boolean, label: string): Promise<void> {
 }
 
 describe('conversation controller', () => {
+  it.each(['archive', 'delete'] as const)('rejects an invisible side-chat parent after the last tab is %sd', async (action) => {
+    const store = new ConversationStore(testRoot)
+    const controller = new ConversationController(store,
+      (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))
+    await controller.initialize()
+    const id = controller.displayedConversationId()!
+    expect(activeSideChatParentId(id, controller.getSnapshot().conversationLibrary)).toBe(id)
+    if (action === 'archive') await controller.archiveConversation(id)
+    else await controller.deleteConversation(id)
+    const library = controller.getSnapshot().conversationLibrary
+    expect(library.activeConversationId).toBeNull()
+    expect(activeSideChatParentId(controller.displayedConversationId(), library)).toBeNull()
+  })
+
+  it('changes the displayed epoch even after switching away and back to the same parent', async () => {
+    const store = new ConversationStore(testRoot)
+    const first = await store.createConversation('第一条', 'demo')
+    const second = await store.createConversation('第二条', 'demo')
+    await store.setActiveConversation(first.id)
+    const controller = new ConversationController(store,
+      (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))
+    await controller.initialize()
+    const epoch = controller.displayedConversationEpoch()
+    await controller.selectConversation(second.id)
+    await controller.selectConversation(first.id)
+    expect(controller.displayedConversationId()).toBe(first.id)
+    expect(controller.displayedConversationEpoch()).toBeGreaterThan(epoch)
+  })
+
+  it('seeds side chat only with committed, visible and nonsensitive turns', async () => {
+    const store = new ConversationStore(testRoot)
+    const record = await store.createConversation('主线', 'demo')
+    const row = (id: string, kind: 'user' | 'assistant' | 'system', text: string) =>
+      ({ id, kind, text, time: '2026-10-16T00:00:00.000Z' })
+    await store.updateConversation(record.id, {
+      taskStatus: 'planning',
+      timeline: [
+        row('u1', 'user', '安全问题'), row('a1', 'assistant', '安全答案'),
+        row('u2', 'user', '已停止问题'), row('a2', 'assistant', '未完成的流式片段'),
+        row('stop', 'system', '任务已停止'),
+        row('u3', 'user', '后续问题'), row('a3', 'assistant', '后续答案'),
+        row('u4', 'user', 'password 是私密内容'), row('a4', 'assistant', '不能复制'),
+        row('u5', 'user', '正在运行'), row('a5', 'assistant', '还没结束')
+      ],
+      history: [
+        { role: 'user', content: '安全问题' }, { role: 'assistant', content: '安全答案' },
+        { role: 'user', content: '已停止问题' },
+        { role: 'user', content: '后续问题' }, { role: 'assistant', content: '后续答案' },
+        { role: 'user', content: 'password 是私密内容' }, { role: 'assistant', content: '不能复制' },
+        { role: 'user', content: '正在运行' }
+      ],
+      sdkSessionId: 'main-sdk-session'
+    })
+    const controller = new ConversationController(store,
+      (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))
+    await controller.initialize()
+    expect(controller.captureSideChatHistory()).toEqual([
+      { role: 'user', content: '安全问题' }, { role: 'assistant', content: '安全答案' },
+      { role: 'user', content: '后续问题' }, { role: 'assistant', content: '后续答案' }
+    ])
+  })
+
   it('shows recorded turn metrics and total spend when opening a cold conversation', async () => {
     const store = new ConversationStore(testRoot)
     const cold = await store.createConversation('旧会话', 'claude_code')
@@ -51,6 +114,7 @@ describe('conversation controller', () => {
     await controller.initialize()
     await controller.selectConversation(cold.id)
     const snapshot = controller.getSnapshot()
+    expect(snapshot.mode).toBe('demo')
     expect(snapshot.timeline[0].metrics).toEqual(metrics)
     expect(snapshot.conversationSpentYuan).toBe(0.321)
     expect(snapshot.taskMetrics).toBeUndefined()
