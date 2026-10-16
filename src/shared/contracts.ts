@@ -230,6 +230,9 @@ export interface TaskMetrics {
   /** This turn's charge at the price tier in force when it finished. Absent
    *  when token buckets or the applicable price are unknown. */
   spentYuan?: number
+  /** 记账时（这一轮结束那一刻）所落的峰谷档，随记录一起持久化。账单的乘数
+   *  展示按它走：峰时跑的轮永远按峰时看，不看「此刻几点」。 */
+  priceTier?: 'peak' | 'off_peak'
 }
 
 /** One choice inside an ask-user question; the description shows under the label. */

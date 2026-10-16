@@ -414,7 +414,8 @@
    thread line and this dot all share one plumb line. Amber and pulsing while
    the turn runs; a quiet blue once it settles — the spot never reads empty,
    and the thread always has something to land on. */
-.panel-turn-stats-dot { position: absolute; left: 13px; top: calc(50% - 3.5px); width: 7px; height: 7px; border-radius: 50%; }
+/* Same 1-device-pixel compensation as the bridge (13 + 0.8). */
+.panel-turn-stats-dot { position: absolute; left: 13.8px; top: calc(50% - 3.5px); width: 7px; height: 7px; border-radius: 50%; }
 .panel-turn-stats-dot.is-running { background: #f3c36f; opacity: calc(1 - .45 * var(--panel-pulse-p, 0)); transform: scale(calc(1 - .15 * var(--panel-pulse-p, 0))); }
 .panel-turn-stats-dot.is-done { background: #9db9e9; }
 /* The thread's continuation across the gap between the message block and this
@@ -422,7 +423,12 @@
    while the dot shows, a faint line bridges from the block's bottom edge down
    onto the dot's top edge on the same axis; a finished turn has no dot, so no
    bridge is drawn. */
-.panel-turn-stats:has(.panel-turn-stats-dot)::before { content: ''; position: absolute; left: 15.7px; top: -15px; width: 1.6px; height: calc(50% + 11.5px); border-radius: 1px; background: rgba(150, 178, 226, .2); }
+/* The bridge sits 0.8px right of the geometric centre (geometry would be
+   15.7 = 33/2 − 0.8): a deliberate 1-device-pixel compensation. At the 125%
+   scaling this panel runs at, the stats row and the message block rasterise
+   one device pixel apart — measured 280.52 vs the thread axis at 281.49, and
+   +0.8 lands the bridge at 281.48. */
+.panel-turn-stats:has(.panel-turn-stats-dot)::before { content: ''; position: absolute; left: 16.5px; top: -15px; width: 1.6px; height: calc(50% + 11.5px); border-radius: 1px; background: rgba(150, 178, 226, .2); }
 /* Hover the token count to see how the endpoint billed it: fresh input, cache
    hits, cache writes and output cost very different amounts. */
 .panel-turn-usage { position: relative; cursor: default; }

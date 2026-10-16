@@ -90,15 +90,15 @@ describe('TurnStats', () => {
     expect(renderToStaticMarkup(<TurnStats running={false} entries={[]} />)).toBe('')
   })
 
-  it('shows one recorded turn price and the conversation total only on the newest turn', () => {
+  it('shows only this turn’s own price — never a conversation-level total', () => {
     const older = renderToStaticMarkup(<TurnStats running={false} metrics={{ ...metrics, spentYuan: 0.12 }} entries={[]} />)
-    const newest = renderToStaticMarkup(<TurnStats running={false} metrics={{ ...metrics, spentYuan: 0.08 }} spentYuan={0.20} entries={[]} />)
+    const newest = renderToStaticMarkup(<TurnStats running={false} metrics={{ ...metrics, spentYuan: 0.08 }} entries={[]} />)
     expect(older).toContain('本轮花费')
     expect(older).toContain('¥0.12')
-    expect(older).not.toContain('本对话累计')
     expect(newest).toContain('¥0.08')
-    // 对话累计坐在合计下面，措辞写明它是累计——不是这一轮的加法结果。
-    expect(newest).toContain('本对话累计 ¥0.20')
+    // 账单只说这一轮：没有对话级的总额（累计、转录估算都不出现）。
+    expect(newest).not.toContain('本对话累计')
+    expect(newest).not.toContain('转录可核对')
   })
 
   it('labels missing historic usage without fabricating zero tokens or zero cost', () => {
@@ -121,15 +121,38 @@ describe('TurnStats', () => {
     expect(live).toContain('panel-turn-stats-dot')
   })
 
-  it('keeps the verifiable transcript total without the estimate disclaimer', () => {
-    const html = renderToStaticMarkup(<TurnStats running={false} entries={[]} estimatedSpendYuan={0.125} metrics={{
+  it('never surfaces the transcript-level total in the tip', () => {
+    const html = renderToStaticMarkup(<TurnStats running={false} entries={[]} metrics={{
       ...metrics,
       usage: { total: 1234, input: 1000, output: 234 },
       spentYuan: 0.001,
       usageSource: 'transcript_estimate'
     }} />)
-    expect(html).toContain('转录可核对部分 ¥0.13')
+    expect(html).not.toContain('转录可核对')
     expect(html).not.toContain('非完整账单')
+  })
+
+  it('bills a turn at the tier remembered from when it finished', () => {
+    // 该轮记账时落在峰时（2026-10-12 周一 10:00 北京），档位随之存下；
+    // 就算此刻的时钟在谷时，乘数也必须按存下的「峰」走。
+    const peakAt = Date.parse('2026-10-12T02:00:08.000Z')
+    const usage = { total: 1_936_000, input: 160_000, output: 120_000, cacheRead: 1_620_000, cacheCreate: 36_000 }
+    const html = renderToStaticMarkup(<TurnStats running={false} entries={[]} metrics={{
+      startedAt: '2026-10-12T01:59:00.000Z', finishedAt: new Date(peakAt).toISOString(),
+      usage, spentYuan: 1.42, priceTier: 'peak'
+    }} />)
+    expect(html).toContain('panel-turn-formula-mult is-peak')
+    expect(html).toContain('<i class="panel-turn-tier is-peak">峰</i>')
+    expect(html).not.toContain('is-off-peak')
+  })
+
+  it('falls back to the finish clock for records that predate the tier memo', () => {
+    const peakAt = Date.parse('2026-10-12T02:00:08.000Z')
+    const usage = { total: 1_936_000, input: 160_000, output: 120_000, cacheRead: 1_620_000, cacheCreate: 36_000 }
+    const html = renderToStaticMarkup(<TurnStats running={false} entries={[]} metrics={{
+      startedAt: '2026-10-12T01:59:00.000Z', finishedAt: new Date(peakAt).toISOString(), usage, spentYuan: 1.42
+    }} />)
+    expect(html).toContain('is-peak')
   })
 
   it('lays the bill out as a vertical sum: buckets, their rates, each row’s own price, a rule, then the total', () => {

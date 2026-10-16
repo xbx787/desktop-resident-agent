@@ -13,9 +13,13 @@ function rule(selector: string): string {
 
 describe('avatar thread geometry', () => {
   it('keeps the stats dot on the avatar column axis and paints both states', () => {
-    // 轴 = 头像列的一半：头像宽 33、点宽 7 → left = 33/2 - 7/2 = 13。
+    // 轴 = 头像列的一半（33/2）；点宽 7 → 几何 left = 13，再加 0.8px 的设备
+    // 像素补偿（与桥同一笔账：本机 125% 缩放下统计行光栅化偏 1 个设备像素）。
     expect(rule('.panel-event-glyph')).toContain('width: 33px')
-    expect(rule('.panel-turn-stats-dot')).toContain('left: 13px')
+    const glyphWidth = Number(rule('.panel-event-glyph').match(/width:\s*(\d+)px/)![1])
+    const dotWidth = Number(rule('.panel-turn-stats-dot').match(/width:\s*(\d+)px/)![1])
+    const dotLeft = Number(((glyphWidth - dotWidth) / 2 + 0.8).toFixed(1))
+    expect(rule('.panel-turn-stats-dot')).toContain(`left: ${dotLeft}px`)
     expect(rule('.panel-turn-stats-dot.is-running')).toContain('background: #f3c36f')
     expect(rule('.panel-turn-stats-dot.is-done')).toContain('background: #9db9e9')
   })
@@ -26,10 +30,11 @@ describe('avatar thread geometry', () => {
     const bridge = rule('.panel-turn-stats:has(.panel-turn-stats-dot)::before')
     expect(bridge).toContain('top: -15px')
     expect(bridge).toContain('height: calc(50% + 11.5px)')
-    // 桥和头像下的线必须同一条铅垂线：桥的 left 由头像宽度推出来（宽/2 - 线半宽），
-    // 头像调档时这里会跟着抓。
+    // 桥和头像下的线必须同一条铅垂线：桥的 left = 头像宽/2（16.5）——旧公式
+    // （宽/2 − 线半宽 = 15.7）+ 0.8px 设备像素补偿。实测：补偿前桥在 280.52、
+    // 头像线在 281.49（同一屏），补 0.8（= 1÷1.25）后桥到 281.48。
     const glyphWidth = Number(rule('.panel-event-glyph').match(/width:\s*(\d+)px/)![1])
-    const bridgeLeft = Number((glyphWidth / 2 - 0.8).toFixed(1))
+    const bridgeLeft = Number((glyphWidth / 2).toFixed(1))
     expect(bridge).toContain(`left: ${bridgeLeft}px`)
   })
 

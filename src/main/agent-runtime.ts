@@ -1,6 +1,6 @@
 import type { AgentGoal, AppSnapshot, AskAnswers, ContextUsageSnapshot, EffortLevel, ModelMode, ModelProfile, ProposedAction, TimelineEntry, UserAttachment } from '../shared/contracts'
 import { isImageAttachmentName } from '../shared/image-preview'
-import { usageSpendYuan } from '../shared/deepseek-pricing'
+import { getPeakStatus, usageSpendYuan } from '../shared/deepseek-pricing'
 import { toolLabel } from '../shared/tool-labels'
 import { AgentTurnError } from './agent-errors'
 import type { DialogueLine, ModelClient, ModelReply, ModelToolEvent } from './deepseek'
@@ -853,9 +853,14 @@ export class AgentRuntime {
     if (!usage || usage.input === undefined || usage.output === undefined || !finishedAt) return
     if (![usage.input, usage.output, usage.cacheRead ?? 0, usage.cacheCreate ?? 0]
       .every((tokens) => Number.isSafeInteger(tokens) && tokens >= 0)) return
-    const yuan = usageSpendYuan(usage, Date.parse(finishedAt))
+    const billedAt = Date.parse(finishedAt)
+    const yuan = usageSpendYuan(usage, billedAt)
     if (yuan === null || !Number.isFinite(yuan)) return
     const charge = Number(yuan.toFixed(9))
+    // 记账时刻的档位一并存下：账单展示跟着它走（峰时的轮永远按峰时看），
+    // 而不是按「打开账单时几点」重新判档。
+    const tier = getPeakStatus(billedAt).tier
+    if (tier !== 'unknown') this.state.taskMetrics!.priceTier = tier
     this.state.taskMetrics!.spentYuan = charge
     this.state.conversationSpentYuan = Number(((this.state.conversationSpentYuan ?? 0) + charge).toFixed(9))
   }

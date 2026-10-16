@@ -1854,16 +1854,6 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
     ? Date.parse(snapshot.taskMetrics.startedAt) : NaN;
   const liveTurnStartMs = Number.isFinite(liveTurnStart) ? liveTurnStart : undefined;
   const timelineGroups = useMemo(() => groupTimeline(timeline, liveTurnStartMs), [timeline, liveTurnStartMs]);
-  const transcriptEstimateYuan = useMemo(() => {
-    let amount = 0;
-    for (const entry of timeline) {
-      if (entry.kind === 'user' && entry.metrics?.usageSource === 'transcript_estimate' &&
-          typeof entry.metrics.spentYuan === 'number' && Number.isFinite(entry.metrics.spentYuan)) {
-        amount += entry.metrics.spentYuan;
-      }
-    }
-    return amount > 0 ? amount : undefined;
-  }, [timeline]);
   const tasks = useMemo(() => agentTasks(timeline), [timeline]);
   const navMarkList = useMemo(() => navMarks(timelineGroups), [timelineGroups]);
   const [earlierGroups, setEarlierGroups] = useState(0);
@@ -2327,8 +2317,6 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                 <TurnStats entries={group.items}
                   metrics={group.user.metrics ?? (index === latestTurnIndex && active ? snapshot?.taskMetrics : undefined)}
                   running={index === latestTurnIndex && active}
-                  spentYuan={index === latestTurnIndex ? snapshot?.conversationSpentYuan : undefined}
-                  estimatedSpendYuan={index === latestTurnIndex ? transcriptEstimateYuan : undefined}
                   showMissingUsage={index === latestTurnIndex && !active} />
               </div>;
             })}

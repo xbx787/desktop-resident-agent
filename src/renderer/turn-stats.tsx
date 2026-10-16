@@ -45,9 +45,8 @@ export function toolFailures(tools: TimelineEntry[]): string[] {
  * only failed calls get spelled out below it. It never folds the entries
  * above it — those stay visible on their own.
  */
-export function TurnStats({ entries, metrics, running, spentYuan, estimatedSpendYuan, showMissingUsage = false }: {
-  entries: TimelineEntry[]; metrics?: TaskMetrics; running: boolean; spentYuan?: number;
-  estimatedSpendYuan?: number; showMissingUsage?: boolean
+export function TurnStats({ entries, metrics, running, showMissingUsage = false }: {
+  entries: TimelineEntry[]; metrics?: TaskMetrics; running: boolean; showMissingUsage?: boolean
 }) {
   const tools = entries.filter((entry) => entry.kind === 'tool');
   const toolCount = tools.length;
@@ -84,10 +83,10 @@ export function TurnStats({ entries, metrics, running, spentYuan, estimatedSpend
   const rateLabel = outputRate === null ? null
     : `${outputRate >= 10 ? Math.round(outputRate) : Number(outputRate.toFixed(1))} token/s`;
   const formulaRows = effectiveUsage ? tokenBreakdownRows(effectiveUsage) : [];
-  // The charge was priced at the tier in force when the turn finished
-  // (main/agent-runtime accrueSpend), so the multipliers must read the same
-  // clock — otherwise a peak-priced turn could show off-peak rates.
-  const priceTier = getPeakStatus(ended).tier;
+  // 档位以「记账时存下的」为准（main/agent-runtime accrueSpend 在轮结束那刻
+  // 判档并随记录持久化）——峰时的轮永远按峰时看，不会因为「现在几点」被重算；
+  // 旧记录没存档位，才回退到按结束时刻推断。
+  const priceTier = metrics?.priceTier ?? getPeakStatus(ended).tier;
   const rates = priceTier === 'unknown' ? null : DEEPSEEK_PRICES_YUAN_PER_MILLION[priceTier];
   // 这一轮按哪一档计费：谷=柔和绿、峰=柔和红。合计行的标记和每行乘数
   // 共用同一对色；档位未知时两处都不着色。
@@ -119,32 +118,25 @@ export function TurnStats({ entries, metrics, running, spentYuan, estimatedSpend
     : metrics?.spentYuan !== undefined
     ? { label: '本轮花费', amount: yuanText(metrics.spentYuan) }
     : usage && !running ? { label: '本轮费用未统计', amount: null } : null;
-  // The running cost of the whole conversation belongs only to the latest
-  // turn's hover tip. Older turns keep only their own settled prices. It sits
-  // under the total, and says "累计" so it never reads as this turn's sum.
-  const showSpend = spentYuan !== undefined && spentYuan > 0;
-  const showEstimate = estimatedSpendYuan !== undefined && estimatedSpendYuan > 0;
-  const notes: string[] = [];
-  if (showSpend) notes.push(`本对话累计 ${yuanText(spentYuan!)}`);
-  if (showEstimate) notes.push(`转录可核对部分 ${yuanText(estimatedSpendYuan!)}`);
+  // 账单只说这一轮：对话级的总额（累计、转录估算）不再展示。
   // 缓存命中率：命中输入 ÷ 全部输入（命中 + 未命中）。两桶都报得出时才有——
   // 直接 DeepSeek 路径的裸总数给不出这个拆分。
   const hitRate = effectiveUsage && typeof effectiveUsage.cacheRead === 'number' &&
     typeof effectiveUsage.input === 'number' && effectiveUsage.input + effectiveUsage.cacheRead > 0
     ? Math.round((effectiveUsage.cacheRead / (effectiveUsage.input + effectiveUsage.cacheRead)) * 100)
     : null;
-  const hasTip = formulaRows.length > 0 || spendTotal !== null || hitRate !== null || notes.length > 0;
+  const hasTip = formulaRows.length > 0 || spendTotal !== null || hitRate !== null;
   // 这一轮有没有落点：还在跑、或已经写出回复的轮才算。点是线的终点——用户
   // 刚发下、还没回答的一轮连点都不该有，否则一个孤点带着一截桥悬在用户最后
   // 一句话下面，「一根线断成两节」说的就是它。
   const hasReply = running || entries.some((entry) => entry.kind === 'assistant');
   const missingUsage = showMissingUsage && hasReply && !running && !usage;
-  if (!toolCount && !elapsedLabel && !usage && !showSpend && !showEstimate && !missingUsage) return null;
+  if (!toolCount && !elapsedLabel && !usage && !missingUsage) return null;
   return <div className="panel-turn-stats" role="status">
     {hasReply && <span className={`panel-turn-stats-dot${running ? ' is-running' : ' is-done'}`} aria-hidden="true" />}
     {elapsedLabel && <span>用时 {elapsedLabel}</span>}
-    {(usage || showSpend || showEstimate || missingUsage) && <span className="panel-turn-usage" tabIndex={0} title={hasTip ? undefined : missingUsage ? '旧会话可能没有保存本轮用量' : '本轮主模型消耗；不含子代理和辅助调用'}>
-      {effectiveUsage ? `${compactTokens(effectiveUsage.total)} token${rateLabel ? `（${rateLabel}）` : ''}` : missingUsage ? '用量未记录' : yuanText(spentYuan ?? estimatedSpendYuan!)}
+    {(usage || missingUsage) && <span className="panel-turn-usage" tabIndex={0} title={hasTip ? undefined : missingUsage ? '旧会话可能没有保存本轮用量' : '本轮主模型消耗；不含子代理和辅助调用'}>
+      {effectiveUsage ? `${compactTokens(effectiveUsage.total)} token${rateLabel ? `（${rateLabel}）` : ''}` : '用量未记录'}
       {hasTip && <span className="panel-turn-usage-tip" role="tooltip">
         {formulaRows.length > 0 && <span className="panel-turn-formula">
           {formulaRows.map((row) => (
@@ -162,7 +154,6 @@ export function TurnStats({ entries, metrics, running, spentYuan, estimatedSpend
           {spendTotal.amount !== null && <span className="panel-turn-usage-total-amount">{spendTotal.amount}</span>}
         </span>}
         {hitRate !== null && <span>缓存命中率 {hitRate}%</span>}
-        {notes.map((row) => <span key={row}>{row}</span>)}
         <span className="panel-turn-usage-note">不含子代理和辅助调用</span>
       </span>}
     </span>}
