@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="src/renderer/assets/whale-tray-icon.png" alt="小鲸" width="160">
+</p>
+
 # 小鲸：桌面常驻智能体
 
 这是一个住在 Windows 桌面上的鲸鱼少女~~大肥鱼~~智能体：角色常驻通知区域与桌面角落，点开就是完整的对话气泡。
