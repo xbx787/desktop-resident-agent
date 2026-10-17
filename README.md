@@ -8,7 +8,7 @@
 
 基于 Claude Agent SDK 开发，默认使用 Deepseek API（用户需自备 API Key，首次运行时会引导用户获取），能自主使用本机文件与命令工具完成真实工作。
 
-仓库地址：<https://github.com/xbx787/desktop-resident-agent>。逐版更新见 [CHANGELOG.md](./CHANGELOG.md)。
+仓库地址：<https://github.com/xbx787/whale-companion>。逐版更新见 [CHANGELOG.md](./CHANGELOG.md)。
 
 ## 安装（Windows 成品）
 
@@ -22,7 +22,7 @@
 
 ### 下载
 
-1. 打开项目的 Releases 页面：<https://github.com/xbx787/desktop-resident-agent/releases/latest>
+1. 打开项目的 Releases 页面：<https://github.com/xbx787/whale-companion/releases/latest>
 2. 下载 `whale-companion-v<版本>-win-x64.zip`。
 3. 仓库是公开的，直接下载即可；如果本机访问 GitHub 受限，需要自备可用的网络方式。
 
