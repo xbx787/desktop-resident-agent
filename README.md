@@ -1,128 +1,80 @@
-<p align="center">
-  <img src="src/renderer/assets/whale-tray-icon.png" alt="小鲸" width="160">
-</p>
+<div align="center">
+  <img src="src/renderer/assets/whale-tray-icon.png" alt="小鲸" width="140">
 
-# 小鲸：桌面常驻智能体
+  <h1>小鲸 · Whale Companion</h1>
 
-这是一个住在 Windows 桌面上的鲸鱼少女~~大肥鱼~~智能体：角色常驻通知区域与桌面角落，点开就是完整的对话气泡。
+  <p>住在 Windows 桌面上的鲸鱼少女智能体。点开就能聊天，也能读写文件、执行命令，完成真实工作。</p>
 
-基于 Claude Agent SDK 开发，默认使用 Deepseek API（用户需自备 API Key，首次运行时会引导用户获取），能自主使用本机文件与命令工具完成真实工作。
+  <p>
+    <a href="https://github.com/xbx787/whale-companion/releases/latest"><img src="https://img.shields.io/github/v/release/xbx787/whale-companion?display_name=tag&sort=semver" alt="Latest release"></a>
+    <img src="https://img.shields.io/badge/platform-Windows%2010%2F11%20x64-0078D4" alt="Windows 10/11 x64">
+    <img src="https://img.shields.io/badge/status-preview-orange" alt="Preview">
+  </p>
 
-仓库地址：<https://github.com/xbx787/whale-companion>。逐版更新见 [CHANGELOG.md](./CHANGELOG.md)。
+  <p><strong>简体中文</strong> | <a href="README.en.md">English</a></p>
+</div>
 
-## 安装（Windows 成品）
+---
 
-### 系统要求
+小鲸是一个常驻桌面的智能体：角色待在屏幕角落和通知区域，点开就是完整的对话气泡。它基于 Claude Agent SDK，默认使用 DeepSeek API，能自主使用本机文件和命令工具完成真实工作。
 
-- Windows 10 或 Windows 11，64 位。
-- 能访问 DeepSeek API（`api.deepseek.com`）的网络。
-- 一个 DeepSeek 账号和 API Key。API 按量计费，账户里需要少量余额；没有 Key 时配置向导里有注册和创建入口。
-- 可选：Git for Windows。不装也能聊天，但执行命令类工具会受影响；`windows-mcp` 等 MCP 工具还需要额外配置 `~/.claude.json`。
-- 不需要安装 Node.js、Claude Code 或其他运行环境，引擎已经打进包里。
+## 特色
 
-### 下载
+- **住在桌面上的角色**：点击沉弹、甩呆毛、随机呼吸和换姿势，全部是合成器动画；不聊天时不会持续占用 CPU。
+- **完整的对话工作台**：消息、思考链、工具活动共用一条时间线；长回复按片段折叠，工具调用可展开看完整参数和结果。
+- **它真的能干活**：读写工作目录里的文件、执行命令、搜索代码，支持 `@` 引用文件/目录/历史会话，拖入图片或粘贴附件。
+- **临时会话**：在当前气泡里开一条独立对话，收起后继续主线；不进入会话库，也不打断正在跑的任务。
+- **消息刻度导航**：气泡左缘一列刻度，滚轮翻动、Dock 式高亮、点击跳转，长对话里找人很快。
+- **长期记忆**：成功回合后提取少量稳定事实，在设置里可改可删；失败不影响当前对话。
+- **四种人设**：默认小鲸，另有傲娇、温柔、元气、毒舌四种性格预设，同时切换人设文字、对话头像和桌面角色。
+- **自带引擎，开箱即用**：包内已经包含 Claude Code 引擎，解压到有写权限的目录就能运行，不需要安装 Node.js 或 Claude Code。
 
-1. 打开项目的 Releases 页面：<https://github.com/xbx787/whale-companion/releases/latest>
-2. 下载 `whale-companion-v<版本>-win-x64.zip`。
-3. 仓库是公开的，直接下载即可；如果本机访问 GitHub 受限，需要自备可用的网络方式。
+## 快速开始
 
-文件完整性由发布流程负责校验，不需要手动核对。
+1. 从 [Releases](https://github.com/xbx787/whale-companion/releases/latest) 下载最新的 `whale-companion-v*-win-x64.zip`。
+2. 解压到有写权限的目录，例如 `D:\Apps\WhaleCompanion`。不要放进 `C:\Program Files`。
+3. 进入 `win-unpacked`，双击 `Whale Companion Preview.exe`。
+4. 首次启动按向导填写 DeepSeek API Key，并选择工作目录。完成后左键点击角色即可对话。
 
-### 解压与启动
+**系统要求**：Windows 10/11 x64；能访问 DeepSeek API 的网络；一个 DeepSeek API Key。引擎已内置，不需要 Node.js 或 Claude Code。执行命令类工具建议安装 Git for Windows。
 
-1. 把 ZIP 解压到一个**有写权限**的目录，例如 `D:\Apps\WhaleCompanion`。不要放进 `C:\Program Files`，否则会话和设置写不进去。
-2. 进入解压后的 `win-unpacked` 文件夹，双击 `Whale Companion Preview.exe`。
-3. 如果 Windows SmartScreen 提示“已保护你的电脑”，点“更多信息”→“仍要运行”。程序没有代码签名，这是正常提示。
-4. 启动后角色出现在桌面右下角，通知区域出现小鲸图标。左键角色打开对话气泡，右键图标或角色可以打开选项、打开设置或退出。
-5. ZIP 里不带桌面快捷方式。需要的话，右键 `Whale Companion Preview.exe`→“发送到”→“桌面快捷方式”。
+> 程序没有代码签名，首次运行可能触发 SmartScreen：点“更多信息”→“仍要运行”。
 
-### 首次配置
+## 它能做什么
 
-首次启动约 1 秒后会自动打开配置向导：
+- 读写工作目录里的文件、执行命令、搜索代码和目录。
+- `@` 引用文件、目录和已完成的会话；拖入或粘贴图片、附件。
+- 每轮 token 与费用统计，中键打开 DeepSeek 余额卡片。
+- 语音输入、Markdown 与公式渲染、图片全屏查看。
+- 多厂商模型配置：DeepSeek / Kimi / 智谱 GLM / 自定义端点，可测试连接。
 
-1. 按向导里的链接注册 DeepSeek、创建 API Key，把以 `sk-` 开头的 Key 粘贴进去。
-2. 选择**工作目录**。小鲸只在这个目录里读写文件、搜索文件和执行命令；默认是自动探测到的项目目录（独立安装时是程序所在目录），建议改成你真正要它工作的文件夹。之后可以在“设置 → 对话 → 工作目录”里迁移。
-3. 点“测试连接”，成功后完成配置。Key 使用 Windows 本机密钥保护加密，只保存在这台电脑的 `data` 目录里，不会上传到其他地方。
+## 数据与迁移
 
-如果向导没有自动出现，右键通知区域的小鲸图标 →“选项”，在“模型”页添加或重新填写 DeepSeek 配置。
+所有运行数据都在 `win-unpacked\data`，包括会话、附件、记忆、人设、模型配置和工作目录选择。
 
-### 数据、更新与卸载
+- **更新**：退出程序，把旧版 `data` 复制到新版 `win-unpacked` 下，再启动新版。
+- **换电脑**：退出程序，复制整个 `win-unpacked` 文件夹；要保留记录就连 `data` 一起复制。
+- **API Key**：用 Windows 本机密钥保护加密，换电脑后无法解密。启动向导会自动要求重新填写，模型配置和会话都保留。
+- **工作目录**：旧路径在新电脑不存在时会自动回退；在“设置 → 对话 → 工作目录”里确认或迁移。
 
-- 所有运行数据都在 `win-unpacked\data`：会话、附件、记忆、人设、模型配置、Claude 配置和工作目录选择。
-- 更新版本：先退出旧版，把旧版的 `data` 文件夹复制到新版 `win-unpacked` 下，再启动新版。不要直接覆盖正在运行的目录。
-- 卸载：退出小鲸，删除整个 `win-unpacked` 文件夹即可；想保留记录就先备份 `data`。
-- 换电脑的完整步骤见下面的“迁移到另一台电脑”。
+## 开发
 
-## 功能亮点
-
-- **会呼吸的桌宠**：点击沉弹 + 甩呆毛四帧手绘动画；闲置时随机呼吸、伸懒腰，每半分钟左右换一个姿态（挥手 / 打盹 / 欢呼 / 微笑 / 害羞……9 张生成素材，全合成器动画）。
-- **对话气泡**：消息、思考链、工具活动共用一个时间线。一段回复被思考打断成多段时收成一个消息块（头像与时间只出现一次），每个片段如同无序列表。
-- **临时会话**：在同一气泡中展开独立对话，收起后继续主线；每个主会话标签最多保留一条临时会话，切换标签后可继续，临时会话的消息和队列不进入会话库。
-- **消息刻度导航条**：气泡左缘一列刻度，悬停展开；滚轮翻动窗口，Dock 式弧形高亮，点击跳转到对应消息。
-- **多厂商模型配置**：设置窗口里管理模型（DeepSeek / Kimi / 智谱 GLM / 自定义），可测试连接。模型密钥与高级环境变量由 Windows 的 Electron `safeStorage` 加密保存；设置和聊天快照只显示配置状态，不回传原有密钥。
-- **长期记忆**：成功回合后提取少量稳定事实，记录来源；在独立设置窗口的「记忆」页管理。提取失败不影响当前对话，修改后的记忆从下一轮起供模型使用。
-- **成长提案**：对有证据的重复失败提出改进建议，得到同意后在独立 Git worktree 中实验；设置窗口可审阅差异、检查结果和版本说明，再决定是否采纳。源码实验需要本机保有项目仓库。
-- **图片全流程**：发送附件、消息内缩略图、点击全屏查看，一路打通。
-- **语音输入**：默认 Web Speech API，可配置 SiliconFlow 在线 ASR 兜底。
-- **长期性能优化**：增量时间线快照（只传变化）、全合成器动画、长会话消息窗口化——面板常开也不再烫机。
-- **用量与余额**：每轮 token、可计算的峰谷费用随会话保存；中键余额卡读取已保存的 DeepSeek 配置。旧记录可用项目内的[保守恢复工具](./docs/transcript-usage-recovery.md)补出可核对部分，估算值会单独标注。
-- **可携带**：包内自带 Claude Code 引擎，拷到一台**没装任何依赖**的 Windows 机器即可运行（需要 API Key 与网络；执行命令类功能建议有 Git）。密钥采用本机加密，迁移到另一台电脑后需重新填写；会话等其他数据保留。
-- **个人设定文件**：首次启动在 `data/claude/CLAUDE.md` 生成可编辑的小鲸设定，随数据目录迁移。
-
-## 本机开发
-
-需要 Windows 和 Node.js 24。任一方式：
+需要 Windows 和 Node.js 24：
 
 ```powershell
 npm.cmd install
 npm.cmd run dev
 ```
 
-要点：
+打包：`npm.cmd run pack:release`。逐版变化见 [CHANGELOG.md](./CHANGELOG.md)；更多设计文档在 [docs](./docs)。
 
-- 左键单击角色打开/收起气泡，拖动移动位置，右键出选项菜单，中键切换余额卡片（DeepSeek）。
-- 在会话列表里新建会话，`/` 选择命令、`$` 选择技能；`@` 可引用工作区文件、目录和已完成的会话。目录引用发送有界文件清单，会话引用发送有界历史快照。也可拖入或粘贴文件/图片。
-- 在主线输入 `/side 问题` 或 `/btw 问题` 打开临时会话；模型支持附件时也可只附文件而不写问题。仅输入命令而不附文件会保留草稿并提示补充问题。再次从主线输入带问题或附件的命令会展开该标签已有的临时会话并续问。收起临时会话后输入框回到主线，临时会话入口可再次展开。每个主会话标签最多一条临时会话；切换标签会保留各自的临时会话，运行中的任务继续在后台执行。临时会话草稿与主线及其他标签隔离；退出应用后所有临时会话丢弃。
-- 忙碌临时会话所在的主会话不能归档或删除，批量操作也会跳过它；临时会话空闲后才能归档或删除，届时临时会话随主会话释放。可先在当前标签主动丢弃临时会话，再管理主会话。
-- 临时会话聊天记录不会进入会话库；粘贴的附件仍会按现有流程暂存在 `data/attachments`，丢弃临时会话暂不会自动清理该副本。
-- Enter 排队发送；Ctrl+Enter 在 Claude Code 活跃任务中尝试原生引导，其他情况优先排队。运行中可一键停止，执行超一分钟的工具行有中断当前任务的按钮。
-- 会话库支持新建、搜索、置顶、重命名、归档、恢复、删除；多选后可批量置顶、归档、恢复或删除，删除前需确认，忙碌会话会逐项跳过。当前会话栏以浮动抽屉覆盖聊天，列表按更新时间分组，搜索旧消息会显示命中片段。工具行展开后可继续查看完整调用参数。上下文用量与手动压缩在模型菜单里。计划模式和持续目标以引擎确认状态为准，持续目标默认最多 30 轮或 3 小时，可在设置中调整。
+## 已知边界
 
-## 数据与设定
+- 目前只提供 Windows x64 便携包，没有安装器和自动更新。
+- 角色立绘来自公开角色页，仅作个人桌面使用；公开分发前需要确认素材权利或替换为原创素材。
+- 语音质量取决于本机中文语音包与网络。
+- `windows-mcp` 等 MCP 工具依赖本机 `~/.claude.json` 配置，不随发布包携带。
 
-- 会话与附件：`data/conversations`、`data/attachments`
-- Claude 配置与会话：`data/claude`（含个人设定 `CLAUDE.md`，引擎的运行数据）
-- 设置（模型、称呼、头像、开关）：`data/conversations/library.json`；模型密钥和高级环境变量以本机加密值保存。首次载入旧版明文配置时会迁移；保护不可用则保留原数据并报错。
-- 长期记忆：`data/memory/facts.json`；成长提案及审阅记录：`data/growth/proposals.json`。这些运行数据都不放进 Windows 发布 ZIP。
-- 打包版的数据目录在 `Whale Companion Preview.exe` 同级的 `data\`（即 `win-unpacked\data`）。
-- 工作目录：新手引导会要求选择一次，保存在 `data/workspace.json`；设置 → 对话 → 工作目录可以迁移。应用把它作为 `DESKTOP_PET_WORKSPACE` 注入模型子进程，不修改 Windows 系统环境变量。启动环境里显式设置的 `DESKTOP_PET_WORKSPACE` 仍然优先。
+---
 
-## 迁移到另一台电脑
-
-1. 先退出小鲸，再复制整个 `win-unpacked` 文件夹到新电脑上一个**有写权限**的位置。不要放进 `C:\Program Files`，运行数据会写不进去。
-2. 只复制程序就是干净配置；要把会话、记忆、人设、设置一起带走，再把旧电脑的 `win-unpacked\data` 复制到新电脑同一位置。
-3. 引擎已随包附带（`resources\app.asar.unpacked\...\claude.exe`），新电脑不需要安装 Claude Code 或 Node.js。执行命令类工具建议装 Git for Windows；`windows-mcp` 等 MCP 工具依赖用户目录的 `~/.claude.json`，不随数据目录迁移，需要在新电脑重新配置。
-4. API Key 和高级环境变量用 Windows 本机密钥保护加密，换电脑后无法解密。启动时配置向导会自动重新打开要求填写 Key；模型配置、会话和设置都保留。没自动弹出就打开设置 → 模型重新填写。
-5. 旧电脑的工作目录绝对路径如果在新电脑不存在，会自动回退到可用目录；在设置 → 对话 → 工作目录确认或迁移。旧目录里的文件不会自动复制，需要手动搬。
-
-## 打包与发布（维护约定）
-
-```powershell
-npm.cmd version 0.0.N --no-git-tag-version
-npm.cmd run pack:release
-```
-
-`pack:release` 依次执行类型检查、测试、构建、asar 校验，产出 `release/whale-companion-v<版本>` 并切换双快捷方式；目标目录已存在会停止，绝不覆盖正在运行的版本。需要先打包、审阅再切换时，用 `scripts/pack-release.ps1 -NoShortcutSwitch`，核验后调用 `scripts/switch-shortcuts.ps1`。
-
-发布前从已核验的 `win-unpacked` 运行 `scripts/make-release-archive.ps1 -ReleaseDir <版本目录>`，生成仅含程序文件的 ZIP 与 SHA-256 文件；运行 `node scripts/extract-release-notes.cjs <版本>` 从本文件对应版本的更新日志提取中文说明。提交代码并把 `v<版本>` 标签打在该提交后，运行 `scripts/publish-release.ps1 -Version <版本>` 推送 `master`、标签与 GitHub Release 附件，并回读远端结果。旧版本目录用于回滚，清理前先确认没有进程在使用。`release/`、`data/`、`node_modules/` 均不入版本控制。
-
-## 当前边界
-
-- 包内引擎默认会对不认识的模型隐藏任务工具，应用已显式启用（TaskCreate 等可用）；引擎查找为「包内优先、系统兜底」。
-- 语音质量取决于本机中文语音包与网络；暂无自定义音色、唤醒词、离线模型。
-- 长期记忆只保留少量稳定事实，可在设置里改删。临时会话从主线已完成的可见对话中有界取得背景，使用独立运行时；它不是原生 checkpoint 分支，也不保存为会话库记录。v0.0.54 曾提供最新回复的历史冷复制，v0.0.59 已移除；原生会话分支仍未实现。会话操作不会回滚电脑文件。
-- DeepSeek 会在最近 20 条模型历史中保留 `@` 会话引用的冻结内容供追问，超出窗口后不再自动带入；Claude Code 由原生会话上下文管理。
-- 成长实验使用 Git worktree 隔离源码，但不是 Windows 系统沙箱；固定检查仍以当前用户权限运行。没有本地源码仓库的便携版可继续聊天和使用记忆，不能在该设备进行源码实验。
-- Windows-MCP 已接入配置，实际屏幕与鼠标工具调用待验收。
-- 默认角色图由用户提供的参考图编辑，对外发布前需确认素材权利或替换为原创素材。
-- 桌面角色与气泡共用一个透明窗口，放大、125% 缩放与多显示器拖拽以实机为准。
+基于 [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript) 构建，默认模型来自 DeepSeek。
