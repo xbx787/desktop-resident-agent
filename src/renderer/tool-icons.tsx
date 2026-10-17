@@ -12,6 +12,7 @@ const families: Array<{ kind: ToolIconKind; match: RegExp }> = [
   { kind: 'globe', match: /web|fetch|http|browser|url/ },
   { kind: 'search', match: /grep|glob|search|find/ },
   { kind: 'terminal', match: /bash|shell|terminal|command|exec|kill|run/ },
+  { kind: 'globe', match: /deepseek/ },
   { kind: 'link', match: /mcp/ },
   { kind: 'agent', match: /task|agent|subagent/ },
   { kind: 'pencil', match: /edit|patch|replace|modify/ },

@@ -4,7 +4,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 
 const queryMock = vi.hoisted(() => vi.fn())
-vi.mock('@anthropic-ai/claude-agent-sdk', () => ({ query: queryMock }))
+// 默认模型就是 DeepSeek，客户端每轮都会注册直连搜索/抓取工具——这里给一个
+// 不落地的进程内 MCP server 占位，行为的断言在新的换工具用例里单独做。
+const createSdkMcpServerMock = vi.hoisted(() => vi.fn((options: { name: string }) => ({
+  type: 'sdk' as const, name: options.name, instance: {}
+})))
+vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
+  query: queryMock,
+  createSdkMcpServer: createSdkMcpServerMock
+}))
 
 import { ClaudeAgentClient, boundedConversation } from '../src/main/claude-agent'
 import { AgentTurnError } from '../src/main/agent-errors'
@@ -22,6 +30,7 @@ type Request = {
     persistSession: boolean
     env: Record<string, string>
     mcpServers: Record<string, unknown>
+    disallowedTools?: string[]
     tools?: string[]
     hooks: { PostCompact: Array<{ hooks: Array<() => Promise<unknown>> }> }
     canUseTool: (toolName: string, input: Record<string, unknown>, options: { signal: AbortSignal }) =>
@@ -154,6 +163,22 @@ describe('Claude Agent SDK persistent streaming session', () => {
       await expect(client.respond([{ role: 'user', content: '开始' }], new AbortController().signal,
         undefined, undefined, undefined, (usage) => updates.push(usage))).rejects.toThrow('运行失败')
       expect(updates).toEqual([])
+    } finally { await client.dispose() }
+  })
+
+  it('swaps in DeepSeek search/fetch for the DeepSeek model and disables the built-in web tools', async () => {
+    queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* (message) {
+      yield { type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: sessionId,
+        user_message_uuids: [message.uuid], queued_turn_count: 0 }
+    }))
+    const client = new ClaudeAgentClient(executable, 'test-key', process.cwd())
+    client.setProvider({ baseUrl: 'https://api.deepseek.com/anthropic', apiKey: 'sk-deepseek', model: 'deepseek-flash[1m]' })
+    try {
+      await client.respond([{ role: 'user', content: '搜索一下' }], new AbortController().signal)
+      const options = (queryMock.mock.calls[0][0] as Request).options
+      expect(Object.keys(options.mcpServers ?? {})).toContain('deepseek')
+      // 内置抓取要先过 Anthropic 的域名校验（国内网络下不可达），DS 模型下关掉。
+      expect(options.disallowedTools).toEqual(['WebSearch', 'WebFetch'])
     } finally { await client.dispose() }
   })
 

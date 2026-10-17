@@ -5,6 +5,7 @@ import { AgentMessageChannel } from './agent-message-channel'
 import { AgentTurnError, classifyAgentFailure } from './agent-errors'
 import { parseAskQuestions } from './ask-questions'
 import { CLAUDE_BASE_URL, DEFAULT_CLAUDE_MODEL, claudeEnvironment } from './claude-code'
+import { createDeepSeekToolsServer, resolveDeepSeekToolsKey } from './deepseek-tools'
 import { startEffortProxy, type EffortProxy } from './effort-proxy'
 import { buildXiaojingPersona } from './persona'
 import type { DialogueLine, ModelClient, ModelReply, ModelToolEvent } from './deepseek'
@@ -554,6 +555,14 @@ export class ClaudeAgentClient implements ModelClient {
   /** The effort rewrite targets exactly the fields DeepSeek documents, so the
    *  loopback proxy is only stood up for DeepSeek endpoints; anything else
    *  connects directly (null). */
+  /** DeepSeek 模型下注册直连 DeepSeek 的搜索/抓取工具（进程内 MCP）。
+   *  Claude 模型保留内置的 WebSearch/WebFetch 不动。 */
+  private deepseekToolsServer(provider: { baseUrl: string; apiKey: string; model: string }): ReturnType<typeof createDeepSeekToolsServer> | undefined {
+    if (!/deepseek/i.test(provider.model)) return undefined
+    const key = resolveDeepSeekToolsKey(provider)
+    return key ? createDeepSeekToolsServer(key) : undefined
+  }
+
   private async ensureEffortProxy(target: string): Promise<string | null> {
     if (!/deepseek/i.test(target)) return null
     if (!this.effortProxy) {
@@ -622,6 +631,9 @@ export class ClaudeAgentClient implements ModelClient {
     const provider = this.provider
     const proxied = await this.ensureEffortProxy(provider.baseUrl)
     const baseUrl = proxied ?? provider.baseUrl
+    // DeepSeek 模型下换用 DeepSeek 自己的搜索/抓取：内置 WebFetch 要先过
+    // Anthropic 的域名安全校验，国内网络下那道校验不可达会直接拒绝抓取。
+    const deepseekTools = this.deepseekToolsServer(provider)
     const active = query({
       prompt: channel,
       options: {
@@ -634,7 +646,8 @@ export class ClaudeAgentClient implements ModelClient {
         settingSources: ['user', 'project', 'local'],
         skills: 'all',
         strictMcpConfig: true,
-        mcpServers: this.mcpServers,
+        mcpServers: deepseekTools ? { ...this.mcpServers, deepseek: deepseekTools } : this.mcpServers,
+        ...(deepseekTools ? { disallowedTools: ['WebSearch', 'WebFetch'] } : {}),
         permissionMode: this.planMode ? 'plan' : 'bypassPermissions',
         allowDangerouslySkipPermissions: true,
         // CLI 2.1.210 会把 SDK 请求的 bypassPermissions 降级为 default（实测），

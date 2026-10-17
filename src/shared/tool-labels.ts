@@ -30,6 +30,8 @@ const TOOL_LABELS: Record<string, string> = {
   tasklist: '列出任务',
   webfetch: '抓取网页',
   websearch: '联网搜索',
+  'mcp__deepseek__search': '网页搜索',
+  'mcp__deepseek__fetch': '抓取网页',
   search: '搜索',
   enterplanmode: '进入计划模式',
   exitplanmode: '提交计划',
