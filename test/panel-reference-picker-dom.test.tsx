@@ -15,7 +15,7 @@ const settings: ConversationSettings = {
   visibleConversationTabs: 5, autoArchiveAfterDays: 0, goalMaxIterations: 30, goalMaxMinutes: 180,
   memoryEnabled: true, effort: 'high', modelProfiles: [], activeModelProfileId: null,
   enableAutoTitleGeneration: true, showMessageTimestamps: true, userName: '主人', assistantName: '小鲸',
-  userAvatar: null, assistantAvatar: null, tabOrder: []
+  userAvatar: null, assistantAvatar: null, tabOrder: [], uiSize: 'small'
 }
 
 function conversation(id: string, title: string, messageCount: number): ConversationSummary {
@@ -99,5 +99,19 @@ describe('Claudian style composer discovery', () => {
     ])
     await act(async () => options[0].click())
     expect(editor.value).toBe(`@[项目计划](xiaojing-session:${sourceId}) `)
+  })
+
+  it('completes the highlighted suggestion with Tab instead of moving focus', async () => {
+    await act(async () => root.render(<PanelBubble visible snapshot={snapshot} error={null}
+      run={async (action) => { await action(bridge); return true }} />))
+    await act(async () => host.querySelector<HTMLElement>('.panel-compose-trigger')!.click())
+
+    const editor = await type('/comp')
+    expect([...host.querySelectorAll('.panel-suggestion-item')].map((item) => item.textContent)).toEqual(['/compact命令，内置，压缩对话'])
+    await act(async () => {
+      editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }))
+      await Promise.resolve()
+    })
+    expect(editor.value).toBe('/compact ')
   })
 })

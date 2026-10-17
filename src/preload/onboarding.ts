@@ -18,4 +18,8 @@ const api: OnboardingAPI = {
   finish: (outcome) => ipcRenderer.invoke('pet:onboarding:finish', outcome)
 }
 
+ipcRenderer.on('pet:ui-size', (_event, size: unknown) => {
+  document.documentElement.dataset.uiSize = size === 'medium' || size === 'large' ? size : 'small'
+})
+
 contextBridge.exposeInMainWorld('whaleOnboarding', api)

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import type { BalanceSnapshot, PetAPI } from '../shared/contracts';
+import type { AvatarBox, BalanceSnapshot, PetAPI } from '../shared/contracts';
 import { WhalePortrait } from './WhalePortrait';
 import { BalanceCard } from './balance';
 import { balanceErrorMessage } from './balance-error';
@@ -349,7 +349,9 @@ function Avatar() {
           }
         }}
       >
-        <WhalePortrait containerRef={portraitRef} ahogeRef={ahogeRef} artworkUrl={faceId ? poseSrc(faceId) : poseId ? poseSrc(poseId) : null} />
+        <WhalePortrait containerRef={portraitRef} ahogeRef={ahogeRef}
+          artworkUrl={faceId ? poseSrc(faceId) : poseId ? poseSrc(poseId) : null}
+          onBoxChange={(box: AvatarBox) => { void petBridge().setAvatarBox(box).catch(() => undefined); }} />
         {dot && <span className={`avatar-task-dot is-${dot.tone}${dot.pulse ? ' is-pulsing' : ''}`} aria-hidden="true" />}
       </button>
     </main>

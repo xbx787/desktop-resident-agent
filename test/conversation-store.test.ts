@@ -164,6 +164,25 @@ describe('persistent conversation library', () => {
     await expect(store.updateSettings({ visibleConversationTabs: 13 })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
   })
 
+  it('saves and validates the expanded panel size', async () => {
+    const store = new ConversationStore(testRoot)
+    await store.updateSettings({ panelSize: { width: 700, height: 520 } })
+    expect((await new ConversationStore(testRoot).getState()).settings.panelSize).toEqual({ width: 700, height: 520 })
+    await expect(store.updateSettings({ panelSize: { width: 100, height: 520 } })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    await expect(store.updateSettings({ panelSize: { width: 700, height: 50 } })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    await expect(store.updateSettings({ panelSize: { width: 5000, height: 520 } })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+  })
+
+  it('saves and validates the interface size', async () => {
+    const store = new ConversationStore(testRoot)
+    expect((await store.getState()).settings.uiSize).toBe('small')
+    await store.updateSettings({ uiSize: 'medium' })
+    expect((await new ConversationStore(testRoot).getState()).settings.uiSize).toBe('medium')
+    await store.updateSettings({ uiSize: 'large' })
+    expect((await new ConversationStore(testRoot).getState()).settings.uiSize).toBe('large')
+    await expect(store.updateSettings({ uiSize: 'huge' as never })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+  })
+
   it('migrates v1 libraries without losing records, queues or SDK sessions', async () => {
     const old = new ConversationStore(testRoot)
     const created = await Promise.all(Array.from({ length: 8 }, (_, index) => old.createConversation(`旧会话 ${index}`)))
@@ -190,7 +209,7 @@ describe('persistent conversation library', () => {
       modelProfiles: [], activeModelProfileId: null, enableAutoTitleGeneration: true,
       showMessageTimestamps: true, userName: '主人', assistantName: '小鲸',
       userAvatar: null, assistantAvatar: null, tabOrder: [],
-      goalMaxIterations: 30, goalMaxMinutes: 180, memoryEnabled: true
+      goalMaxIterations: 30, goalMaxMinutes: 180, memoryEnabled: true, uiSize: 'small'
     })
     expect((await migrated.listConversations()).length).toBe(8)
     expect((await migrated.getConversation(created[0].id))?.pendingMessages[0].text).toBe('继续执行')

@@ -14,7 +14,7 @@ const settings: ConversationSettings = {
   goalMaxMinutes: 180, memoryEnabled: true, effort: 'max', modelProfiles: [],
   activeModelProfileId: null, enableAutoTitleGeneration: true,
   showMessageTimestamps: true, userName: '主人', assistantName: '小鲸',
-  userAvatar: null, assistantAvatar: null, tabOrder: []
+  userAvatar: null, assistantAvatar: null, tabOrder: [], uiSize: 'small'
 }
 const memory: MemoryItem = {
   id: 'memory-1', text: '喜欢蓝色界面', sourceConversationId: 'conversation-123',

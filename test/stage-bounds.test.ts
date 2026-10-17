@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AVATAR_STRIP, BUBBLE_MIN_HEIGHT, computeStageBounds, STAGE_HEIGHT, STAGE_WIDTH } from '../src/main/stage-bounds'
+import { PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH } from '../src/shared/contracts'
 
 /** A 2048×1112 DIP work area (2560×1440 at 125%), the shape of the machine
  *  this shipped on. */
@@ -48,5 +49,19 @@ describe('computeStageBounds', () => {
     const narrow = { x: 0, y: 0, width: 400, height: 700 }
     const next = computeStageBounds(resting, narrow, false)
     expect(next.width).toBe(400)
+  })
+
+  it('honours a user-chosen panel size on expanded, anchored bottom-right', () => {
+    const next = computeStageBounds(resting, work, true, { width: 700, height: 500 })
+    expect(next.width).toBe(700 + 20)      // 面板 + 左右各 10 的留白
+    expect(next.height).toBe(500 + 192)    // 面板 + 头像条与间距
+    expect(next.x + next.width).toBe(resting.x + resting.width)
+    expect(next.y + next.height).toBe(resting.y + resting.height)
+  })
+
+  it('clamps a tiny saved size up to the usable minimum', () => {
+    const next = computeStageBounds(resting, work, true, { width: 100, height: 100 })
+    expect(next.width).toBe(PANEL_MIN_WIDTH + 20)
+    expect(next.height).toBe(PANEL_MIN_HEIGHT + 192)
   })
 })

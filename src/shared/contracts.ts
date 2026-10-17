@@ -6,6 +6,20 @@ export type BubbleLayout = 'empty' | 'composer' | 'composer_attachments' | 'comp
  *  Their docs map medium→high, xhigh→high, so we offer only real stops. */
 export type EffortLevel = 'off' | 'low' | 'high' | 'max'
 
+/** Overall UI size: one step up from "small" (the shipped look) is "medium",
+ *  then "large". Every window derives its type scale from this. */
+export type UiSize = 'small' | 'medium' | 'large'
+
+/** The portrait's visible rectangle inside the avatar window, in window
+ *  coordinates. The renderer measures the trimmed artwork and reports it so
+ *  the window hit shape covers the character and nothing else. */
+export interface AvatarBox {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
 /** The CLI's /goal state: a condition it re-checks before every stop. */
 export interface AgentGoal {
   condition: string
@@ -100,6 +114,10 @@ export interface BalanceSnapshot {
   checkedAt: string
 }
 
+/** 展开面板的最小尺寸：拖拽手柄与窗口布局共用同一套钳制。 */
+export const PANEL_MIN_WIDTH = 360
+export const PANEL_MIN_HEIGHT = 400
+
 export interface ConversationSettings {
   visibleConversationTabs: number
   autoArchiveAfterDays: 0 | 7 | 14 | 30
@@ -128,6 +146,11 @@ export interface ConversationSettings {
    *  conversation in the list — dragging rewrites it, deletions prune it, and
    *  ids the user never placed simply follow by recency. */
   tabOrder: string[]
+  /** The expanded panel's size, as the user dragged it. Absent means "use the
+   *  default full-height panel". The compact bubble keeps its fixed size. */
+  panelSize?: { width: number; height: number }
+  /** The whole interface's type scale. "small" is the original look. */
+  uiSize: UiSize
 }
 
 /** One named model endpoint. Main-process storage encrypts credentials;
@@ -422,6 +445,10 @@ export interface PetAPI {
   openExternal(url: string): Promise<void>
   setBubbleLayout(layout: BubbleLayout, height?: number): Promise<void>
   setBubbleExpanded(expanded: boolean): Promise<void>
+  /** Resizes the expanded panel (the window follows on the main process). */
+  setPanelSize(width: number, height: number): Promise<void>
+  /** Reports the trimmed portrait's rectangle so the hit shape follows it. */
+  setAvatarBox(box: AvatarBox): Promise<void>
   setModelMode(mode: ModelMode): Promise<void>
   setEffort(level: EffortLevel): Promise<void>
   setPlanMode(on: boolean): Promise<void>

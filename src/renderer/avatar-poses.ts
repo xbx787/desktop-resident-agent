@@ -27,18 +27,12 @@ export const POSES: readonly PoseSpec[] = [
 ]
 
 /** Explicit per-pose URLs (scripts/pose-normalize.cjs output) — the same
- *  pattern as avatar-art.ts, so the bundler sees every sprite statically. */
-const SOURCES: Record<string, string> = {
-  wave: new URL('./assets/poses/wave.png', import.meta.url).href,
-  doze: new URL('./assets/poses/doze.png', import.meta.url).href,
-  cheer: new URL('./assets/poses/cheer.png', import.meta.url).href,
-  dozy: new URL('./assets/poses/dozy.png', import.meta.url).href,
-  smile: new URL('./assets/poses/smile.png', import.meta.url).href,
-  surprise: new URL('./assets/poses/surprise.png', import.meta.url).href,
-  focus: new URL('./assets/poses/focus.png', import.meta.url).href,
-  sleepy: new URL('./assets/poses/sleepy.png', import.meta.url).href,
-  shy: new URL('./assets/poses/shy.png', import.meta.url).href
-}
+ *  pattern as avatar-art.ts, so the bundler sees every sprite statically.
+ *
+ *  The current artwork ships as one bust portrait, so this library is empty:
+ *  every pose lookup falls back to the base artwork and the swap clock stays
+ *  dormant. Fill it in again when a matching pose set exists. */
+const SOURCES: Record<string, string> = {}
 
 export function poseSrc(id: string): string | null {
   return SOURCES[id] ?? null
@@ -102,6 +96,8 @@ export function preloadPoses(): void {
  *  While the window is hidden the clock idles on a slow poll instead of
  *  swapping behind nobody's back. */
 export function startPoseClock(swap: (pose: PoseSpec | null) => void, random: () => number = Math.random): () => void {
+  // 单图形象没有可切换的姿势，别让定时器空转。
+  if (!Object.keys(SOURCES).length) return () => {}
   let timer: number | undefined
   let stopped = false
   let showing = false

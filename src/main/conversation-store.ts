@@ -5,7 +5,8 @@ import type { DialogueLine } from './deepseek'
 import { isEffortLevel } from '../shared/effort'
 import { containsSensitiveData } from './memory-service'
 import { protectProfiles, restoreProfiles, type SecretCodec } from './secret-storage'
-import type { AgentGoal, ConversationBatchAction, ConversationBatchResult, ConversationLibraryState, ConversationSummary, EffortLevel, ModelMode, ModelProfile, TaskStatus, TimelineEntry, UserAttachment, ConversationSettings } from '../shared/contracts'
+import type { AgentGoal, ConversationBatchAction, ConversationBatchResult, ConversationLibraryState, ConversationSummary, EffortLevel, ModelMode, ModelProfile, TaskStatus, TimelineEntry, UserAttachment, ConversationSettings, UiSize } from '../shared/contracts'
+import { PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH } from '../shared/contracts'
 
 const DEFAULT_VISIBLE_TABS = 5
 const MAX_VISIBLE_TABS = 12
@@ -211,10 +212,25 @@ export function isModelProfile(value: unknown): value is ModelProfile {
 
 /** The settings that arrived after version 2 shipped: read leniently so an
  *  older file simply gets the defaults instead of failing to load. */
+/** 面板尺寸的读回校验：坏值当作"没存过"，回退到出厂的全高面板。 */
+function readPanelSize(value: unknown): { width: number; height: number } | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const { width, height } = value as Record<string, unknown>
+  return Number.isInteger(width) && Number.isInteger(height) &&
+    (width as number) >= PANEL_MIN_WIDTH && (width as number) <= 4000 &&
+    (height as number) >= PANEL_MIN_HEIGHT && (height as number) <= 4000
+    ? { width: width as number, height: height as number }
+    : undefined
+}
+
+function isUiSize(value: unknown): value is UiSize {
+  return value === 'small' || value === 'medium' || value === 'large'
+}
+
 function readExtendedSettings(settings: Record<string, unknown>): Pick<ConversationSettings,
   'modelProfiles' | 'activeModelProfileId' | 'enableAutoTitleGeneration' | 'showMessageTimestamps' |
   'userName' | 'assistantName' | 'userAvatar' | 'assistantAvatar' | 'tabOrder' |
-  'goalMaxIterations' | 'goalMaxMinutes' | 'memoryEnabled'> {
+  'goalMaxIterations' | 'goalMaxMinutes' | 'memoryEnabled' | 'panelSize' | 'uiSize'> {
   const profiles = Array.isArray(settings.modelProfiles)
     ? (settings.modelProfiles.filter(isModelProfile) as ModelProfile[]).map((profile) => structuredClone(profile))
     : []
@@ -233,7 +249,9 @@ function readExtendedSettings(settings: Record<string, unknown>): Pick<Conversat
     tabOrder: Array.isArray(settings.tabOrder) ? settings.tabOrder.filter((id): id is string => typeof id === 'string') : [],
     goalMaxIterations: Number.isInteger(settings.goalMaxIterations) && Number(settings.goalMaxIterations) >= 1 && Number(settings.goalMaxIterations) <= 300 ? Number(settings.goalMaxIterations) : 30,
     goalMaxMinutes: Number.isInteger(settings.goalMaxMinutes) && Number(settings.goalMaxMinutes) >= 1 && Number(settings.goalMaxMinutes) <= 1440 ? Number(settings.goalMaxMinutes) : 180,
-    memoryEnabled: settings.memoryEnabled !== false
+    memoryEnabled: settings.memoryEnabled !== false,
+    panelSize: readPanelSize(settings.panelSize),
+    uiSize: isUiSize(settings.uiSize) ? settings.uiSize : 'small'
   }
 }
 
@@ -585,7 +603,7 @@ export class ConversationStore {
       settings = { visibleConversationTabs: DEFAULT_VISIBLE_TABS, autoArchiveAfterDays: 0, effort: 'max',
         modelProfiles: [], activeModelProfileId: null, enableAutoTitleGeneration: true, showMessageTimestamps: true,
         userName: '主人', assistantName: '小鲸', userAvatar: null, assistantAvatar: null, tabOrder: [],
-        goalMaxIterations: 30, goalMaxMinutes: 180, memoryEnabled: true }
+        goalMaxIterations: 30, goalMaxMinutes: 180, memoryEnabled: true, uiSize: 'small' }
       migrating = true
     }
 
@@ -839,7 +857,7 @@ export class ConversationStore {
     const modelProfiles = patch.modelProfiles
     const activeModelProfileId = patch.activeModelProfileId
     const { goalMaxIterations, goalMaxMinutes, memoryEnabled } = patch
-    const { enableAutoTitleGeneration, showMessageTimestamps, userName, assistantName, userAvatar, assistantAvatar } = patch
+    const { enableAutoTitleGeneration, showMessageTimestamps, userName, assistantName, userAvatar, assistantAvatar, panelSize, uiSize } = patch
     if (tabs !== undefined && (!Number.isInteger(tabs) || tabs < 1 || tabs > MAX_VISIBLE_TABS)) {
       throw new ConversationStoreError('INVALID_INPUT', `快捷切换显示数量应为 1–${MAX_VISIBLE_TABS}。`)
     }
@@ -874,6 +892,14 @@ export class ConversationStore {
     for (const [value, label] of [[userAvatar, '头像'], [assistantAvatar, '头像']] as const) {
       if (value !== undefined && value !== null && !isStoredAvatar(value)) throw new ConversationStoreError('INVALID_INPUT', `${label}文件无效。`)
     }
+    if (panelSize !== undefined && (!Number.isInteger(panelSize?.width) || !Number.isInteger(panelSize?.height) ||
+        panelSize.width < PANEL_MIN_WIDTH || panelSize.width > 4000 ||
+        panelSize.height < PANEL_MIN_HEIGHT || panelSize.height > 4000)) {
+      throw new ConversationStoreError('INVALID_INPUT', '面板尺寸无效。')
+    }
+    if (uiSize !== undefined && !isUiSize(uiSize)) {
+      throw new ConversationStoreError('INVALID_INPUT', '界面尺寸只能是小、中或大。')
+    }
     return this.mutate((draft) => {
       if (tabs !== undefined) draft.settings.visibleConversationTabs = tabs
       if (autoArchive !== undefined) draft.settings.autoArchiveAfterDays = autoArchive
@@ -900,6 +926,8 @@ export class ConversationStore {
       if (assistantName !== undefined) draft.settings.assistantName = assistantName.trim()
       if (userAvatar !== undefined) draft.settings.userAvatar = userAvatar
       if (assistantAvatar !== undefined) draft.settings.assistantAvatar = assistantAvatar
+      if (panelSize !== undefined) draft.settings.panelSize = { width: panelSize.width, height: panelSize.height }
+      if (uiSize !== undefined) draft.settings.uiSize = uiSize
       return draft.settings
     })
   }

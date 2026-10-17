@@ -33,6 +33,7 @@ interface ModelFormState {
 
 const SETTINGS_TABS = [
   { id: 'conversation', label: '对话' },
+  { id: 'appearance', label: '外观' },
   { id: 'models', label: '模型' },
   { id: 'memory', label: '记忆' },
   { id: 'growth', label: '成长' },
@@ -40,6 +41,13 @@ const SETTINGS_TABS = [
   { id: 'avatar', label: '头像' }
 ] as const
 type SettingsTab = typeof SETTINGS_TABS[number]['id']
+
+/** 界面尺寸档：小是原来的样子，中、大各上调一档。 */
+const UI_SIZE_OPTIONS: ReadonlyArray<{ id: ConversationSettings['uiSize']; label: string }> = [
+  { id: 'small', label: '小' },
+  { id: 'medium', label: '中' },
+  { id: 'large', label: '大' }
+]
 
 const GROWTH_STATUS_LABEL: Record<GrowthProposal['status'], string> = {
   proposed: '待同意实验', running: '实验中', ready: '待审阅', failed: '实验失败',
@@ -438,6 +446,19 @@ export function SettingsPage() {
           <button type="button" role="switch" aria-labelledby="timestamps-label" aria-checked={settings?.showMessageTimestamps ?? true}
             className={`settings-switch${settings?.showMessageTimestamps ?? true ? ' is-on' : ''}`} disabled={!settings || busy}
             onClick={() => { void update({ showMessageTimestamps: !(settings?.showMessageTimestamps ?? true) }) }} />
+        </div>
+      </section>}
+      {tab === 'appearance' && <section className="settings-section" role="tabpanel" id="settings-panel-appearance" aria-labelledby="settings-tab-appearance">
+        <div className="settings-row">
+          <div className="settings-copy"><label>界面尺寸</label><p>小是现在的样子；中、大逐级把整套字号放大。改完立刻生效，所有窗口一起变。</p></div>
+          <div className="settings-size-picker" role="radiogroup" aria-label="界面尺寸">
+            {UI_SIZE_OPTIONS.map((option) => {
+              const active = (settings?.uiSize ?? 'small') === option.id
+              return <button key={option.id} type="button" role="radio" aria-checked={active}
+                className={`settings-size-option${active ? ' is-active' : ''}`} disabled={!settings || busy}
+                onClick={() => { void update({ uiSize: option.id }) }}>{option.label}</button>
+            })}
+          </div>
         </div>
       </section>}
       {tab === 'models' && <section className="settings-section" role="tabpanel" id="settings-panel-models" aria-labelledby="settings-tab-models">

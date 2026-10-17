@@ -1,3 +1,5 @@
+@import './design-tokens.css';
+
 .tab-context-menu {
   position: absolute;
   z-index: 30;
@@ -9,7 +11,7 @@
   color: #edf3ff;
   background: linear-gradient(155deg, rgba(43, 67, 120, .98), rgba(17, 34, 72, .98));
   box-shadow: 0 12px 28px rgba(5, 14, 38, .34);
-  font-size: 11px;
+  font-size: var(--text-sm);
 }
 
 .tab-context-menu-title {
@@ -17,7 +19,7 @@
   padding: 5px 8px 7px;
   border-bottom: 1px solid rgba(188, 212, 255, .14);
   color: #adc3eb;
-  font-size: 11px;
+  font-size: var(--text-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -34,7 +36,7 @@
   color: inherit;
   background: transparent;
   text-align: left;
-  font-size: 11px !important;
+  font-size: var(--text-sm) !important;
 }
 
 .tab-context-menu button:hover:not(:disabled), .tab-context-menu button:focus-visible { background: rgba(181, 205, 255, .16); }

@@ -30,7 +30,8 @@ import { APP_SLASH_COMMANDS, listClaudeWorkflows, parseAppSlashCommand } from '.
 import { attachmentPreviewPath, prepareDroppedFile, readImagePreview, searchWorkspaceFiles, stagePastedAttachment, validAttachmentList, verifyDroppedFilePath } from './local-context'
 import { findSourceProjectRoot, resolveAgentWorkspace } from './workspace-root'
 import { isEffortLevel } from '../shared/effort'
-import type { BubbleLayout, ClaudeWorkflowOption, ConversationSettings, UserAttachment } from '../shared/contracts'
+import type { BubbleLayout, ClaudeWorkflowOption, ConversationSettings, UiSize, UserAttachment } from '../shared/contracts'
+import { PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH } from '../shared/contracts'
 
 const projectRoot = app.isPackaged ? path.dirname(process.execPath) : path.resolve(__dirname, '../..')
 const dataProjectRoot = findSourceProjectRoot(projectRoot) ?? projectRoot
@@ -58,6 +59,12 @@ let balanceOpen = false
 let bubbleLayout: BubbleLayout = 'empty'
 let compactBubbleHeight: number | undefined
 let bubbleExpanded = false
+/** 用户拖出来的展开面板尺寸；空表示用出厂的全高面板。 */
+let bubblePanelSize: { width: number; height: number } | undefined
+/** 界面字号档；窗口加载时灌一次，之后设置窗口一改就广播。 */
+let currentUiSize: UiSize = 'small'
+/** 渲染器上报的可见人物矩形（窗口坐标），用于窗口命中形状。 */
+let avatarBox: Electron.Rectangle | undefined
 let dragOrigin: { cursor: Electron.Point; bounds: Electron.Rectangle } | undefined
 let shapeShrinkTimer: NodeJS.Timeout | undefined
 let rendererAvatarState: import('../shared/contracts').AvatarState | undefined
@@ -67,6 +74,9 @@ let rendererAvatarState: import('../shared/contracts').AvatarState | undefined
 const stageSize = { width: STAGE_WIDTH, height: STAGE_HEIGHT }
 
 function avatarRegion(size: { width: number; height: number }): Electron.Rectangle {
+  // 图片裁掉透明边后，命中区跟着渲染器量出的可见矩形走；启动最初的几帧
+  // 还没有上报，先用旧的右下角位置兜底。
+  if (avatarBox) return { ...avatarBox }
   return { x: size.width - 168, y: size.height - 186, width: 160, height: 180 }
 }
 
@@ -111,7 +121,7 @@ function syncStageBounds(): void {
   const previous = win.getBounds()
   const bottom = previous.y + previous.height
   const work = screen.getDisplayNearestPoint({ x: previous.x + previous.width - 88, y: bottom - 96 }).workArea
-  const next = computeStageBounds(previous, work, bubbleExpanded)
+  const next = computeStageBounds(previous, work, bubbleExpanded, bubbleExpanded ? bubblePanelSize : undefined)
   if (previous.x === next.x && previous.y === next.y && previous.width === next.width && previous.height === next.height) return
   if (shapeShrinkTimer) clearTimeout(shapeShrinkTimer)
   shapeShrinkTimer = undefined
@@ -124,6 +134,18 @@ function setBubbleExpanded(expanded: boolean): void {
   if (bubbleExpanded === expanded) return
   bubbleExpanded = expanded
   syncStageBounds()
+}
+
+/** 拖拽会把尺寸改得很密，停手 600ms 后统一落盘一次。 */
+let panelSizeSaveTimer: NodeJS.Timeout | undefined
+function schedulePanelSizeSave(): void {
+  if (panelSizeSaveTimer) clearTimeout(panelSizeSaveTimer)
+  panelSizeSaveTimer = setTimeout(() => {
+    panelSizeSaveTimer = undefined
+    if (!bubblePanelSize) return
+    void activeController().updateSettings({ panelSize: { ...bubblePanelSize } })
+      .catch((error: unknown) => console.warn('Save panel size failed:', error instanceof Error ? error.message : String(error)))
+  }, 600)
 }
 
 const apiKey = getEnabledDeepSeekKey(process.env)
@@ -306,8 +328,23 @@ function loadPage(win: BrowserWindow, balance = false): void {
   const url = rendererUrl()
   if (url) void win.loadURL(balance ? `${url}?balance=1` : url)
   else void win.loadFile(path.join(__dirname, '../renderer/avatar.html'), balance ? { query: { balance: '1' } } : undefined)
+  sendUiSizeWhenLoaded(win)
   win.webContents.on('will-navigate', (event) => event.preventDefault())
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+}
+
+/** 每个窗口的 preload 都监听 pet:ui-size；页面一加载完就灌当前档位。 */
+function sendUiSizeWhenLoaded(win: BrowserWindow): void {
+  win.webContents.once('did-finish-load', () => {
+    if (!win.isDestroyed()) win.webContents.send('pet:ui-size', currentUiSize)
+  })
+}
+
+function broadcastUiSize(size: UiSize): void {
+  currentUiSize = size
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send('pet:ui-size', size)
+  }
 }
 
 function createAvatarWindow(): BrowserWindow {
@@ -426,6 +463,7 @@ function createSettingsWindow(): BrowserWindow {
   const base = process.env.ELECTRON_RENDERER_URL
   if (base) void win.loadURL(`${base}/settings.html`)
   else void win.loadFile(path.join(__dirname, '../renderer/settings.html'))
+  sendUiSizeWhenLoaded(win)
   win.webContents.on('will-navigate', (event) => event.preventDefault())
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   return win
@@ -549,7 +587,8 @@ function isScreenPoint(value: unknown): value is Electron.Point {
 function conversationSettingsPatch(value: unknown): Partial<ConversationSettings> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('会话设置无效。')
   const input = value as Record<string, unknown>
-  if (Object.keys(input).some((key) => !['visibleConversationTabs', 'autoArchiveAfterDays', 'effort', 'goalMaxIterations', 'goalMaxMinutes', 'memoryEnabled'].includes(key))) throw new Error('会话设置无效。')
+  const editable = ['visibleConversationTabs', 'autoArchiveAfterDays', 'effort', 'goalMaxIterations', 'goalMaxMinutes', 'memoryEnabled', 'uiSize', 'enableAutoTitleGeneration', 'showMessageTimestamps', 'userName', 'assistantName']
+  if (Object.keys(input).some((key) => !editable.includes(key))) throw new Error('会话设置无效。')
   const patch: Partial<ConversationSettings> = {}
   if (input.visibleConversationTabs !== undefined) {
     const tabs = input.visibleConversationTabs
@@ -578,6 +617,23 @@ function conversationSettingsPatch(value: unknown): Partial<ConversationSettings
   if (input.memoryEnabled !== undefined) {
     if (typeof input.memoryEnabled !== 'boolean') throw new Error('记忆开关无效。')
     patch.memoryEnabled = input.memoryEnabled
+  }
+  if (input.uiSize !== undefined) {
+    if (input.uiSize !== 'small' && input.uiSize !== 'medium' && input.uiSize !== 'large') throw new Error('界面尺寸设置无效。')
+    patch.uiSize = input.uiSize
+  }
+  if (input.enableAutoTitleGeneration !== undefined) {
+    if (typeof input.enableAutoTitleGeneration !== 'boolean') throw new Error('标题设置无效。')
+    patch.enableAutoTitleGeneration = input.enableAutoTitleGeneration
+  }
+  if (input.showMessageTimestamps !== undefined) {
+    if (typeof input.showMessageTimestamps !== 'boolean') throw new Error('时间戳设置无效。')
+    patch.showMessageTimestamps = input.showMessageTimestamps
+  }
+  for (const key of ['userName', 'assistantName'] as const) {
+    if (input[key] === undefined) continue
+    if (typeof input[key] !== 'string') throw new Error('称呼无效。')
+    patch[key] = input[key]
   }
   return patch
 }
@@ -654,6 +710,9 @@ function registerIpc(): void {
     return activeController().updateSettings(conversationSettingsPatch(patch)).then((settings) => {
       memory.setEnabled(settings.memoryEnabled)
       discardSidesWithoutLiveParents()
+      // 界面尺寸等显示设置也要立刻传给头像窗口里的小面板，不必等下一个事件。
+      broadcastUiSize(settings.uiSize)
+      publishSnapshot()
       return publicSettings(settings)
     })
   })
@@ -1148,6 +1207,35 @@ function registerIpc(): void {
     if (typeof expanded !== 'boolean') throw new Error('气泡尺寸无效。')
     setBubbleExpanded(expanded)
   })
+  ipcMain.handle('pet:set-avatar-box', (event, box: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (!box || typeof box !== 'object') return
+    const { x, y, width, height } = box as Record<string, unknown>
+    if (![x, y, width, height].every((value) => typeof value === 'number' && Number.isFinite(value))) return
+    const bounds = avatarWindow?.getBounds()
+    if (!bounds) return
+    const left = Math.round(Math.max(0, Math.min(bounds.width, x as number)))
+    const top = Math.round(Math.max(0, Math.min(bounds.height, y as number)))
+    avatarBox = {
+      x: left,
+      y: top,
+      width: Math.max(1, Math.min(bounds.width - left, Math.round(width as number))),
+      height: Math.max(1, Math.min(bounds.height - top, Math.round(height as number)))
+    }
+    applyPointerShape()
+  })
+  ipcMain.handle('pet:set-panel-size', (event, width: unknown, height: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (typeof width !== 'number' || typeof height !== 'number' || !Number.isFinite(width) || !Number.isFinite(height)) {
+      throw new Error('面板尺寸无效。')
+    }
+    bubblePanelSize = {
+      width: Math.round(Math.min(4000, Math.max(PANEL_MIN_WIDTH, width))),
+      height: Math.round(Math.min(4000, Math.max(PANEL_MIN_HEIGHT, height)))
+    }
+    syncStageBounds()
+    schedulePanelSizeSave()
+  })
   ipcMain.handle('pet:set-plan-mode', async (event, on: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     if (typeof on !== 'boolean') throw new Error('计划模式设置无效。')
@@ -1248,7 +1336,11 @@ if (ownsSingleInstance) void app.whenReady().then(async () => {
     console.warn('Claude user resource links unavailable:', error instanceof Error ? error.message : String(error))
   })
   await activeController().initialize()
-  memory.setEnabled((await activeController().getLibraryState()).settings.memoryEnabled)
+  const initialSettings = (await activeController().getLibraryState()).settings
+  memory.setEnabled(initialSettings.memoryEnabled)
+  currentUiSize = initialSettings.uiSize
+  const savedPanelSize = initialSettings.panelSize
+  if (savedPanelSize) bubblePanelSize = { width: savedPanelSize.width, height: savedPanelSize.height }
   await memory.initialize()
   registerIpc()
   avatarWindow = createAvatarWindow()

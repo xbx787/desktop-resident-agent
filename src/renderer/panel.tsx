@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type AnimationEvent, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import type { AppSnapshot, BubbleLayout, ClaudeWorkflowOption, ContextUsageSnapshot, ConversationSummary, EffortLevel, ModelMode, ModelProfile, PendingMessage, PetAPI, ProposedAction, SideChatSnapshot, TaskMetrics, TaskStatus, TimelineEntry, UserAttachment } from '../shared/contracts';
+import { PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH } from '../shared/contracts';
 import { isImageAttachmentName } from '../shared/image-preview';
 import { EFFORT_LABELS } from '../shared/effort';
 import { EffortSlider } from './effort-slider';
@@ -2108,6 +2109,38 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
     }
   }
 
+  // 展开面板的左上角拖拽：面板锚在右下，向右下没有空间，所以向左上拖大。
+  // 尺寸每帧最多发一次；主进程按窗口布局重算并节流落盘。
+  const resizeSession = useRef<{ startX: number; startY: number; startW: number; startH: number; lastSent: number } | null>(null);
+  const [resizingPanel, setResizingPanel] = useState(false);
+  function beginPanelResize(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (!expanded) return;
+    const rect = event.currentTarget.closest('.panel-bubble')?.getBoundingClientRect();
+    if (!rect) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    resizeSession.current = { startX: event.clientX, startY: event.clientY, startW: rect.width, startH: rect.height, lastSent: 0 };
+    setResizingPanel(true);
+  }
+  function movePanelResize(event: ReactPointerEvent<HTMLDivElement>): void {
+    const session = resizeSession.current;
+    if (!session) return;
+    const maxWidth = Math.max(PANEL_MIN_WIDTH, window.screen.availWidth - 20);
+    const maxHeight = Math.max(PANEL_MIN_HEIGHT, window.screen.availHeight - 192);
+    const width = Math.round(Math.min(maxWidth, Math.max(PANEL_MIN_WIDTH, session.startW + (session.startX - event.clientX))));
+    const height = Math.round(Math.min(maxHeight, Math.max(PANEL_MIN_HEIGHT, session.startH + (session.startY - event.clientY))));
+    const now = performance.now();
+    if (now - session.lastSent < 16) return;
+    session.lastSent = now;
+    void petBridge().setPanelSize(width, height);
+  }
+  function endPanelResize(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (!resizeSession.current) return;
+    resizeSession.current = null;
+    setResizingPanel(false);
+    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* 已释放 */ }
+  }
+
   useEffect(() => {
     try {
       void petBridge().setBubbleLayout(layout, layout === 'composer' || layout === 'composer_attachments' ? compactComposerHeight : undefined).catch(() => undefined);
@@ -2128,6 +2161,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
       setComposerOpen(true);
       void addFiles(Array.from(event.dataTransfer.files));
     }}>
+      {expanded && <div className={`panel-resize-grip${resizingPanel ? ' is-resizing' : ''}`} role="separator" aria-label="调整面板大小" title="向左上拖动调整大小" onPointerDown={beginPanelResize} onPointerMove={movePanelResize} onPointerUp={endPanelResize} onPointerCancel={endPanelResize} />}
       {(!compactEmpty || composerOpen) && <button type="button" className="panel-expand-toggle panel-window-action" aria-label={expanded ? '还原对话气泡' : '放大对话气泡'} title={expanded ? '还原对话' : '放大对话'} onClick={() => { void toggleExpanded().catch(() => undefined); }}>
         {expanded ? <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 8h4V4M12 4v4h4M16 12h-4v4M8 16v-4H4" /></svg> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8 4H4v4M12 4h4v4M16 12v4h-4M4 12v4h4" /></svg>}
       </button>}
@@ -2291,7 +2325,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
               // "Latest reply" is the turn's final entry itself: a mid-turn
               const runAnchor = group.items[0];
               return <div className="panel-turn" key={group.user.id}>
-                <TimelineItem entry={group.user} display={rowDisplay} onAvatarMenu={sideExpanded ? undefined : (event) => showTurnMenu(event, group.user.id, turnMenuTitle(group.user), isLiveTurn)} />
+                <TimelineItem entry={group.user} display={rowDisplay} onOpenImage={openImageViewer} onAvatarMenu={sideExpanded ? undefined : (event) => showTurnMenu(event, group.user.id, turnMenuTitle(group.user), isLiveTurn)} />
                 {/* 插话夹在自己的消息和这条回复之间，按条数叠成一列——它们是
                     消息，不是小鲸气泡里的东西；过程依旧整条可折叠。 */}
                 {asides.length > 0 && <div className="panel-turn-asides">
@@ -2450,6 +2484,13 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                       if (suggestionItems.length > 0 && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
                         event.preventDefault();
                         setSuggestionSelected((current) => (current + (event.key === 'ArrowDown' ? 1 : -1) + suggestionItems.length) % suggestionItems.length);
+                        return;
+                      }
+                      // Tab 接受当前高亮项：命令、技能、文件和会话引用走同一套补全。
+                      // 不拦下的话 Tab 会把焦点移出输入框。
+                      if (suggestionItems.length > 0 && event.key === 'Tab') {
+                        event.preventDefault();
+                        acceptSuggestion(suggestionItems[suggestionSelected] ?? suggestionItems[0]);
                         return;
                       }
                       if (suggestionItems.length > 0 && event.key === 'Enter' && !event.ctrlKey && !event.metaKey) {

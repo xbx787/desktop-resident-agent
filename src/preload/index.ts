@@ -92,6 +92,8 @@ const api: PetAPI = {
   openExternal: (url) => ipcRenderer.invoke('pet:open-external', url),
   setBubbleLayout: (layout, height) => ipcRenderer.invoke('pet:set-bubble-layout', layout, height),
   setBubbleExpanded: (expanded) => ipcRenderer.invoke('pet:set-bubble-expanded', expanded),
+  setPanelSize: (width, height) => ipcRenderer.invoke('pet:set-panel-size', width, height),
+  setAvatarBox: (box) => ipcRenderer.invoke('pet:set-avatar-box', box),
   setModelMode: (mode) => ipcRenderer.invoke('pet:set-model-mode', mode),
   setEffort: (level) => ipcRenderer.invoke('pet:set-effort', level),
   setPlanMode: (on) => ipcRenderer.invoke('pet:set-plan-mode', on),
@@ -109,5 +111,11 @@ const api: PetAPI = {
     return () => ipcRenderer.removeListener('pet:snapshot', listener)
   }
 }
+
+// 界面字号档：主进程在每个窗口加载完成时灌一次，设置窗口改档时广播。
+// CSS 只认 <html data-ui-size>，所以这里直接写 DOM，不经过渲染器。
+ipcRenderer.on('pet:ui-size', (_event, size: unknown) => {
+  document.documentElement.dataset.uiSize = size === 'medium' || size === 'large' ? size : 'small'
+})
 
 contextBridge.exposeInMainWorld('pet', api)

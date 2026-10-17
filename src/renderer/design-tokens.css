@@ -1,0 +1,37 @@
+/* 全软件唯一的字体来源 —— 只改这一处，所有窗口一起变。
+ *
+ * 规则：
+ * - 界面字族只有三种：界面、代码、数字/符号。
+ * - 文字字号只有六档：9 / 10 / 11 / 13 / 16 / 27。全部由 --font-base 等比派生，
+ *   所以调整界面尺寸只需要覆盖 --font-base。
+ * - 勾、叉、加号、箭头这类「字形图标」不算文字，用 --glyph-* 三档，同样跟随。
+ * - 除本文件外，任何 CSS 都不允许写 font-size / font-family 字面量；
+ *   test/font-system.test.ts 会扫描并拦下漏网的硬编码。
+ *
+ * 界面尺寸档（设置 → 外观）：
+ *   小 = 现在屏幕上的样子；中、大各上调一档。 */
+
+:root {
+  --font-ui: "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif;
+  --font-mono: Consolas, "Microsoft YaHei UI", monospace;
+  --font-numeric: Bahnschrift, "Segoe UI", sans-serif;
+
+  /* 唯一的基准字号：小档 11px，中档 12px，大档 13px。 */
+  --font-base: 11px;
+
+  /* 文字六档（小档显示 9 / 10 / 11 / 13 / 16 / 27）。 */
+  --text-2xs: calc(var(--font-base) * 9 / 11);
+  --text-xs: calc(var(--font-base) * 10 / 11);
+  --text-sm: var(--font-base);
+  --text-md: calc(var(--font-base) * 13 / 11);
+  --text-lg: calc(var(--font-base) * 16 / 11);
+  --text-xl: calc(var(--font-base) * 27 / 11);
+
+  /* 字形图标三档（小档显示 14 / 17 / 19）。 */
+  --glyph-sm: calc(var(--font-base) * 14 / 11);
+  --glyph-md: calc(var(--font-base) * 17 / 11);
+  --glyph-lg: calc(var(--font-base) * 19 / 11);
+}
+
+html[data-ui-size="medium"] { --font-base: 12px; }
+html[data-ui-size="large"] { --font-base: 13px; }

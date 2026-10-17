@@ -1,3 +1,5 @@
+@import './design-tokens.css';
+
 .balance-peek {
   position: absolute;
   z-index: 12;
@@ -17,8 +19,8 @@
     radial-gradient(ellipse at 14% 0%, rgba(114, 163, 240, .24), transparent 64%),
     linear-gradient(155deg, rgba(34, 59, 112, .96), rgba(17, 36, 78, .96) 64%, rgba(12, 28, 62, .96));
   box-shadow: inset 0 1px rgba(245, 249, 255, .11);
-  font-family: "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif;
-  font-size: 11px;
+  font-family: var(--font-ui);
+  font-size: var(--text-sm);
 }
 
 .balance-peek::after {
@@ -46,8 +48,8 @@
 
 .balance-header { justify-content: space-between; }
 .balance-heading { gap: 7px; letter-spacing: .01em; }
-.balance-heading strong { font-size: 11px; font-weight: 650; }
-.balance-heading small { color: #a9c0e9; font-size: 10px; }
+.balance-heading strong { font-size: var(--text-sm); font-weight: 650; }
+.balance-heading small { color: #a9c0e9; font-size: var(--text-xs); }
 .balance-updated { color: #8ba2cc; }
 .balance-actions { gap: 2px; }
 .balance-actions button {
@@ -60,7 +62,7 @@
   border-radius: 7px;
   color: #c8d9fa;
   background: transparent;
-  font: 17px/1 "Segoe UI Symbol", sans-serif;
+  font: var(--glyph-md)/1 var(--font-ui);
   cursor: pointer;
   transition: background .15s ease, color .15s ease;
 }
@@ -72,18 +74,18 @@
 .balance-amount strong {
   overflow: hidden;
   color: #f6f9ff;
-  font-family: Bahnschrift, "Segoe UI", sans-serif;
-  font-size: 27px;
+  font-family: var(--font-numeric);
+  font-size: var(--text-xl);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   letter-spacing: -.035em;
   text-overflow: ellipsis;
 }
-.balance-amount small { align-self: baseline; margin-top: 9px; color: #a9c3ef; font-size: 10px; }
+.balance-amount small { align-self: baseline; margin-top: 9px; color: #a9c3ef; font-size: var(--text-xs); }
 .balance-amount + .balance-amount { flex-shrink: 1; padding-left: 10px; border-left: 1px solid rgba(194, 216, 255, .2); }
-.balance-amount + .balance-amount strong { font-size: 16px; letter-spacing: 0; }
+.balance-amount + .balance-amount strong { font-size: var(--text-lg); letter-spacing: 0; }
 .balance-amount + .balance-amount small { margin-top: 3px; }
-.balance-placeholder { color: #b0c5e9; font-size: 13px; }
+.balance-placeholder { color: #b0c5e9; font-size: var(--text-md); }
 
 .balance-period {
   gap: 8px;
@@ -93,7 +95,7 @@
   border-radius: 9px;
   color: #d6e4ff;
   background: rgba(178, 205, 255, .07);
-  font-size: 11px;
+  font-size: var(--text-sm);
   white-space: nowrap;
 }
 .balance-period-badge { flex: none; display: inline-flex; align-items: center; gap: 5px; }
@@ -103,5 +105,5 @@
 .balance-period-unknown { color: #b9c9e7; }
 .balance-next { overflow: hidden; text-overflow: ellipsis; }
 
-.balance-foot { gap: 6px; min-width: 0; color: #9cb2dc; font-size: 10px; white-space: nowrap; }
+.balance-foot { gap: 6px; min-width: 0; color: #9cb2dc; font-size: var(--text-xs); white-space: nowrap; }
 .balance-foot span { overflow: hidden; text-overflow: ellipsis; }

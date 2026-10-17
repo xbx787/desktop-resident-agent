@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { idleFidgetFrames, idleFidgetTiming, nextFidgetDelay, startIdleFidgets } from '../src/renderer/avatar-idle'
 
-/** Same geometry as the click bounce: the art draws a 160×160 square centred
- *  in the 160×180 window, 10 px of vertical slack, no horizontal slack. */
-const TOP = 10
-const BOTTOM = 170
-const HALF = 80
+/** Same geometry as the click bounce: the trimmed artwork is 139.5 px tall
+ *  inside a hit box with 6 px of animation room above and below. */
+const TOP = 6
+const BOTTOM = 145.5
+const HALF = 69.75
+const BOX_BOTTOM = 151.5
+const SLACK = 2
 
 function parseFrame(transform: string): { ty: number; sy: number } {
   const ty = /translateY\((-?[\d.]+)px\)/.exec(transform)
@@ -22,8 +24,8 @@ describe('idle fidget frames', () => {
       expect(rest).toBe('')
       const { ty, sy } = parseFrame(transform)
       const grow = HALF * Math.abs(sy - 1)
-      expect(TOP + ty - grow).toBeGreaterThanOrEqual(2)
-      expect(BOTTOM + ty + grow).toBeLessThanOrEqual(178)
+      expect(TOP + ty - grow).toBeGreaterThanOrEqual(-SLACK)
+      expect(BOTTOM + ty + grow).toBeLessThanOrEqual(BOX_BOTTOM + SLACK)
     }
   })
 

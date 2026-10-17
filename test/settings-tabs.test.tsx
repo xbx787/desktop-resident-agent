@@ -5,7 +5,7 @@ import { SettingsPage } from '../src/renderer/settings'
 describe('SettingsPage tabs', () => {
   it('shows one group at a time behind a top tab row', () => {
     const html = renderToStaticMarkup(<SettingsPage />)
-    for (const label of ['对话', '模型', '记忆', '成长', '称呼', '头像']) expect(html).toContain(`>${label}</button>`)
+    for (const label of ['对话', '外观', '模型', '记忆', '成长', '称呼', '头像']) expect(html).toContain(`>${label}</button>`)
     expect(html).toContain('role="tablist"')
     // The first group is the default; the other groups are not rendered at all.
     expect(html).toContain('id="settings-panel-conversation"')

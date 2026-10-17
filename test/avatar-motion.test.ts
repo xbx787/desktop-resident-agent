@@ -1,14 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { clickBounceFrames, clickBounceTiming, playClickBounce } from '../src/renderer/avatar-motion'
 
-/** Geometry the frames must respect: the art draws a 160×160 square centred in
- *  the 160×180 hit target (src/renderer/avatar.css), and the window shape
- *  (avatarRegion in src/main/index.ts) is exactly that 160×180 — below/above
- *  10 px nothing is shown, and there is no horizontal slack at all. If any of
- *  those three constants change, revisit this file's numbers with the code. */
-const TOP = 10
-const BOTTOM = 170
-const HALF = 80
+/** Geometry the frames must respect: the trimmed artwork is 139.5 px tall and
+ *  sits in a hit box with 6 px of animation room above and below (height
+ *  151.5). The window shape is that box, so a frame may poke past it by at
+ *  most the 2 px safety margin below. If the box constants change, revisit
+ *  this file's numbers with the code. */
+const TOP = 6
+const BOTTOM = 145.5
+const HALF = 69.75
+const BOX_BOTTOM = 151.5
+const SLACK = 2
 
 function parseFrame(transform: string): { ty: number; sy: number } {
   const ty = /translateY\((-?[\d.]+)px\)/.exec(transform)
@@ -25,12 +27,12 @@ describe('click bounce frames', () => {
     }
   })
 
-  it('keeps every frame inside the window shape with a 2 px safety margin', () => {
+  it('keeps every frame inside the window shape within a 2 px safety margin', () => {
     for (const frame of clickBounceFrames()) {
       const { ty, sy } = parseFrame(String(frame.transform))
       const grow = HALF * Math.abs(sy - 1)
-      expect(TOP + ty - grow).toBeGreaterThanOrEqual(2)
-      expect(BOTTOM + ty + grow).toBeLessThanOrEqual(178)
+      expect(TOP + ty - grow).toBeGreaterThanOrEqual(-SLACK)
+      expect(BOTTOM + ty + grow).toBeLessThanOrEqual(BOX_BOTTOM + SLACK)
     }
   })
 

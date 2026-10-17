@@ -59,4 +59,9 @@ const api: SettingsAPI = {
   close: () => ipcRenderer.invoke('pet:settings:close')
 }
 
+// 与 pet preload 相同：字号档只写 <html data-ui-size>，CSS 自己派生。
+ipcRenderer.on('pet:ui-size', (_event, size: unknown) => {
+  document.documentElement.dataset.uiSize = size === 'medium' || size === 'large' ? size : 'small'
+})
+
 contextBridge.exposeInMainWorld('whaleSettings', api)

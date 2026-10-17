@@ -4,6 +4,8 @@
  *  work area; when the room above the bottom edge cannot fit a usable bubble,
  *  the whole stage slides down instead of squeezing the bubble flat. */
 
+import { PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH } from '../shared/contracts'
+
 export interface StageRect {
   x: number
   y: number
@@ -22,10 +24,24 @@ export const AVATAR_STRIP = 185
  *  a header, the composer and a couple of message lines. */
 export const BUBBLE_MIN_HEIGHT = 400
 
-export function computeStageBounds(previous: StageRect, work: StageRect, expanded: boolean): StageRect {
-  const width = Math.min(work.width, STAGE_WIDTH)
+/** Vertical room the bubble leaves for the avatar strip below it. */
+const BUBBLE_BOTTOM = AVATAR_STRIP + 7
+
+export interface PanelSize { width: number; height: number }
+
+export function computeStageBounds(previous: StageRect, work: StageRect, expanded: boolean, panelSize?: PanelSize): StageRect {
   const right = previous.x + previous.width
   const bottom = previous.y + previous.height
+  // 用户拖过尺寸：窗口 = 面板 + 左右 10px 留白，右缘与底缘保持不动（面板锚在
+  // 右下）。没拖过时保持出厂行为：固定宽度、展开时向上顶到工作区顶端。
+  if (expanded && panelSize) {
+    const width = Math.min(work.width, Math.max(PANEL_MIN_WIDTH, panelSize.width) + 20)
+    const height = Math.min(work.height, Math.max(PANEL_MIN_HEIGHT, panelSize.height) + BUBBLE_BOTTOM)
+    const x = Math.max(work.x, Math.min(right - width, work.x + work.width - width))
+    const y = Math.max(work.y, Math.min(bottom - height, work.y + work.height - height))
+    return { x, y, width, height }
+  }
+  const width = Math.min(work.width, STAGE_WIDTH)
   const x = Math.max(work.x, Math.min(right - width, work.x + work.width - width))
   if (!expanded) return { x, y: bottom - STAGE_HEIGHT, width, height: STAGE_HEIGHT }
   const height = Math.min(work.height, Math.max(BUBBLE_MIN_HEIGHT + AVATAR_STRIP, bottom - work.y))
