@@ -80,3 +80,10 @@ npm.cmd run dev
 ---
 
 基于 [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript) 构建，默认模型来自 DeepSeek。
+
+## 第三方组件与许可
+
+- **Claude Code 引擎 / Claude Agent SDK**：© Anthropic PBC，保留所有权利。发布包内的 `claude.exe` 是 Anthropic 发布的原始二进制，未做修改；使用受 [Anthropic Legal and Compliance](https://code.claude.com/docs/en/legal-and-compliance) 及适用的 Commercial Terms of Service 约束。每个使用者需使用自己的 API Key；本项目不代付、不转售、不中介 Claude 用量。本项目与 Anthropic 无隶属或背书关系。
+- **模型端点**：默认使用用户自行配置的 DeepSeek Anthropic 兼容端点。该端点不是 Anthropic 提供或官方支持的推理路径，使用者需自行确认其用法符合适用条款。
+- **角色素材**：角色立绘来自公开角色页，权利归原作者或权利方所有，仅作个人桌面使用；公开分发前请确认授权或替换为原创素材。
+- **其他依赖**：见 `package.json` 及各依赖自带的许可证文件。

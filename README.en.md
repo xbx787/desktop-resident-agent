@@ -78,3 +78,10 @@ Build a release with `npm.cmd run pack:release`. See [CHANGELOG.md](./CHANGELOG.
 ---
 
 Built on the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript). Default model provided by DeepSeek.
+
+## Third-party components and licenses
+
+- **Claude Code engine / Claude Agent SDK**: © Anthropic PBC. All rights reserved. The `claude.exe` shipped in the release is the unmodified binary published by Anthropic; its use is subject to the [Anthropic Legal and Compliance](https://code.claude.com/docs/en/legal-and-compliance) terms and the applicable Commercial Terms of Service. Each user must use their own API key; this project does not pay for, resell, or intermediate Claude usage. This project is not affiliated with or endorsed by Anthropic.
+- **Model endpoint**: the default is a user-configured DeepSeek Anthropic-compatible endpoint. It is not an Anthropic-provided or officially supported inference route; users are responsible for confirming that their use complies with the applicable terms.
+- **Character artwork**: comes from public character pages; rights remain with the original owners. It is intended for personal desktop use; confirm permission or replace it with original artwork before redistributing.
+- **Other dependencies**: see `package.json` and the license files shipped with each dependency.
