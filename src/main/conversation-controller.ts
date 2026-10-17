@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import type { AppSnapshot, AskAnswers, ContextUsageSnapshot, ConversationBatchAction, ConversationBatchResult, ModelMode, ModelProfile, TimelineEntry, UserAttachment } from '../shared/contracts'
+import type { AppSnapshot, ApprovalMode, AskAnswers, ContextUsageSnapshot, ConversationBatchAction, ConversationBatchResult, ModelMode, ModelProfile, TimelineEntry, UserAttachment } from '../shared/contracts'
+import { AUTO_COMPACT_DEFAULT_PERCENT } from '../shared/contracts'
 import { deleteTurnEntries, type AgentRuntime } from './agent-runtime'
 import type { DialogueLine } from './deepseek'
 import { containsSensitiveData } from './memory-service'
@@ -200,6 +201,18 @@ export class ConversationController {
       [...this.pending.values()].every((queue) => queue.length === 0)
   }
 
+  /** Drops every live runtime after the workspace changed. Each conversation
+   *  rebuilds its client on the next send, against the new cwd. Callers must
+   *  check allConversationsIdle first. */
+  async resetForWorkspace(): Promise<void> {
+    await this.initialize()
+    await this.serialize(async () => {
+      for (const id of [...this.runtimes.keys()]) this.releaseRuntime(id)
+      this.onRuntimeConfigurationChange?.()
+      this.emit()
+    })
+  }
+
   initialize(): Promise<void> {
     if (!this.initialization) {
       this.initialization = this.load().catch((error: unknown) => {
@@ -255,6 +268,9 @@ export class ConversationController {
     if (this.library) {
       runtime.setIdentity({ userName: this.library.settings.userName, assistantName: this.library.settings.assistantName })
       runtime.setEffort(this.library.settings.effort)
+      runtime.setWebSearch(this.library.settings.webSearchEnabled !== false)
+      runtime.setPersona(this.library.settings.personaId ?? 'xiaojing')
+      runtime.setAutoCompactPercent(this.library.settings.autoCompactPercent ?? AUTO_COMPACT_DEFAULT_PERCENT)
       runtime.setGoalBudget(this.library.settings.goalMaxIterations, this.library.settings.goalMaxMinutes)
     }
     this.runtimes.set(id, runtime)
@@ -391,6 +407,9 @@ export class ConversationController {
     // Model clients track the current depth; setting it repeatedly is a no-op.
     for (const runtime of this.runtimes.values()) {
       runtime.setEffort(this.library.settings.effort)
+      runtime.setWebSearch(this.library.settings.webSearchEnabled !== false)
+      runtime.setPersona(this.library.settings.personaId ?? 'xiaojing')
+      runtime.setAutoCompactPercent(this.library.settings.autoCompactPercent ?? AUTO_COMPACT_DEFAULT_PERCENT)
       runtime.setGoalBudget(this.library.settings.goalMaxIterations, this.library.settings.goalMaxMinutes)
     }
     this.emit()
@@ -948,6 +967,17 @@ export class ConversationController {
     })
   }
 
+  async setApprovalMode(mode: ApprovalMode, conversationId?: string): Promise<void> {
+    await this.initialize()
+    const id = conversationId ?? this.activeId
+    if (!id) return
+    await this.serialize(async () => {
+      const runtime = await this.ensureRuntime(id)
+      await runtime.setApprovalMode(mode)
+      await this.persistConversation(id)
+    })
+  }
+
   /** Creates or updates a model profile; the first one becomes active. */
   async saveModelProfile(profile: ModelProfile): Promise<void> {
     await this.initialize()
@@ -1072,5 +1102,12 @@ export class ConversationController {
     const runtime = this.runtimeIfAny(conversationId ?? this.activeId)
     if (!runtime) throw new Error('找不到这个会话。')
     await runtime.answerPlan(id, approved)
+  }
+
+  async answerPermission(id: string, allow: boolean, conversationId?: string): Promise<void> {
+    await this.initialize()
+    const runtime = this.runtimeIfAny(conversationId ?? this.activeId)
+    if (!runtime) throw new Error('找不到这个会话。')
+    await runtime.answerPermission(id, allow)
   }
 }

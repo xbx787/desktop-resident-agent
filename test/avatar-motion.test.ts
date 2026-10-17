@@ -1,15 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { clickBounceFrames, clickBounceTiming, playClickBounce } from '../src/renderer/avatar-motion'
 
-/** Geometry the frames must respect: the trimmed artwork is 139.5 px tall and
+/** Geometry the frames must respect: the trimmed artwork is 128 px tall and
  *  sits in a hit box with 6 px of animation room above and below (height
- *  151.5). The window shape is that box, so a frame may poke past it by at
+ *  140). The window shape is that box, so a frame may poke past it by at
  *  most the 2 px safety margin below. If the box constants change, revisit
  *  this file's numbers with the code. */
 const TOP = 6
-const BOTTOM = 145.5
-const HALF = 69.75
-const BOX_BOTTOM = 151.5
+const BOTTOM = 134
+const HALF = 64
+const BOX_BOTTOM = 140
 const SLACK = 2
 
 function parseFrame(transform: string): { ty: number; sy: number } {

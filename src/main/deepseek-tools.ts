@@ -9,6 +9,7 @@
  */
 import type { SdkMcpToolDefinition } from '@anthropic-ai/claude-agent-sdk';
 import { createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
+import { z } from 'zod';
 
 /** MCP 工具返回的形状（SDK 的 CallToolResult 未导出，按协议结构写一份）。 */
 interface ToolResult {
@@ -83,19 +84,16 @@ function fail(message: string): ToolResult {
 }
 
 /** 以进程内 MCP server 的形式交给 Claude Code：模型调用 search/fetch 时由主
- *  进程直接打 DeepSeek 的接口。参数 schema 手写 JSON Schema——SDK 的 zod
- *  helper 会引入一个打包里没有的运行时依赖，而 MCP 协议本来就吃 JSON Schema。 */
+ *  进程直接打 DeepSeek 的接口。参数 schema 必须用 Zod schema/raw shape——
+ *  createSdkMcpServer 只认这两种（手写 JSON Schema 会在注册时被拒），zod 已作为
+ *  运行时依赖随包分发。 */
 export function createDeepSeekToolsServer(apiKey: string) {
   const searchTool = {
     name: 'search',
     description: '用 DeepSeek 自研搜索引擎搜索网页。返回标题、链接与摘要；需要全文时再用 fetch 抓取对应链接。支持 site:、lang:、after: 等搜索操作符。',
     inputSchema: {
-      type: 'object',
-      properties: {
-        query: { type: 'string', description: '搜索词' },
-        count: { type: 'number', description: '返回条数，1-10，默认 6' }
-      },
-      required: ['query']
+      query: z.string().describe('搜索词'),
+      count: z.number().optional().describe('返回条数，1-10，默认 6')
     },
     handler: async (args: { query?: unknown; count?: unknown }) => {
       const query = typeof args.query === 'string' ? args.query.trim() : '';
@@ -112,11 +110,7 @@ export function createDeepSeekToolsServer(apiKey: string) {
     name: 'fetch',
     description: '抓取一个网页并返回 Markdown 正文。由 DeepSeek 服务端抓取，不受本机网络与客户端域名校验影响。',
     inputSchema: {
-      type: 'object',
-      properties: {
-        url: { type: 'string', description: '要抓取的 HTTP/HTTPS 网址' }
-      },
-      required: ['url']
+      url: z.string().describe('要抓取的 HTTP/HTTPS 网址')
     },
     handler: async (args: { url?: unknown }) => {
       const url = typeof args.url === 'string' ? args.url.trim() : '';
@@ -132,7 +126,7 @@ export function createDeepSeekToolsServer(apiKey: string) {
     name: 'deepseek',
     version: '1.0.0',
     instructions: '联网搜索与抓取由 DeepSeek 服务端完成：检索信息时先 search，再用 fetch 读取感兴趣的页面正文。',
-    tools: [searchTool, fetchTool] as unknown as Array<SdkMcpToolDefinition<any>>
+    tools: [searchTool, fetchTool] as unknown as Array<SdkMcpToolDefinition>
   });
 }
 

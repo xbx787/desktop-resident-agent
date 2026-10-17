@@ -30,8 +30,10 @@ export function lastUserEntryId(timeline: readonly { id: string; kind: string }[
   return null
 }
 
-/** How long a finished/failed dot stays on the portrait before it fades. */
-export const TASK_DOT_HOLD_MS = 6000
+/** How long a finished/failed dot stays on the portrait before it fades.
+ *  Six seconds was easy to miss while looking elsewhere; a completed turn
+ *  is worth a longer read. */
+export const TASK_DOT_HOLD_MS = 15000
 
 export interface TaskDot {
   tone: 'busy' | 'waiting' | 'done' | 'failed'

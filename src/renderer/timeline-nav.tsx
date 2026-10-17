@@ -183,6 +183,8 @@ export function TimelineNav({ marks, onJump, windowSize = NAV_WINDOW_WIDE }: { m
   if (marks.length < 5) return null;
   const frame = navWindow(marks.length, start, windowSize);
   const shown = expanded ? marks.slice(frame.from, frame.to) : marks.slice(-Math.min(NAV_RESTING, marks.length));
+  // 展开时的全局序号基准：窗口滑动后，刻度仍数整个对话的第几条横杠。
+  const ordinalBase = expanded ? frame.from : marks.length - shown.length;
   const current = expanded && active !== null && frame.from + active < marks.length ? marks[frame.from + active] : null;
   return <>
     <div
@@ -196,13 +198,18 @@ export function TimelineNav({ marks, onJump, windowSize = NAV_WINDOW_WIDE }: { m
     >
       {shown.map((mark, index) => {
         const boost = expanded && active !== null ? navBoost(Math.abs(index - active)) : 0;
-        return <i
-          key={mark.id}
-          aria-hidden="true"
-          className={navMarkClass(expanded, index === active)}
-          style={boost ? ({ '--nav-boost': `${boost}px` } as CSSProperties) : undefined}
-          onMouseEnter={expanded ? () => setActive(index) : undefined}
-        />;
+        const ordinal = ordinalBase + index + 1;
+        return <span key={mark.id} className="panel-nav-row">
+          <i
+            aria-hidden="true"
+            className={navMarkClass(expanded, index === active)}
+            style={boost ? ({ '--nav-boost': `${boost}px` } as CSSProperties) : undefined}
+            onMouseEnter={expanded ? () => setActive(index) : undefined}
+          />
+          {/* 每十根横杠标一次序号：10、20、30……数字在横杠右边，绝对定位，
+              不撑高行，滚轮的行距计算不受影响。 */}
+          {expanded && ordinal % 10 === 0 && <em className="panel-nav-count" aria-hidden="true">{ordinal}</em>}
+        </span>;
       })}
     </div>
     {current && <div

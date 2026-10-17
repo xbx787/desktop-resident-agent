@@ -53,7 +53,16 @@ npm.cmd run dev
 - Claude 配置与会话：`data/claude`（含个人设定 `CLAUDE.md`，引擎的运行数据）
 - 设置（模型、称呼、头像、开关）：`data/conversations/library.json`；模型密钥和高级环境变量以本机加密值保存。首次载入旧版明文配置时会迁移；保护不可用则保留原数据并报错。
 - 长期记忆：`data/memory/facts.json`；成长提案及审阅记录：`data/growth/proposals.json`。这些运行数据都不放进 Windows 发布 ZIP。
-- 启动环境中可用绝对路径 `DESKTOP_PET_WORKSPACE` 指定工作目录；未指定时打包版以仓库根为工作目录，移出仓库后回退到用户主目录。
+- 打包版的数据目录在 `Whale Companion Preview.exe` 同级的 `data\`（即 `win-unpacked\data`）。
+- 工作目录：新手引导会要求选择一次，保存在 `data/workspace.json`；设置 → 对话 → 工作目录可以迁移。应用把它作为 `DESKTOP_PET_WORKSPACE` 注入模型子进程，不修改 Windows 系统环境变量。启动环境里显式设置的 `DESKTOP_PET_WORKSPACE` 仍然优先。
+
+## 迁移到另一台电脑
+
+1. 先退出小鲸，再复制整个 `win-unpacked` 文件夹到新电脑上一个**有写权限**的位置。不要放进 `C:\Program Files`，运行数据会写不进去。
+2. 只复制程序就是干净配置；要把会话、记忆、人设、设置一起带走，再把旧电脑的 `win-unpacked\data` 复制到新电脑同一位置。
+3. 引擎已随包附带（`resources\app.asar.unpacked\...\claude.exe`），新电脑不需要安装 Claude Code 或 Node.js。执行命令类工具建议装 Git for Windows；`windows-mcp` 等 MCP 工具依赖用户目录的 `~/.claude.json`，不随数据目录迁移，需要在新电脑重新配置。
+4. API Key 和高级环境变量用 Windows 本机密钥保护加密，换电脑后无法解密。启动时配置向导会自动重新打开要求填写 Key；模型配置、会话和设置都保留。没自动弹出就打开设置 → 模型重新填写。
+5. 旧电脑的工作目录绝对路径如果在新电脑不存在，会自动回退到可用目录；在设置 → 对话 → 工作目录确认或迁移。旧目录里的文件不会自动复制，需要手动搬。
 
 ## 打包与发布（维护约定）
 

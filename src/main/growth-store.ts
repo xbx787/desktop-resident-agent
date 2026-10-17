@@ -14,6 +14,49 @@ function validProposal(value: unknown): value is GrowthProposal {
     typeof item.updatedAt === 'string'
 }
 
+const STATUS_LABELS: Record<GrowthProposal['status'], string> = {
+  proposed: '待同意实验',
+  running: '实验中',
+  ready: '待审阅',
+  failed: '实验失败',
+  stale: '源码已变化',
+  adopted: '已在本机采纳',
+  published: '已发布 GitHub',
+  discarded: '已丢弃'
+}
+
+/** 成长建议的本地可读副本：用户不通过设置界面看，而是直接翻这个 MD。 */
+function growthMarkdown(file: GrowthFile): string {
+  const lines = [
+    '# 成长建议（本地）',
+    '',
+    '> 这些建议只保存在本机，不出现在设置界面，也不会随仓库或发布包分发。',
+    '> 处理完一条后可以直接在这里删掉，或保留作记录。',
+    ''
+  ]
+  for (const item of file.proposals) {
+    lines.push(
+      `## ${item.title}`,
+      '',
+      `- 状态：${STATUS_LABELS[item.status] ?? item.status}`,
+      `- 创建：${item.createdAt}`,
+      `- 更新：${item.updatedAt}`,
+      '',
+      '**目标**',
+      '',
+      item.objective,
+      '',
+      '**依据**',
+      '',
+      item.evidence,
+      ''
+    )
+    if (item.error) lines.push('**错误**', '', item.error, '')
+    if (item.releaseNotes) lines.push('**版本说明**', '', item.releaseNotes, '')
+  }
+  return lines.join('\n') + '\n'
+}
+
 /** The store contains review metadata only. Worktrees and packages stay under data/. */
 export class GrowthStore {
   readonly filePath: string
@@ -49,6 +92,7 @@ export class GrowthStore {
         await handle.close()
       }
       await fs.rename(temporary, this.filePath)
+      await fs.writeFile(path.join(path.dirname(this.filePath), 'proposals.md'), growthMarkdown(file), 'utf8')
     } catch (error) {
       await fs.rm(temporary, { force: true }).catch(() => undefined)
       throw error

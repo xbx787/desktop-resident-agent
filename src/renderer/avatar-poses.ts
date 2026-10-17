@@ -28,11 +28,20 @@ export const POSES: readonly PoseSpec[] = [
 
 /** Explicit per-pose URLs (scripts/pose-normalize.cjs output) — the same
  *  pattern as avatar-art.ts, so the bundler sees every sprite statically.
- *
- *  The current artwork ships as one bust portrait, so this library is empty:
- *  every pose lookup falls back to the base artwork and the swap clock stays
- *  dormant. Fill it in again when a matching pose set exists. */
-const SOURCES: Record<string, string> = {}
+ *  The base artwork is the new bust portrait; the pose set is the same
+ *  character in full-body shots, so swaps change the framing as well as the
+ *  expression — but the alternative is one static face. */
+const SOURCES: Record<string, string> = {
+  wave: new URL('./assets/poses/wave.png', import.meta.url).href,
+  doze: new URL('./assets/poses/doze.png', import.meta.url).href,
+  cheer: new URL('./assets/poses/cheer.png', import.meta.url).href,
+  dozy: new URL('./assets/poses/dozy.png', import.meta.url).href,
+  smile: new URL('./assets/poses/smile.png', import.meta.url).href,
+  surprise: new URL('./assets/poses/surprise.png', import.meta.url).href,
+  focus: new URL('./assets/poses/focus.png', import.meta.url).href,
+  sleepy: new URL('./assets/poses/sleepy.png', import.meta.url).href,
+  shy: new URL('./assets/poses/shy.png', import.meta.url).href
+}
 
 export function poseSrc(id: string): string | null {
   return SOURCES[id] ?? null

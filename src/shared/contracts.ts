@@ -10,6 +10,9 @@ export type EffortLevel = 'off' | 'low' | 'high' | 'max'
  *  then "large". Every window derives its type scale from this. */
 export type UiSize = 'small' | 'medium' | 'large'
 
+/** 桌面人物的大小档：小 = 当前 128px 长边，中 = 之前的 139.5px，大 = 152px。 */
+export type AvatarSize = 'small' | 'medium' | 'large'
+
 /** The portrait's visible rectangle inside the avatar window, in window
  *  coordinates. The renderer measures the trimmed artwork and reports it so
  *  the window hit shape covers the character and nothing else. */
@@ -118,6 +121,16 @@ export interface BalanceSnapshot {
 export const PANEL_MIN_WIDTH = 360
 export const PANEL_MIN_HEIGHT = 400
 
+/** 自动压缩上下文的百分比阈值：默认 80，可在 50–90 之间用滚轮调整。 */
+export const AUTO_COMPACT_DEFAULT_PERCENT = 80
+export const AUTO_COMPACT_MIN_PERCENT = 50
+export const AUTO_COMPACT_MAX_PERCENT = 90
+
+export function isAutoCompactPercent(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) &&
+    value >= AUTO_COMPACT_MIN_PERCENT && value <= AUTO_COMPACT_MAX_PERCENT
+}
+
 export interface ConversationSettings {
   visibleConversationTabs: number
   autoArchiveAfterDays: 0 | 7 | 14 | 30
@@ -151,6 +164,16 @@ export interface ConversationSettings {
   panelSize?: { width: number; height: number }
   /** The whole interface's type scale. "small" is the original look. */
   uiSize: UiSize
+  /** 桌面人物的显示大小；命中区和窗口都跟着它走。 */
+  avatarSize: AvatarSize
+  /** 是否允许模型联网搜索/抓取。关闭时工具直接从工具列表移除，并在
+   *  人设里明确告知不可搜索，避免模型反复尝试。 */
+  webSearchEnabled?: boolean
+  /** 当前人设预设（xiaojing / rin / rem / yui / yukino），同时决定人设文字、
+   *  对话头像和桌面主角色。 */
+  personaId?: string
+  /** 上下文用到多少百分比时自动压缩，50–90，默认 80。 */
+  autoCompactPercent?: number
 }
 
 /** One named model endpoint. Main-process storage encrypts credentials;
@@ -261,6 +284,32 @@ export interface TaskMetrics {
   generationMs?: number
 }
 
+/** Claude Code's permission modes, carried through unchanged. `default` asks
+ *  before every sensitive tool call, `acceptEdits` lets file edits through,
+ *  `plan` only researches and proposes, and `bypassPermissions` runs as-is. */
+export type ApprovalMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
+
+export function isApprovalMode(value: unknown): value is ApprovalMode {
+  return value === 'default' || value === 'acceptEdits' || value === 'plan' || value === 'bypassPermissions'
+}
+
+/** A compaction in progress: `auto` marks the CLI's own threshold-triggered
+ *  one, as opposed to the app's pre-send compact or a manual /compact. */
+export interface CompactionState {
+  active: boolean
+  auto: boolean
+}
+
+/** One tool call parked until the user allows or denies it. */
+export interface ToolPermissionRequest {
+  id: string
+  tool: string
+  /** One human-readable line: what it wants to do. */
+  summary: string
+  /** The call's input, pretty-printed and capped, for the expanded view. */
+  input: string
+}
+
 /** One choice inside an ask-user question; the description shows under the label. */
 export interface AskQuestionOption {
   label: string
@@ -332,6 +381,9 @@ export interface AppSnapshot {
   pendingMessages?: PendingMessage[]
   contextUsage?: ContextUsageSnapshot
   contextCompacting?: boolean
+  /** True while the CLI compacts on its own at the auto threshold; the status
+   *  row then says "正在自动压缩上下文" instead of staying silent. */
+  contextCompactingAuto?: boolean
   taskMetrics?: TaskMetrics
   /** What this conversation has cost so far, in yuan, priced by the DeepSeek
    *  peak/off-peak tier each turn settled in. */
@@ -345,6 +397,10 @@ export interface AppSnapshot {
   question?: AskQuestionRequest | null
   /** The plan waiting for approval; absent or null means none. */
   plan?: PlanApprovalRequest | null
+  /** The tool call waiting for the user's allow/deny; absent or null means none. */
+  permission?: ToolPermissionRequest | null
+  /** The conversation's permission mode; absent matches the old auto-approve. */
+  approvalMode?: ApprovalMode
 }
 
 /** An in-memory side conversation attached to the currently displayed chat.
@@ -420,6 +476,9 @@ export interface PetAPI {
   /** Approves (true) or rejects (false) a parked plan; a rejection keeps the
    *  model in plan mode so it can revise and propose again. */
   answerPlan(id: string, approved: boolean, conversationId?: string): Promise<void>
+  /** Allows (true) or denies (false) the parked tool call. */
+  answerPermission(id: string, allow: boolean, conversationId?: string): Promise<void>
+  setApprovalMode(mode: ApprovalMode, conversationId?: string): Promise<void>
   /** The composer text as typed, kept per conversation so closing the window
    *  or the app never loses a half-written message. */
   saveDraft(conversationId: string, text: string): Promise<void>
@@ -451,7 +510,16 @@ export interface PetAPI {
   setAvatarBox(box: AvatarBox): Promise<void>
   setModelMode(mode: ModelMode): Promise<void>
   setEffort(level: EffortLevel): Promise<void>
+  /** Turns web search/fetch on or off for every new turn. */
+  setWebSearchEnabled(on: boolean): Promise<void>
+  /** Sets the auto-compaction threshold (50–90 percent). */
+  setAutoCompactPercent(percent: number): Promise<void>
   setPlanMode(on: boolean): Promise<void>
+  /** Switches the conversation's permission mode (default / acceptEdits /
+   *  plan / bypassPermissions). Side chats keep the main conversation's. */
+  setApprovalMode(mode: ApprovalMode, conversationId?: string): Promise<void>
+  /** Allows (true) or denies (false) the parked tool call. */
+  answerPermission(id: string, allow: boolean, conversationId?: string): Promise<void>
   /** Creates or updates one model profile; the first one becomes active. */
   saveModelProfile(profile: ModelProfile): Promise<void>
   deleteModelProfile(id: string): Promise<void>

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { deepseekFetch, deepseekSearch, resolveDeepSeekToolsKey } from '../src/main/deepseek-tools'
+import { createDeepSeekToolsServer, deepseekFetch, deepseekSearch, resolveDeepSeekToolsKey } from '../src/main/deepseek-tools'
 
 describe('DeepSeek search/fetch tools', () => {
   afterEach(() => {
@@ -45,5 +45,9 @@ describe('DeepSeek search/fetch tools', () => {
     expect(resolveDeepSeekToolsKey({ baseUrl: 'http://127.0.0.1:22092', apiKey: 'local-token' })).toBe('sk-env')
     vi.stubEnv('DEEPSEEK_API_KEY', '')
     expect(resolveDeepSeekToolsKey({ baseUrl: 'http://127.0.0.1:22092', apiKey: 'local-token' })).toBeUndefined()
+  })
+
+  it('以 Zod raw shape 注册进 MCP server 不抛错（SDK 拒绝手写 JSON Schema）', () => {
+    expect(() => createDeepSeekToolsServer('sk-test')).not.toThrow()
   })
 })

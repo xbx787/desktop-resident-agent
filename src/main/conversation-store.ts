@@ -5,8 +5,9 @@ import type { DialogueLine } from './deepseek'
 import { isEffortLevel } from '../shared/effort'
 import { containsSensitiveData } from './memory-service'
 import { protectProfiles, restoreProfiles, type SecretCodec } from './secret-storage'
-import type { AgentGoal, ConversationBatchAction, ConversationBatchResult, ConversationLibraryState, ConversationSummary, EffortLevel, ModelMode, ModelProfile, TaskStatus, TimelineEntry, UserAttachment, ConversationSettings, UiSize } from '../shared/contracts'
-import { PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH } from '../shared/contracts'
+import type { AgentGoal, ApprovalMode, AvatarSize, ConversationBatchAction, ConversationBatchResult, ConversationLibraryState, ConversationSummary, EffortLevel, ModelMode, ModelProfile, TaskStatus, TimelineEntry, UserAttachment, ConversationSettings, UiSize } from '../shared/contracts'
+import { AUTO_COMPACT_DEFAULT_PERCENT, PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH, isAutoCompactPercent } from '../shared/contracts'
+import { isPersonaId } from '../shared/personas'
 
 const DEFAULT_VISIBLE_TABS = 5
 const MAX_VISIBLE_TABS = 12
@@ -44,6 +45,9 @@ export interface ConversationRecord {
   /** Plan mode as last known. The CLI re-reports the real state on its next
    *  init, so this only has to survive the restart in between. */
   planMode?: boolean
+  /** The conversation's permission mode. Absent means the pre-existing
+   *  auto-approve behaviour (bypassPermissions). */
+  approvalMode?: ApprovalMode
   /** The composer text as typed, so closing the window never loses a
    *  half-written message. Attachments are not kept — their staged files do
    *  not survive the restart. */
@@ -67,6 +71,7 @@ export interface ConversationPatch {
   sdkSessionId?: string | null
   goal?: AgentGoal | null
   planMode?: boolean
+  approvalMode?: ApprovalMode
   draft?: string
   compactionSummary?: string | null
   spentYuan?: number
@@ -227,10 +232,14 @@ function isUiSize(value: unknown): value is UiSize {
   return value === 'small' || value === 'medium' || value === 'large'
 }
 
+function isAvatarSize(value: unknown): value is AvatarSize {
+  return value === 'small' || value === 'medium' || value === 'large'
+}
+
 function readExtendedSettings(settings: Record<string, unknown>): Pick<ConversationSettings,
   'modelProfiles' | 'activeModelProfileId' | 'enableAutoTitleGeneration' | 'showMessageTimestamps' |
   'userName' | 'assistantName' | 'userAvatar' | 'assistantAvatar' | 'tabOrder' |
-  'goalMaxIterations' | 'goalMaxMinutes' | 'memoryEnabled' | 'panelSize' | 'uiSize'> {
+  'goalMaxIterations' | 'goalMaxMinutes' | 'memoryEnabled' | 'panelSize' | 'uiSize' | 'avatarSize' | 'webSearchEnabled' | 'personaId' | 'autoCompactPercent'> {
   const profiles = Array.isArray(settings.modelProfiles)
     ? (settings.modelProfiles.filter(isModelProfile) as ModelProfile[]).map((profile) => structuredClone(profile))
     : []
@@ -251,7 +260,12 @@ function readExtendedSettings(settings: Record<string, unknown>): Pick<Conversat
     goalMaxMinutes: Number.isInteger(settings.goalMaxMinutes) && Number(settings.goalMaxMinutes) >= 1 && Number(settings.goalMaxMinutes) <= 1440 ? Number(settings.goalMaxMinutes) : 180,
     memoryEnabled: settings.memoryEnabled !== false,
     panelSize: readPanelSize(settings.panelSize),
-    uiSize: isUiSize(settings.uiSize) ? settings.uiSize : 'small'
+    uiSize: isUiSize(settings.uiSize) ? settings.uiSize : 'small',
+    avatarSize: isAvatarSize(settings.avatarSize) ? settings.avatarSize : 'small',
+    webSearchEnabled: settings.webSearchEnabled !== false,
+    personaId: isPersonaId(settings.personaId) ? settings.personaId : 'xiaojing',
+    autoCompactPercent: isAutoCompactPercent(settings.autoCompactPercent)
+      ? settings.autoCompactPercent : AUTO_COMPACT_DEFAULT_PERCENT
   }
 }
 
@@ -603,7 +617,8 @@ export class ConversationStore {
       settings = { visibleConversationTabs: DEFAULT_VISIBLE_TABS, autoArchiveAfterDays: 0, effort: 'max',
         modelProfiles: [], activeModelProfileId: null, enableAutoTitleGeneration: true, showMessageTimestamps: true,
         userName: '主人', assistantName: '小鲸', userAvatar: null, assistantAvatar: null, tabOrder: [],
-        goalMaxIterations: 30, goalMaxMinutes: 180, memoryEnabled: true, uiSize: 'small' }
+        goalMaxIterations: 30, goalMaxMinutes: 180, memoryEnabled: true, uiSize: 'small', avatarSize: 'small',
+        autoCompactPercent: AUTO_COMPACT_DEFAULT_PERCENT }
       migrating = true
     }
 
@@ -741,6 +756,7 @@ export class ConversationStore {
       if (changes.sdkSessionId !== undefined) record.sdkSessionId = changes.sdkSessionId
       if (changes.goal !== undefined) record.goal = changes.goal
       if (changes.planMode !== undefined) record.planMode = changes.planMode
+      if (changes.approvalMode !== undefined) record.approvalMode = changes.approvalMode
       if (changes.draft !== undefined) record.draft = changes.draft
       if (changes.compactionSummary === null) delete record.compactionSummary
       else if (changes.compactionSummary !== undefined) record.compactionSummary = changes.compactionSummary
@@ -857,7 +873,7 @@ export class ConversationStore {
     const modelProfiles = patch.modelProfiles
     const activeModelProfileId = patch.activeModelProfileId
     const { goalMaxIterations, goalMaxMinutes, memoryEnabled } = patch
-    const { enableAutoTitleGeneration, showMessageTimestamps, userName, assistantName, userAvatar, assistantAvatar, panelSize, uiSize } = patch
+    const { enableAutoTitleGeneration, showMessageTimestamps, userName, assistantName, userAvatar, assistantAvatar, panelSize, uiSize, avatarSize, personaId, autoCompactPercent } = patch
     if (tabs !== undefined && (!Number.isInteger(tabs) || tabs < 1 || tabs > MAX_VISIBLE_TABS)) {
       throw new ConversationStoreError('INVALID_INPUT', `快捷切换显示数量应为 1–${MAX_VISIBLE_TABS}。`)
     }
@@ -900,6 +916,15 @@ export class ConversationStore {
     if (uiSize !== undefined && !isUiSize(uiSize)) {
       throw new ConversationStoreError('INVALID_INPUT', '界面尺寸只能是小、中或大。')
     }
+    if (avatarSize !== undefined && !isAvatarSize(avatarSize)) {
+      throw new ConversationStoreError('INVALID_INPUT', '人物大小只能是小、中或大。')
+    }
+    if (personaId !== undefined && !isPersonaId(personaId)) {
+      throw new ConversationStoreError('INVALID_INPUT', '人设预设无效。')
+    }
+    if (autoCompactPercent !== undefined && !isAutoCompactPercent(autoCompactPercent)) {
+      throw new ConversationStoreError('INVALID_INPUT', '自动压缩阈值应为 50–90 之间的整数。')
+    }
     return this.mutate((draft) => {
       if (tabs !== undefined) draft.settings.visibleConversationTabs = tabs
       if (autoArchive !== undefined) draft.settings.autoArchiveAfterDays = autoArchive
@@ -928,6 +953,9 @@ export class ConversationStore {
       if (assistantAvatar !== undefined) draft.settings.assistantAvatar = assistantAvatar
       if (panelSize !== undefined) draft.settings.panelSize = { width: panelSize.width, height: panelSize.height }
       if (uiSize !== undefined) draft.settings.uiSize = uiSize
+      if (avatarSize !== undefined) draft.settings.avatarSize = avatarSize
+      if (personaId !== undefined) draft.settings.personaId = personaId
+      if (autoCompactPercent !== undefined) draft.settings.autoCompactPercent = autoCompactPercent
       return draft.settings
     })
   }

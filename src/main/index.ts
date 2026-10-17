@@ -14,7 +14,7 @@ import { ClaudeAgentClient } from './claude-agent'
 import { linkClaudeUserResources } from './claude-resource-links'
 import { CLAUDE_BASE_URL, DEFAULT_CLAUDE_MODEL, findClaudeExecutable, probeAnthropicEndpoint } from './claude-code'
 import { seedClaudeMemory } from './claude-memory'
-import { computeStageBounds, STAGE_HEIGHT, STAGE_WIDTH } from './stage-bounds'
+import { BUBBLE_BOTTOM, computeStageBounds, STAGE_HEIGHT, STAGE_WIDTH } from './stage-bounds'
 import { deepSeekBaseUrl, deepSeekModel, deepSeekProfile, ONBOARDING_PAGES, readOnboardingMarker, shouldOfferOnboarding, writeOnboardingMarker, type OnboardingPage } from './onboarding'
 import { normalizeApiKey } from '../shared/onboarding'
 import { DeepSeekClient } from './deepseek'
@@ -28,16 +28,23 @@ import { loadWindowsMcpConfig } from './mcp-config'
 import { generateConversationTitle } from './title-generation'
 import { APP_SLASH_COMMANDS, listClaudeWorkflows, parseAppSlashCommand } from './claude-workflows'
 import { attachmentPreviewPath, prepareDroppedFile, readImagePreview, searchWorkspaceFiles, stagePastedAttachment, validAttachmentList, verifyDroppedFilePath } from './local-context'
-import { findSourceProjectRoot, resolveAgentWorkspace } from './workspace-root'
+import { findSourceProjectRoot, isUsableWorkspace, readSavedWorkspace, resolveAgentWorkspace, writeSavedWorkspace } from './workspace-root'
 import { isEffortLevel } from '../shared/effort'
-import type { BubbleLayout, ClaudeWorkflowOption, ConversationSettings, UiSize, UserAttachment } from '../shared/contracts'
-import { PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH } from '../shared/contracts'
+import type { AvatarSize, BubbleLayout, ClaudeWorkflowOption, ConversationSettings, UiSize, UserAttachment } from '../shared/contracts'
+import { isApprovalMode, isAutoCompactPercent, PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH } from '../shared/contracts'
+import { isPersonaId } from '../shared/personas'
 
 const projectRoot = app.isPackaged ? path.dirname(process.execPath) : path.resolve(__dirname, '../..')
 const dataProjectRoot = findSourceProjectRoot(projectRoot) ?? projectRoot
-const dataRoot = path.join(dataProjectRoot, 'data')
+// 隔离冒烟测试/便携数据目录：显式指定时不再使用项目下的 data/。
+const dataRootOverride = process.env.DESKTOP_PET_DATA?.trim()
+const dataRoot = dataRootOverride && path.isAbsolute(dataRootOverride)
+  ? dataRootOverride
+  : path.join(dataProjectRoot, 'data')
 const userHome = homedir()
-const agentWorkspace = resolveAgentWorkspace(projectRoot, app.isPackaged, process.env, userHome)
+// The wizard's saved choice survives a cleared environment variable; an
+// explicit DESKTOP_PET_WORKSPACE still wins so advanced setups keep control.
+let agentWorkspace = resolveAgentWorkspace(projectRoot, app.isPackaged, process.env, userHome, readSavedWorkspace(dataRoot))
 const userDataDirectory = path.join(dataRoot, 'electron')
 mkdirSync(userDataDirectory, { recursive: true })
 mkdirSync(path.join(dataRoot, 'claude'), { recursive: true })
@@ -48,6 +55,8 @@ app.setPath('userData', userDataDirectory)
 if (process.platform === 'win32') app.setAppUserModelId('local.desktop.resident.agent')
 
 let avatarWindow: BrowserWindow | undefined
+/** 对话面板独立成窗：透明面积只剩面板本身，头像窗可以缩到角色大小。 */
+let panelWindow: BrowserWindow | undefined
 let balanceWindow: BrowserWindow | undefined
 let settingsWindow: BrowserWindow | undefined
 let onboardingWindow: BrowserWindow | undefined
@@ -63,8 +72,31 @@ let bubbleExpanded = false
 let bubblePanelSize: { width: number; height: number } | undefined
 /** 界面字号档；窗口加载时灌一次，之后设置窗口一改就广播。 */
 let currentUiSize: UiSize = 'small'
-/** 渲染器上报的可见人物矩形（窗口坐标），用于窗口命中形状。 */
-let avatarBox: Electron.Rectangle | undefined
+/** 人物大小档：决定人物脚底到窗口底的透明余量，拖动时用来算底部允许量。 */
+let currentAvatarSize: AvatarSize = 'small'
+const AVATAR_BOTTOM_SLACK: Record<AvatarSize, number> = { small: 60, medium: 48.5, large: 36 }
+/** 人物右缘到头像窗口右缘的透明余量（88px 锚点 − 可见宽度/2，再加 2px
+ *  动画缓冲）。允许窗口向右伸出这么多，人物才能拖到屏幕最右边。 */
+const AVATAR_RIGHT_SLACK: Record<AvatarSize, number> = { small: 37, medium: 32, large: 27 }
+/** 人物可见区域在头像窗口里的位置：与 .avatar-portrait 的 top 6px 对齐，
+ *  长边缩放到 AVATAR_CONTENT_SIZES，宽度按原图 1016/1218 的比例。 */
+const AVATAR_VISIBLE_BOX: Record<AvatarSize, { width: number; height: number; top: number }> = {
+  small: { width: 106.7, height: 128, top: 6 },
+  medium: { width: 116.4, height: 140, top: 6 },
+  large: { width: 126.8, height: 152, top: 6 }
+}
+/** 余额卡宽度；窗口再向右留 8px 给指向人物的小三角。 */
+const BALANCE_CARD_WIDTH = 240
+const BALANCE_POINTER = 8
+/** 卡片比人物可见高度再矮一截，上下各留 8px，避免看过去比人物长。 */
+const BALANCE_INSET_Y = 16
+/** 人物图片的视觉重心比几何中心偏上，卡片跟着上提一点才看着齐。 */
+const BALANCE_LIFT = 6
+/** 三角尖到角色左缘的呼吸间距。 */
+const BALANCE_GAP = 4
+/** 渲染器上报的可见人物矩形，按右/下偏移保存——窗口缩放时命中形状跟着
+ *  右下角走，不会在拖动过程中错位。 */
+let avatarBox: { right: number; bottom: number; width: number; height: number } | undefined
 let dragOrigin: { cursor: Electron.Point; bounds: Electron.Rectangle } | undefined
 let shapeShrinkTimer: NodeJS.Timeout | undefined
 let rendererAvatarState: import('../shared/contracts').AvatarState | undefined
@@ -72,60 +104,119 @@ let rendererAvatarState: import('../shared/contracts').AvatarState | undefined
 // Keep the avatar's window origin and width stable while its cards open/close.
 // The unused area stays transparent and outside the shaped hit regions.
 const stageSize = { width: STAGE_WIDTH, height: STAGE_HEIGHT }
+/** 头像窗口只包住角色和状态点；不再跟随整个舞台矩形。 */
+const AVATAR_WINDOW_WIDTH = 200
+const AVATAR_WINDOW_HEIGHT = 220
+/** 逻辑舞台：面板按它计算位置，头像窗口贴着它的右下角。 */
+let stageBounds: Electron.Rectangle | undefined
 
 function avatarRegion(size: { width: number; height: number }): Electron.Rectangle {
   // 图片裁掉透明边后，命中区跟着渲染器量出的可见矩形走；启动最初的几帧
-  // 还没有上报，先用旧的右下角位置兜底。
-  if (avatarBox) return { ...avatarBox }
+  // 还没有上报，先用旧的右下角位置兜底。偏移量按右/下存储，窗口一变大
+  // 形状就跟着右下角走，拖动缩放时不会来回跳。
+  if (avatarBox) return {
+    x: size.width - avatarBox.right - avatarBox.width,
+    y: size.height - avatarBox.bottom - avatarBox.height,
+    width: avatarBox.width,
+    height: avatarBox.height
+  }
   return { x: size.width - 168, y: size.height - 186, width: 160, height: 180 }
 }
 
+/** 面板窗口底部留给小三角的空间。三角旋转 45° 后对角尖会伸到 9px 左右，
+ *  7px 会把尖端削掉。 */
+const TRIANGLE_ROOM = 10
+
 function bubbleRegion(layout: BubbleLayout, size: { width: number; height: number }, compactHeight = compactBubbleHeight): Electron.Rectangle {
-  if (bubbleExpanded) return { x: 10, y: 0, width: size.width - 20, height: size.height - 185 }
+  // BUBBLE_BOTTOM 是面板底边到舞台底的距离；额外的 TRIANGLE_ROOM 盖住小三角。
+  if (bubbleExpanded) return { x: 10, y: 0, width: size.width - 20, height: size.height - BUBBLE_BOTTOM + TRIANGLE_ROOM }
   switch (layout) {
-    case 'empty': return { x: size.width - 120, y: size.height - 248, width: 64, height: 63 }
+    case 'empty': return { x: size.width - 120, y: size.height - BUBBLE_BOTTOM - 56, width: 64, height: 56 + TRIANGLE_ROOM }
     case 'composer':
     case 'composer_attachments': {
       const height = compactHeight ?? (layout === 'composer' ? 206 : 232)
-      return { x: size.width - 342, y: size.height - 192 - height, width: 332, height: height + 7 }
+      return { x: size.width - 342, y: size.height - BUBBLE_BOTTOM - height, width: 332, height: height + TRIANGLE_ROOM }
     }
-    case 'composer_models': return { x: size.width - 342, y: size.height - 430, width: 332, height: 245 }
-    case 'full': return { x: size.width - 366, y: size.height - 550, width: 356, height: 365 }
+    case 'composer_models': return { x: size.width - 342, y: size.height - BUBBLE_BOTTOM - 238, width: 332, height: 238 + TRIANGLE_ROOM }
+    case 'full': return { x: size.width - 366, y: size.height - BUBBLE_BOTTOM - 358, width: 356, height: 358 + TRIANGLE_ROOM }
   }
 }
 
 function applyPointerShape(): void {
   const win = avatarWindow
   if (!win || win.isDestroyed() || process.platform !== 'win32') return
-  const size = win.getBounds()
-  const regions = [avatarRegion(size)]
-  if (panelOpen) regions.push(bubbleRegion(bubbleLayout, size))
-  win.setShape(regions)
+  // 头像窗口只有 200×220，命中形状取窗口局部坐标；面板窗口本身就是一个
+  // 贴合面板的矩形，不需要再裁剪。
+  win.setShape([avatarRegion(win.getBounds())])
+}
+
+/** 面板窗口只包住面板矩形（逻辑舞台里的 bubbleRegion）。 */
+function syncPanelBounds(): void {
+  const stage = stageBounds
+  const panel = panelWindow
+  if (!stage || !panel || panel.isDestroyed()) return
+  const region = bubbleRegion(bubbleLayout, stage)
+  const target = { x: stage.x + region.x, y: stage.y + region.y, width: region.width, height: region.height }
+  const current = panel.getBounds()
+  if (current.x === target.x && current.y === target.y && current.width === target.width && current.height === target.height) return
+  panel.setBounds(target, false)
+}
+
+/** 余额卡与人物可见区域对齐：高度随当前姿势和三档大小变化，顶部与人物
+ *  顶部齐平，右侧三角尖离角色左缘 4px。优先用渲染器上报的真实命中框
+ *  （高 12px 是按压/呼吸缓冲，减掉才是可见高度）。 */
+function balanceBoundsFor(bounds: Electron.Rectangle): Electron.Rectangle {
+  const width = BALANCE_CARD_WIDTH + BALANCE_POINTER
+  let roleLeft: number
+  let roleTop: number
+  let roleHeight: number
+  if (avatarBox) {
+    roleLeft = bounds.x + (bounds.width - avatarBox.right - avatarBox.width)
+    roleTop = bounds.y + (bounds.height - avatarBox.bottom - avatarBox.height) + 6
+    roleHeight = Math.max(80, avatarBox.height - 12)
+  } else {
+    const visible = AVATAR_VISIBLE_BOX[currentAvatarSize] ?? AVATAR_VISIBLE_BOX.small
+    roleLeft = bounds.x + bounds.width - 88 - visible.width / 2
+    roleTop = bounds.y + visible.top
+    roleHeight = visible.height
+  }
+  const height = Math.max(96, Math.round(roleHeight) - BALANCE_INSET_Y)
+  return {
+    x: Math.round(roleLeft - BALANCE_GAP - width),
+    y: Math.round(roleTop + BALANCE_INSET_Y / 2 - BALANCE_LIFT),
+    width,
+    height
+  }
 }
 
 function syncBalancePosition(): void {
   const avatar = avatarWindow
   const balance = balanceWindow
   if (!avatar || avatar.isDestroyed() || !balance || balance.isDestroyed()) return
-  const bounds = avatar.getBounds()
-  // Match the former in-window card: 176 px from the right and 16 px from the bottom.
-  const x = bounds.x + bounds.width - 452
-  const y = bounds.y + bounds.height - 176
+  const target = balanceBoundsFor(avatar.getBounds())
   const current = balance.getBounds()
-  if (current.x !== x || current.y !== y) balance.setPosition(x, y, false)
+  if (current.x === target.x && current.y === target.y && current.width === target.width && current.height === target.height) return
+  balance.setBounds(target, false)
 }
 
 function syncStageBounds(): void {
   const win = avatarWindow
   if (!win || win.isDestroyed()) return
-  const previous = win.getBounds()
-  const bottom = previous.y + previous.height
-  const work = screen.getDisplayNearestPoint({ x: previous.x + previous.width - 88, y: bottom - 96 }).workArea
-  const next = computeStageBounds(previous, work, bubbleExpanded, bubbleExpanded ? bubblePanelSize : undefined)
-  if (previous.x === next.x && previous.y === next.y && previous.width === next.width && previous.height === next.height) return
+  const avatar = win.getBounds()
+  const bottom = avatar.y + avatar.height
+  const work = screen.getDisplayNearestPoint({ x: avatar.x + avatar.width - 88, y: bottom - 96 }).workArea
+  const next = computeStageBounds(avatar, work, bubbleExpanded, bubbleExpanded ? bubblePanelSize : undefined)
+  // 头像窗口绝对不动：舞台直接按头像的右下角锚定，尺寸取布局计算值。
+  // 展开/收起只改变面板窗口，人物在屏幕上的位置保持不变。
+  stageBounds = {
+    x: avatar.x + avatar.width - next.width,
+    y: avatar.y + avatar.height - next.height,
+    width: next.width,
+    height: next.height
+  }
   if (shapeShrinkTimer) clearTimeout(shapeShrinkTimer)
   shapeShrinkTimer = undefined
-  win.setBounds(next, false)
+  syncPanelBounds()
   syncBalancePosition()
   applyPointerShape()
 }
@@ -196,13 +287,16 @@ function flushSnapshot(): void {
   }
   publishesSinceFullTimeline = full ? FULL_TIMELINE_EVERY : publishesSinceFullTimeline - 1
   avatarWindow.webContents.send('pet:snapshot', snapshot)
+  panelWindow?.webContents.send('pet:snapshot', snapshot)
   // A tab switch changes the child that belongs on screen. Send its full
   // snapshot after the main one so a renderer with stale tab state can still
   // recover even if side and main events were otherwise reordered.
   const parentId = activeSideChatParentId(controller.displayedConversationId(), snapshot.conversationLibrary)
   if (lastPublishedSideParent !== parentId) {
     lastPublishedSideParent = parentId
-    avatarWindow.webContents.send('pet:side-snapshot', sideChat.takePublishSnapshot())
+    const sideSnapshot = sideChat.takePublishSnapshot()
+    avatarWindow.webContents.send('pet:side-snapshot', sideSnapshot)
+    panelWindow?.webContents.send('pet:side-snapshot', sideSnapshot)
   }
 }
 
@@ -319,6 +413,42 @@ function activeController(): ConversationController {
   return controller
 }
 
+/** Opens the folder picker for the wizard or the settings window. */
+async function pickWorkspaceDirectory(parent: BrowserWindow | undefined, current: string): Promise<string | null> {
+  const options: Electron.OpenDialogOptions = {
+    title: '选择小鲸的工作目录',
+    defaultPath: current,
+    properties: ['openDirectory', 'createDirectory']
+  }
+  const result = parent
+    ? await dialog.showOpenDialog(parent, options)
+    : await dialog.showOpenDialog(options)
+  return result.canceled ? null : result.filePaths[0] ?? null
+}
+
+/** The one migration path used by both the wizard and settings: refuse while
+ *  work is running, drop every live runtime, persist the choice, then let the
+ *  next send rebuild against the new cwd. No files are moved and no Windows
+ *  environment variable is touched. */
+async function migrateAgentWorkspace(next: string): Promise<string> {
+  if (!isUsableWorkspace(next)) throw new Error('工作目录必须是存在的绝对路径。')
+  const normalized = path.normalize(next.trim())
+  // Confirming the auto-detected directory still records the choice, but does
+  // not need to tear down any live connection.
+  if (normalized === agentWorkspace) {
+    writeSavedWorkspace(dataRoot, normalized)
+    process.env.DESKTOP_PET_WORKSPACE = agentWorkspace
+    return agentWorkspace
+  }
+  const active = activeController()
+  if (!active.allConversationsIdle() || sideChat.isBusy()) throw new Error('有任务正在运行，完成后再迁移工作目录。')
+  await active.resetForWorkspace()
+  writeSavedWorkspace(dataRoot, normalized)
+  agentWorkspace = normalized
+  process.env.DESKTOP_PET_WORKSPACE = agentWorkspace
+  return agentWorkspace
+}
+
 function rendererUrl(): string | undefined {
   const base = process.env.ELECTRON_RENDERER_URL
   return base ? `${base}/avatar.html` : undefined
@@ -349,9 +479,16 @@ function broadcastUiSize(size: UiSize): void {
 
 function createAvatarWindow(): BrowserWindow {
   const work = screen.getPrimaryDisplay().workArea
-  const { width, height } = stageSize
+  const width = AVATAR_WINDOW_WIDTH
+  const height = AVATAR_WINDOW_HEIGHT
   const x = work.x + work.width - width - 24
   const y = work.y + work.height - height - 24
+  stageBounds = {
+    x: work.x + work.width - STAGE_WIDTH - 24,
+    y: work.y + work.height - STAGE_HEIGHT - 24,
+    width: STAGE_WIDTH,
+    height: STAGE_HEIGHT
+  }
   const win = new BrowserWindow({
     x,
     y,
@@ -376,10 +513,22 @@ function createAvatarWindow(): BrowserWindow {
       sandbox: false
     }
   })
-  if (process.platform === 'win32') win.setShape([avatarRegion(stageSize)])
+  if (process.platform === 'win32') win.setShape([avatarRegion({ width, height })])
   win.once('ready-to-show', () => win.show())
-  win.on('move', syncBalancePosition)
-  win.on('resize', syncBalancePosition)
+  win.on('move', () => {
+    // 拖动的是头像窗口；逻辑舞台跟着它的右下角平移，面板窗口再跟着舞台走。
+    if (stageBounds) {
+      const bounds = win.getBounds()
+      stageBounds = {
+        ...stageBounds,
+        x: bounds.x - (stageBounds.width - bounds.width),
+        y: bounds.y - (stageBounds.height - bounds.height)
+      }
+    }
+    syncPanelBounds()
+    syncBalancePosition()
+  })
+  win.on('resize', () => { syncPanelBounds(); syncBalancePosition() })
   win.on('closed', () => {
     if (shapeShrinkTimer) clearTimeout(shapeShrinkTimer)
     shapeShrinkTimer = undefined
@@ -390,16 +539,56 @@ function createAvatarWindow(): BrowserWindow {
   return win
 }
 
+function createPanelWindow(): BrowserWindow {
+  const avatar = avatarWindow
+  const bounds = avatar && !avatar.isDestroyed()
+    ? avatar.getBounds()
+    : { x: 0, y: 0, width: stageSize.width, height: stageSize.height }
+  const win = new BrowserWindow({
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    autoHideMenuBar: true,
+    resizable: false,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  })
+  win.on('closed', () => { if (panelWindow === win) panelWindow = undefined })
+  loadPanelPage(win)
+  return win
+}
+
+function loadPanelPage(win: BrowserWindow): void {
+  const url = rendererUrl()
+  if (url) void win.loadURL(`${url}?mode=panel`)
+  else void win.loadFile(path.join(__dirname, '../renderer/avatar.html'), { query: { mode: 'panel' } })
+  sendUiSizeWhenLoaded(win)
+  win.webContents.on('will-navigate', (event) => event.preventDefault())
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+}
+
 function createBalanceWindow(): BrowserWindow {
   const avatar = avatarWindow
   if (!avatar || avatar.isDestroyed()) throw new Error('桌面角色尚未就绪。')
-  const bounds = avatar.getBounds()
+  const initial = balanceBoundsFor(avatar.getBounds())
   const win = new BrowserWindow({
     parent: avatar,
-    x: bounds.x + bounds.width - 452,
-    y: bounds.y + bounds.height - 176,
-    width: 284,
-    height: 145,
+    x: initial.x,
+    y: initial.y,
+    width: initial.width,
+    height: initial.height,
     frame: false,
     transparent: true,
     backgroundColor: '#00000000',
@@ -491,10 +680,17 @@ function showPanel(): void {
   if (balanceOpen) setBalanceOpen(false)
   if (!panelOpen) {
     panelOpen = true
+    syncPanelBounds()
     applyPointerShape()
+    // 面板是独立窗口：要真正激活它，输入框才能拿到键盘。
+    if (panelWindow && !panelWindow.isDestroyed()) {
+      panelWindow.show()
+      panelWindow.focus()
+    }
     avatarWindow?.webContents.send('pet:panel-open', true)
+  } else {
+    panelWindow?.focus()
   }
-  avatarWindow?.focus()
 }
 
 function openSettings(): void {
@@ -574,6 +770,7 @@ function createTray(): void {
 function hidePanel(): void {
   if (!panelOpen) return
   panelOpen = false
+  panelWindow?.hide()
   avatarWindow?.webContents.send('pet:panel-open', false)
   if (shapeShrinkTimer) clearTimeout(shapeShrinkTimer)
   shapeShrinkTimer = undefined
@@ -587,7 +784,7 @@ function isScreenPoint(value: unknown): value is Electron.Point {
 function conversationSettingsPatch(value: unknown): Partial<ConversationSettings> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('会话设置无效。')
   const input = value as Record<string, unknown>
-  const editable = ['visibleConversationTabs', 'autoArchiveAfterDays', 'effort', 'goalMaxIterations', 'goalMaxMinutes', 'memoryEnabled', 'uiSize', 'enableAutoTitleGeneration', 'showMessageTimestamps', 'userName', 'assistantName']
+  const editable = ['visibleConversationTabs', 'autoArchiveAfterDays', 'effort', 'goalMaxIterations', 'goalMaxMinutes', 'memoryEnabled', 'uiSize', 'avatarSize', 'webSearchEnabled', 'personaId', 'autoCompactPercent', 'assistantAvatar', 'enableAutoTitleGeneration', 'showMessageTimestamps', 'userName', 'assistantName']
   if (Object.keys(input).some((key) => !editable.includes(key))) throw new Error('会话设置无效。')
   const patch: Partial<ConversationSettings> = {}
   if (input.visibleConversationTabs !== undefined) {
@@ -621,6 +818,27 @@ function conversationSettingsPatch(value: unknown): Partial<ConversationSettings
   if (input.uiSize !== undefined) {
     if (input.uiSize !== 'small' && input.uiSize !== 'medium' && input.uiSize !== 'large') throw new Error('界面尺寸设置无效。')
     patch.uiSize = input.uiSize
+  }
+  if (input.avatarSize !== undefined) {
+    if (input.avatarSize !== 'small' && input.avatarSize !== 'medium' && input.avatarSize !== 'large') throw new Error('人物大小设置无效。')
+    patch.avatarSize = input.avatarSize
+  }
+  if (input.webSearchEnabled !== undefined) {
+    if (typeof input.webSearchEnabled !== 'boolean') throw new Error('联网搜索设置无效。')
+    patch.webSearchEnabled = input.webSearchEnabled
+  }
+  if (input.personaId !== undefined) {
+    if (!isPersonaId(input.personaId)) throw new Error('人设预设无效。')
+    patch.personaId = input.personaId
+  }
+  if (input.autoCompactPercent !== undefined) {
+    if (!isAutoCompactPercent(input.autoCompactPercent)) throw new Error('自动压缩阈值应为 50–90 之间的整数。')
+    patch.autoCompactPercent = input.autoCompactPercent
+  }
+  // 切换人设时清掉自定义头像，让预设头像生效；上传仍走单独的字节通道。
+  if (input.assistantAvatar !== undefined) {
+    if (input.assistantAvatar !== null) throw new Error('对话头像只能通过上传修改。')
+    patch.assistantAvatar = null
   }
   if (input.enableAutoTitleGeneration !== undefined) {
     if (typeof input.enableAutoTitleGeneration !== 'boolean') throw new Error('标题设置无效。')
@@ -688,7 +906,8 @@ async function readAvatarDataUrl(kind: 'user' | 'assistant'): Promise<string | n
 }
 
 function registerIpc(): void {
-  const trusted = (event: Electron.IpcMainInvokeEvent): boolean => event.sender.id === avatarWindow?.webContents.id
+  const trusted = (event: Electron.IpcMainInvokeEvent): boolean =>
+    event.sender.id === avatarWindow?.webContents.id || event.sender.id === panelWindow?.webContents.id
   const resolveAttachments = async (items: UserAttachment[]): Promise<UserAttachment[]> => Promise.all(items.map(async (item) => {
     if (!item.path) return item
     const file = await verifyDroppedFilePath(item.path)
@@ -712,9 +931,25 @@ function registerIpc(): void {
       discardSidesWithoutLiveParents()
       // 界面尺寸等显示设置也要立刻传给头像窗口里的小面板，不必等下一个事件。
       broadcastUiSize(settings.uiSize)
+      currentAvatarSize = settings.avatarSize
+      // 人物大小变了，余额卡的高度和位置要跟着重新对齐。
+      syncBalancePosition()
       publishSnapshot()
       return publicSettings(settings)
     })
+  })
+  ipcMain.handle('pet:settings:workspace', (event) => {
+    if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
+    return { path: agentWorkspace, saved: readSavedWorkspace(dataRoot) !== null }
+  })
+  ipcMain.handle('pet:settings:pick-workspace', async (event) => {
+    if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
+    return pickWorkspaceDirectory(settingsWindow, agentWorkspace)
+  })
+  ipcMain.handle('pet:settings:migrate-workspace', async (event, next: unknown) => {
+    if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
+    if (typeof next !== 'string') throw new Error('工作目录无效。')
+    return { path: await migrateAgentWorkspace(next) }
   })
   ipcMain.handle('pet:settings:version', (event) => {
     if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
@@ -1122,6 +1357,19 @@ function registerIpc(): void {
     if (!key || key.length > 512 || !chosen) throw new Error('API Key 无效。')
     return probeAnthropicEndpoint(deepSeekProfile(key, chosen))
   })
+  ipcMain.handle('pet:onboarding:workspace', (event) => {
+    if (!onboardingTrusted(event)) throw new Error('无效的界面请求。')
+    return agentWorkspace
+  })
+  ipcMain.handle('pet:onboarding:pick-workspace', async (event) => {
+    if (!onboardingTrusted(event)) throw new Error('无效的界面请求。')
+    return pickWorkspaceDirectory(onboardingWindow, agentWorkspace)
+  })
+  ipcMain.handle('pet:onboarding:set-workspace', async (event, next: unknown) => {
+    if (!onboardingTrusted(event)) throw new Error('无效的界面请求。')
+    if (typeof next !== 'string') throw new Error('工作目录无效。')
+    return { path: await migrateAgentWorkspace(next) }
+  })
   ipcMain.handle('pet:onboarding:save', async (event, apiKey: unknown, model: unknown) => {
     if (!onboardingTrusted(event)) throw new Error('无效的界面请求。')
     const key = typeof apiKey === 'string' ? normalizeApiKey(apiKey) : ''
@@ -1181,15 +1429,17 @@ function registerIpc(): void {
     await shell.openExternal(url.href)
   })
   ipcMain.handle('pet:set-bubble-layout', (event, layout: unknown, height: unknown) => {
-    if (event.sender.id !== avatarWindow?.webContents.id) return
+    if (!trusted(event)) return
     if (layout !== 'empty' && layout !== 'composer' && layout !== 'composer_attachments' && layout !== 'composer_models' && layout !== 'full') throw new Error('气泡布局无效。')
     if (height !== undefined && (typeof height !== 'number' || !Number.isFinite(height) || height < 100 || height > 260)) throw new Error('气泡高度无效。')
     const nextHeight = (layout === 'composer' || layout === 'composer_attachments') && typeof height === 'number' ? Math.round(height) : undefined
     if (bubbleLayout === layout && compactBubbleHeight === nextHeight) return
-    const size = avatarWindow?.getBounds() ?? stageSize
+    const size = stageBounds ?? { x: 0, y: 0, ...stageSize }
     const previous = bubbleRegion(bubbleLayout, size)
     bubbleLayout = layout
     compactBubbleHeight = nextHeight
+    // 面板窗口的 bounds 就是当前布局的矩形，布局一变就得跟着改。
+    syncPanelBounds()
     if (shapeShrinkTimer) clearTimeout(shapeShrinkTimer)
     shapeShrinkTimer = undefined
     const next = bubbleRegion(layout, size)
@@ -1216,13 +1466,17 @@ function registerIpc(): void {
     if (!bounds) return
     const left = Math.round(Math.max(0, Math.min(bounds.width, x as number)))
     const top = Math.round(Math.max(0, Math.min(bounds.height, y as number)))
+    const boxWidth = Math.max(1, Math.min(bounds.width - left, Math.round(width as number)))
+    const boxHeight = Math.max(1, Math.min(bounds.height - top, Math.round(height as number)))
     avatarBox = {
-      x: left,
-      y: top,
-      width: Math.max(1, Math.min(bounds.width - left, Math.round(width as number))),
-      height: Math.max(1, Math.min(bounds.height - top, Math.round(height as number)))
+      right: bounds.width - left - boxWidth,
+      bottom: bounds.height - top - boxHeight,
+      width: boxWidth,
+      height: boxHeight
     }
     applyPointerShape()
+    // 姿势/大小变化后人物可见区会变，开着的余额卡跟着重新对齐。
+    if (balanceOpen) syncBalancePosition()
   })
   ipcMain.handle('pet:set-panel-size', (event, width: unknown, height: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
@@ -1241,18 +1495,41 @@ function registerIpc(): void {
     if (typeof on !== 'boolean') throw new Error('计划模式设置无效。')
     await activeController().setPlanMode(on)
   })
+  ipcMain.handle('pet:set-approval-mode', async (event, mode: unknown, conversationId: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (!isApprovalMode(mode)) throw new Error('审批模式无效。')
+    if (conversationId !== undefined && typeof conversationId !== 'string') throw new Error('会话编号无效。')
+    await activeController().setApprovalMode(mode, conversationId as string | undefined)
+  })
+  ipcMain.handle('pet:answer-permission', async (event, id: unknown, allow: unknown, conversationId: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (typeof id !== 'string') throw new Error('操作编号无效。')
+    if (typeof allow !== 'boolean') throw new Error('批准结果无效。')
+    if (conversationId !== undefined && typeof conversationId !== 'string') throw new Error('会话编号无效。')
+    await activeController().answerPermission(id, allow, conversationId as string | undefined)
+  })
   ipcMain.handle('pet:set-effort', async (event, level: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     if (!isEffortLevel(level)) throw new Error('思考强度无效。')
     await activeController().updateSettings({ effort: level })
   })
+  ipcMain.handle('pet:set-web-search', async (event, on: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (typeof on !== 'boolean') throw new Error('联网搜索设置无效。')
+    await activeController().updateSettings({ webSearchEnabled: on })
+  })
+  ipcMain.handle('pet:set-auto-compact-percent', async (event, percent: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (!isAutoCompactPercent(percent)) throw new Error('自动压缩阈值应为 50–90 之间的整数。')
+    await activeController().updateSettings({ autoCompactPercent: percent })
+  })
   ipcMain.handle('pet:set-model-mode', (event, mode: unknown) => {
-    if (event.sender.id !== avatarWindow?.webContents.id) return
+    if (!trusted(event)) return
     if (mode !== 'demo' && mode !== 'live' && mode !== 'claude_code') throw new Error('模型选项无效。')
     return activeController().setModelMode(mode)
   })
   ipcMain.handle('pet:set-avatar-state', (event, state: unknown) => {
-    if (event.sender.id !== avatarWindow?.webContents.id) return
+    if (!trusted(event)) return
     if (state !== 'idle' && state !== 'thinking' && state !== 'listening' && state !== 'speaking' && state !== 'acting' && state !== 'success' && state !== 'error') {
       throw new Error('角色状态无效。')
     }
@@ -1264,14 +1541,14 @@ function registerIpc(): void {
     publishSnapshot()
   })
   ipcMain.handle('pet:get-voice-config', (event) => {
-    if (event.sender.id !== avatarWindow?.webContents.id) return {}
+    if (!trusted(event)) return {}
     return {
       siliconFlowAvailable: Boolean(process.env.SILICONFLOW_API_KEY),
     }
   })
   ipcMain.handle('pet:transcribe-audio', async (event, request: unknown) => {
     voiceLog('[ipc] transcribe-audio called', { hasRequest: !!request, senderId: event.sender.id })
-    if (event.sender.id !== avatarWindow?.webContents.id) throw new Error('无效的界面请求。')
+    if (!trusted(event)) throw new Error('无效的界面请求。')
     if (!request || typeof request !== 'object') throw new Error('转写请求无效。')
     const req = request as { bytes?: number[]; mimeType?: string }
     voiceLog('[ipc] request', { bytesLen: req.bytes?.length, mimeType: req.mimeType })
@@ -1294,7 +1571,7 @@ function registerIpc(): void {
     }
   })
   ipcMain.handle('pet:voice-log', (event, level: unknown, message: unknown, data: unknown) => {
-    if (event.sender.id !== avatarWindow?.webContents.id) return
+    if (!trusted(event)) return
     const allowed = new Set(['[asr] mediaRecorder stop', '[asr] mediaRecorder error', '[asr] transcribe start', '[asr] transcribe result', '[asr] transcribe error'])
     if (typeof message !== 'string' || !allowed.has(message)) return
     const fields = data && typeof data === 'object' ? data as Record<string, unknown> : {}
@@ -1309,13 +1586,26 @@ function registerIpc(): void {
   })
   ipcMain.handle('pet:drag-move', (event, current: unknown) => {
     if (event.sender.id !== avatarWindow?.webContents.id || !avatarWindow || !dragOrigin || !isScreenPoint(current)) return
+    const width = dragOrigin.bounds.width
+    const height = dragOrigin.bounds.height
     const x = Math.round(dragOrigin.bounds.x + current.x - dragOrigin.cursor.x)
     const y = Math.round(dragOrigin.bounds.y + current.y - dragOrigin.cursor.y)
+    // 头像窗口必须留在当前显示器的工作区内：一旦允许它掉到工作区下面，
+    // 展开面板时舞台会被拉回工作区，人物就会“向上跳”，底部小三角也会
+    // 被屏幕边缘削掉。坐标都是 DIP，系统缩放不同的显示器同样适用。
+    const work = screen.getDisplayNearestPoint({ x: x + Math.round(width / 2), y: y + Math.round(height / 2) }).workArea
+    // 右侧允许伸出窗口右缘的透明余量：人物能贴到屏幕右缘，本体不出屏。
+    const RIGHT_SLACK = AVATAR_RIGHT_SLACK[currentAvatarSize] ?? 37
+    const nextX = Math.min(Math.max(x, work.x), Math.max(work.x, work.x + work.width - width + RIGHT_SLACK))
+    // 窗口底部允许伸出工作区，幅度正好等于人物脚底到窗口底的透明余量：
+    // 人物可以拖到任务栏边缘，但角色本体不会出屏。余量随人物大小档变化。
+    const BOTTOM_SLACK = AVATAR_BOTTOM_SLACK[currentAvatarSize] ?? 60
+    const nextY = Math.min(Math.max(y, work.y), Math.max(work.y, work.y + work.height - height + BOTTOM_SLACK))
     avatarWindow.setBounds({
-      x,
-      y,
-      width: dragOrigin.bounds.width,
-      height: dragOrigin.bounds.height
+      x: nextX,
+      y: nextY,
+      width,
+      height
     })
     syncBalancePosition()
   })
@@ -1324,7 +1614,8 @@ function registerIpc(): void {
   })
 }
 
-const ownsSingleInstance = app.requestSingleInstanceLock()
+// 隔离冒烟测试：配合 DESKTOP_PET_WORKSPACE 指向临时目录时，允许再起一个实例。
+const ownsSingleInstance = process.env.DESKTOP_PET_MULTI_INSTANCE === '1' || app.requestSingleInstanceLock()
 if (!ownsSingleInstance) app.quit()
 else app.on('second-instance', () => {
   avatarWindow?.show()
@@ -1339,17 +1630,20 @@ if (ownsSingleInstance) void app.whenReady().then(async () => {
   const initialSettings = (await activeController().getLibraryState()).settings
   memory.setEnabled(initialSettings.memoryEnabled)
   currentUiSize = initialSettings.uiSize
+  currentAvatarSize = initialSettings.avatarSize
   const savedPanelSize = initialSettings.panelSize
   if (savedPanelSize) bubblePanelSize = { width: savedPanelSize.width, height: savedPanelSize.height }
   await memory.initialize()
   registerIpc()
   avatarWindow = createAvatarWindow()
+  panelWindow = createPanelWindow()
   createTray()
 
   // First run with no model configured: let the pet appear first, then offer
   // the DeepSeek wizard. The marker file makes "later" a decision we remember.
   const onboardProfiles = (await activeController().getLibraryState()).settings.modelProfiles
-  if (shouldOfferOnboarding(readOnboardingMarker(dataRoot), onboardProfiles.length)) {
+  if (shouldOfferOnboarding(readOnboardingMarker(dataRoot), onboardProfiles.length,
+    onboardProfiles.some((profile) => profile.needsKeyReentry))) {
     setTimeout(openOnboarding, 1000)
   }
 

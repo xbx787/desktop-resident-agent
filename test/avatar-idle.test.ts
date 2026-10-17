@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { idleFidgetFrames, idleFidgetTiming, nextFidgetDelay, startIdleFidgets } from '../src/renderer/avatar-idle'
 
-/** Same geometry as the click bounce: the trimmed artwork is 139.5 px tall
+/** Same geometry as the click bounce: the trimmed artwork is 128 px tall
  *  inside a hit box with 6 px of animation room above and below. */
 const TOP = 6
-const BOTTOM = 145.5
-const HALF = 69.75
-const BOX_BOTTOM = 151.5
+const BOTTOM = 134
+const HALF = 64
+const BOX_BOTTOM = 140
 const SLACK = 2
 
 function parseFrame(transform: string): { ty: number; sy: number } {

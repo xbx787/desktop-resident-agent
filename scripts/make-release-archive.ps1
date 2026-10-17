@@ -51,7 +51,14 @@ try {
 } finally {
   if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
 }
-$hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+# Get-FileHash can be unavailable when PowerShell 7's module path shadows the
+# 5.1 utility modules; the .NET hash has no such dependency.
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+try {
+  $stream = [IO.File]::OpenRead($zip)
+  try { $hash = [BitConverter]::ToString($sha256.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() }
+  finally { $stream.Dispose() }
+} finally { $sha256.Dispose() }
 [IO.File]::WriteAllText($sum, "$hash  $([IO.Path]::GetFileName($zip))`n", [Text.UTF8Encoding]::new($false))
 Write-Output "Archive OK: $zip"
 Write-Output "SHA256: $hash"

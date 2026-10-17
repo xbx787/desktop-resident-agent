@@ -19,7 +19,14 @@ $head = (& git rev-parse HEAD).Trim()
 $tagHead = (& git rev-list -n 1 $tag).Trim()
 if ($LASTEXITCODE -ne 0 -or $head -ne $tagHead) { throw 'Release tag must point to HEAD.' }
 $expected = (Get-Content -LiteralPath $sum -TotalCount 1).Split(' ')[0]
-$actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+# Get-FileHash can be unavailable when PowerShell 7's module path shadows the
+# 5.1 utility modules; the .NET hash has no such dependency.
+$sha256 = [System.Security.Cryptography.SHA256]::Create()
+try {
+  $stream = [IO.File]::OpenRead($zip)
+  try { $actual = [BitConverter]::ToString($sha256.ComputeHash($stream)).Replace('-', '').ToLowerInvariant() }
+  finally { $stream.Dispose() }
+} finally { $sha256.Dispose() }
 if ($actual -ne $expected) { throw 'Archive checksum mismatch.' }
 $repository = & gh repo view --json isPrivate,nameWithOwner | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0 -or -not $repository.isPrivate) { throw 'GitHub repository must be private.' }

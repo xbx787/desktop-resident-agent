@@ -54,11 +54,12 @@ export function writeOnboardingMarker(dataRoot: string, outcome: OnboardingOutco
   }
 }
 
-/** Offer the wizard only when nothing says it was already handled and no
- *  model is configured yet (a profile seeded from the launch environment
- *  counts as configured). */
-export function shouldOfferOnboarding(marker: OnboardingMarker | null, profileCount: number): boolean {
-  return marker === null && profileCount === 0
+/** Offer the wizard when nothing says it was already handled and no model is
+ *  configured yet (a profile seeded from the launch environment counts as
+ *  configured). A profile whose key came from another computer cannot be
+ *  decrypted here, so the wizard is offered again to re-enter it. */
+export function shouldOfferOnboarding(marker: OnboardingMarker | null, profileCount: number, needsKeyReentry = false): boolean {
+  return (marker === null && profileCount === 0) || needsKeyReentry
 }
 
 /** The DeepSeek profile the wizard saves, built from the shared vendor

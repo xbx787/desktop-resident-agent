@@ -12,6 +12,12 @@ export interface SettingsAPI {
   get(): Promise<ConversationSettings>
   update(patch: Partial<ConversationSettings>): Promise<ConversationSettings>
   version(): Promise<string>
+  /** The directory the agent works in, and whether the user chose it. */
+  workspace(): Promise<{ path: string; saved: boolean }>
+  /** Opens the native folder picker; null when the user cancels. */
+  pickWorkspace(): Promise<string | null>
+  /** Migrates the workspace; refuses while a task is running. */
+  migrateWorkspace(path: string): Promise<{ path: string }>
   /** 设置窗口没有系统边框，标题栏画在页面里——这是它唯一的关闭通道。 */
   close(): Promise<void>
   /** Stores an avatar image (PNG/JPEG bytes) for `user` or `assistant`. */
@@ -40,6 +46,9 @@ const api: SettingsAPI = {
   get: () => ipcRenderer.invoke('pet:settings:get'),
   update: (patch) => ipcRenderer.invoke('pet:settings:update', patch),
   version: () => ipcRenderer.invoke('pet:settings:version'),
+  workspace: () => ipcRenderer.invoke('pet:settings:workspace'),
+  pickWorkspace: () => ipcRenderer.invoke('pet:settings:pick-workspace'),
+  migrateWorkspace: (next) => ipcRenderer.invoke('pet:settings:migrate-workspace', next),
   setAvatar: (kind, bytes) => ipcRenderer.invoke('pet:set-avatar', kind, bytes),
   readAvatar: (kind) => ipcRenderer.invoke('pet:read-avatar', kind),
   saveModelProfile: (profile) => ipcRenderer.invoke('pet:save-model-profile', profile),

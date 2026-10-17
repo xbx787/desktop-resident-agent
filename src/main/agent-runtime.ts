@@ -1,4 +1,4 @@
-import type { AgentGoal, AppSnapshot, AskAnswers, ContextUsageSnapshot, EffortLevel, ModelMode, ModelProfile, ProposedAction, TimelineEntry, UserAttachment } from '../shared/contracts'
+import { isApprovalMode, type AgentGoal, type ApprovalMode, type AppSnapshot, type AskAnswers, type ContextUsageSnapshot, type EffortLevel, type ModelMode, type ModelProfile, type ProposedAction, type TimelineEntry, type ToolPermissionRequest, type UserAttachment } from '../shared/contracts'
 import { isImageAttachmentName } from '../shared/image-preview'
 import { getPeakStatus, usageSpendYuan } from '../shared/deepseek-pricing'
 import { toolLabel } from '../shared/tool-labels'
@@ -58,6 +58,8 @@ export class AgentRuntime {
   private goalTimer?: ReturnType<typeof setTimeout>
   private queuePauseReason: string | null = null
   private memoryContextProvider?: () => Promise<string>
+  /** Remembers which asking mode to return to when plan mode ends. */
+  private lastNonPlanApproval: ApprovalMode = 'bypassPermissions'
   /** Which conversation this runtime owns; assigned by the controller at creation. */
   conversationId = ''
   /** Entries changed since the publisher's last take (upsert by id). */
@@ -80,6 +82,25 @@ export class AgentRuntime {
       this.state.planMode = on
       this.emit()
     })
+    // The CLI can enter/leave plan mode on its own (EnterPlanMode); mirror it.
+    claudeCodeModel?.setApprovalModeListener?.((mode) => {
+      this.state.approvalMode = mode
+      this.state.planMode = mode === 'plan'
+      this.emit()
+    })
+    // A tool call parked in default/acceptEdits mode.
+    claudeCodeModel?.setPermissionListener?.((permission) => {
+      this.state.permission = permission
+      this.emit()
+    })
+    // Automatic compaction: the CLI decides by itself at the threshold. Only
+    // the auto flag is handled here; a manual compact owns the same state via
+    // compactContext().
+    claudeCodeModel?.setCompactingListener?.((state) => {
+      this.state.contextCompacting = state.active
+      this.state.contextCompactingAuto = state.active && state.auto
+      this.emit()
+    })
     // A parked AskUserQuestion lives in the snapshot while the panel shows it.
     claudeCodeModel?.setQuestionListener?.((question) => {
       this.state.question = question;
@@ -97,6 +118,9 @@ export class AgentRuntime {
       avatarState: 'idle',
       taskStatus: 'idle',
       effort: 'max',
+      approvalMode: 'bypassPermissions',
+      permission: null,
+      contextCompactingAuto: false,
       timeline: [],
       timelineRevision: 0
     }
@@ -140,22 +164,43 @@ export class AgentRuntime {
 
   /** Planned-first sessions: research and propose before touching anything. */
   async setPlanMode(on: boolean): Promise<void> {
-    if (Boolean(this.state.planMode) === on) return
-    if (this.state.mode !== 'claude_code' || !this.claudeCodeModel?.setPlanMode) {
-      throw new Error('当前模型不支持计划模式。')
+    await this.setApprovalMode(on ? 'plan' : this.lastNonPlanApproval)
+  }
+
+  /** Claude Code's permission modes, switched through the query's control
+   *  channel. A cold query records the choice for the next session. */
+  async setApprovalMode(mode: ApprovalMode): Promise<void> {
+    if ((this.state.approvalMode ?? 'bypassPermissions') === mode) return
+    const client = this.claudeCodeModel
+    // Older clients (and test doubles) only know the plan switch.
+    const fallbackToPlan = !client?.setApprovalMode && Boolean(client?.setPlanMode) &&
+      (mode === 'plan' || mode === 'bypassPermissions')
+    if (this.state.mode !== 'claude_code' || !client || (!client.setApprovalMode && !fallbackToPlan)) {
+      throw new Error('当前模型不支持审批模式。')
     }
     try {
-      const confirmed = await this.claudeCodeModel.setPlanMode(on)
+      const confirmed = client.setApprovalMode ? await client.setApprovalMode(mode) : await client.setPlanMode?.(mode === 'plan')
       if (confirmed === false) {
-        this.add('system', '计划模式请求已保存，等待下次 SDK 会话启动后确认。')
+        // Cold query: the choice only shows once the SDK's init confirms it.
         return
       }
     } catch {
-      this.add('system', '计划模式切换失败，SDK 未确认。')
-      throw new Error('计划模式切换失败，SDK 未确认。')
+      this.add('system', '审批模式切换失败，SDK 未确认。')
+      throw new Error('审批模式切换失败，SDK 未确认。')
     }
-    this.state.planMode = on
-    this.add('system', on ? '已开启计划模式：先研究并给出计划，再动手执行。' : '已关闭计划模式。')
+    // Switch silently: the button already shows the new mode, and a system
+    // line for every flip buried the conversation it was supposed to explain.
+    this.state.approvalMode = mode
+    this.state.planMode = mode === 'plan'
+    if (mode !== 'plan') this.lastNonPlanApproval = mode
+    this.emit()
+  }
+
+  /** Forwards the panel's allow/deny to the model that parked the call. */
+  async answerPermission(id: string, allow: boolean): Promise<void> {
+    const model = this.model as (ModelClient & { answerPermission?: (id: string, allow: boolean) => boolean }) | undefined
+    if (!model?.answerPermission) throw new Error('当前没有等待批准的操作。')
+    if (!model.answerPermission(id, allow)) throw new Error('这次操作已经失效。')
   }
 
   setGoalBudget(maxIterations: number, maxMinutes: number): void {
@@ -276,6 +321,7 @@ export class AgentRuntime {
     const model = this.model as (ModelClient & { compact?: (sessionId?: string | null) => Promise<ContextUsageSnapshot> }) | undefined
     if (this.state.mode !== 'claude_code' || !model?.compact) throw new Error('当前模型不支持手动压缩。')
     this.state.contextCompacting = true
+    this.state.contextCompactingAuto = false
     this.emit()
     const generation = this.contextGeneration
     const sessionId = this.sdkSessionId
@@ -288,6 +334,7 @@ export class AgentRuntime {
         : '上下文已压缩，可以继续当前对话。')
     } finally {
       this.state.contextCompacting = false
+      this.state.contextCompactingAuto = false
       this.emit()
     }
   }
@@ -343,6 +390,7 @@ export class AgentRuntime {
     this.state.plan = null
     this.state.contextUsage = { status: 'unavailable' }
     this.state.contextCompacting = false
+    this.state.contextCompactingAuto = false
     this.state.taskMetrics = undefined
     this.state.conversationSpentYuan = typeof record.spentYuan === 'number' && Number.isFinite(record.spentYuan) && record.spentYuan >= 0
       ? record.spentYuan : undefined
@@ -364,11 +412,17 @@ export class AgentRuntime {
     // the best context source — even when the last stored turn is an unanswered
     // user message (that turn simply continues inside the resumed session).
     this.sdkSessionId = mode === 'claude_code' ? record.sdkSessionId : null
-    // Plan mode survives the restart: the client records the preference and
-    // builds the next query with it; the CLI re-reports the real state on init.
-    this.state.planMode = record.planMode ?? false
-    if (mode === 'claude_code' && this.state.planMode) {
-      void Promise.resolve(this.claudeCodeModel?.setPlanMode?.(true)).catch(() => undefined)
+    // The approval mode survives the restart: the client records the preference
+    // and builds the next query with it; the CLI re-reports the real state on
+    // init. Records written before the mode existed fall back to planMode.
+    const savedMode: ApprovalMode = isApprovalMode(record.approvalMode)
+      ? record.approvalMode
+      : record.planMode ? 'plan' : 'bypassPermissions'
+    this.state.approvalMode = savedMode
+    this.state.planMode = savedMode === 'plan'
+    if (savedMode !== 'plan') this.lastNonPlanApproval = savedMode
+    if (mode === 'claude_code' && savedMode !== 'bypassPermissions') {
+      void Promise.resolve(this.claudeCodeModel?.setApprovalMode?.(savedMode)).catch(() => undefined)
     }
 
     if (mode !== 'claude_code') this.state.goal = null
@@ -376,17 +430,19 @@ export class AgentRuntime {
     this.emit()
   }
 
-  exportConversationState(): Pick<ConversationRecord, 'mode' | 'timeline' | 'history' | 'sdkSessionId' | 'spentYuan' | 'goal' | 'planMode'> {
+  exportConversationState(): Pick<ConversationRecord, 'mode' | 'timeline' | 'history' | 'sdkSessionId' | 'spentYuan' | 'goal' | 'planMode' | 'approvalMode'> {
     return {
       mode: this.state.mode,
       timeline: structuredClone(this.state.timeline),
       history: structuredClone(this.history),
       sdkSessionId: this.sdkSessionId,
       spentYuan: this.state.conversationSpentYuan,
-      // Both survive a restart: the goal comes back as "unverified" until the
-      // CLI re-confirms it, and plan mode is what the next query is built with.
+      // All three survive a restart: the goal comes back as "unverified" until
+      // the CLI re-confirms it; the approval mode is what the next query is
+      // built with, and planMode stays for records from before it existed.
       goal: this.state.goal,
-      planMode: this.state.planMode
+      planMode: this.state.planMode,
+      approvalMode: this.state.approvalMode ?? 'bypassPermissions'
     }
   }
 
@@ -601,6 +657,22 @@ export class AgentRuntime {
   }
 
   /** The names the persona addresses, applied to every client. */
+  /** 开关联网搜索。关闭时 Claude 客户端会把搜索/抓取工具从工具列表移除，
+   *  并在人设里明确写明不可搜索。 */
+  setWebSearch(on: boolean): void {
+    this.claudeCodeModel?.setWebSearchEnabled?.(on)
+  }
+
+  /** 自动压缩阈值（百分比）；随下一次 query 与发送前的预算检查生效。 */
+  setAutoCompactPercent(percent: number): void {
+    this.claudeCodeModel?.setAutoCompactPercent?.(percent)
+  }
+
+  /** 切换人设预设：人设文字随下一次 query 生效。 */
+  setPersona(id: string): void {
+    this.claudeCodeModel?.setPersonaId?.(id)
+  }
+
   setIdentity(identity: { userName: string; assistantName: string }): void {
     this.claudeCodeModel?.setIdentity?.(identity)
     this.configuredModel?.setIdentity?.(identity)

@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type AnimationEvent, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import type { AppSnapshot, BubbleLayout, ClaudeWorkflowOption, ContextUsageSnapshot, ConversationSummary, EffortLevel, ModelMode, ModelProfile, PendingMessage, PetAPI, ProposedAction, SideChatSnapshot, TaskMetrics, TaskStatus, TimelineEntry, UserAttachment } from '../shared/contracts';
-import { PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH } from '../shared/contracts';
+import type { AppSnapshot, ApprovalMode, BubbleLayout, ClaudeWorkflowOption, ContextUsageSnapshot, ConversationSummary, EffortLevel, ModelMode, ModelProfile, PendingMessage, PetAPI, ProposedAction, SideChatSnapshot, TaskMetrics, TaskStatus, TimelineEntry, UserAttachment } from '../shared/contracts';
+import { AUTO_COMPACT_DEFAULT_PERCENT, AUTO_COMPACT_MAX_PERCENT, AUTO_COMPACT_MIN_PERCENT, PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH } from '../shared/contracts';
 import { isImageAttachmentName } from '../shared/image-preview';
 import { EFFORT_LABELS } from '../shared/effort';
 import { EffortSlider } from './effort-slider';
@@ -22,6 +22,7 @@ import { moveTab, orderConversationTabs, quickTabLimit, showNewTabButton } from 
 import { TaskStrip } from './task-strip';
 import { AskQuestionPanel } from './ask-question';
 import { PlanApprovalPanel } from './plan-approval';
+import { ToolApprovalPanel } from './tool-approval';
 import { ThinkingItem } from './thinking-item';
 import { groupTimeline, liftAsides, sameTimelineEntry, segmentTurn, splitTurnTail, tailWindow, type TurnSegment } from './timeline-groups';
 import { navMarks, NAV_WINDOW_COMPACT, NAV_WINDOW_WIDE, TimelineNav } from './timeline-nav';
@@ -34,8 +35,37 @@ import { TurnStats } from './turn-stats';
 import { WorkingIndicator } from './working-indicator';
 import { TurnProcess, WorkCluster } from './work-cluster';
 import { petBridge } from './pet-state';
+import { personaAvatarUrl } from './avatar-art';
 import { VoiceManager } from './voice-manager';
 import './panel.css';
+
+// 审批菜单只放权限相关的三档；计划模式是工作方式，不在这里。顺序从
+// 严格到宽松：每次操作都弹审批、只放行编辑、全部直接执行。
+const APPROVAL_MODES: ApprovalMode[] = ['default', 'acceptEdits', 'bypassPermissions']
+const APPROVAL_MODE_LABELS: Record<ApprovalMode, string> = {
+  default: '自动审批',
+  acceptEdits: '允许所有编辑',
+  bypassPermissions: '完全访问',
+  plan: '计划模式'
+}
+const APPROVAL_MODE_HINTS: Record<ApprovalMode, string> = {
+  default: '每个需要权限的操作都自动弹审批',
+  acceptEdits: '文件修改自动放行，其他操作仍询问',
+  bypassPermissions: '所有工具直接执行，不再询问',
+  plan: '先研究并给出计划，批准后再动手'
+}
+
+/** One icon per permission mode: a question mark (every call asks), a pencil
+ *  (edits pass), an open lock (everything runs). */
+function ApprovalIcon({ mode }: { mode: ApprovalMode }) {
+  if (mode === 'acceptEdits') {
+    return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4.2 15.8l.9-3.8 7.6-7.6a1.5 1.5 0 0 1 2.1 2.1l-7.6 7.6-3 .9Z" /><path d="m11.7 5.4 2.1 2.1" /></svg>
+  }
+  if (mode === 'bypassPermissions') {
+    return <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4.8" y="9" width="10.4" height="7.4" rx="2" /><path d="M7.4 9V6.6a2.6 2.6 0 0 1 5.1-.7" /></svg>
+  }
+  return <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.8" /><path d="M8.1 8.2a2 2 0 1 1 2.7 1.9c-.5.2-.8.6-.8 1.1v.4" /><path d="M10 13.9h.01" /></svg>
+}
 
 const taskLabels: Record<TaskStatus, string> = {
   idle: '待命',
@@ -82,12 +112,16 @@ function ModelIcon() {
   return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 5h12M4 10h12M4 15h12" /><circle cx="7" cy="5" r="1.5" /><circle cx="12" cy="10" r="1.5" /><circle cx="9" cy="15" r="1.5" /></svg>;
 }
 
-function EffortIcon() {
-  // The thought spark. The viewBox is trimmed to the ink (4＋4→16, stroke
-  // included) so the box the layout sees is the glyph itself — a 20×20 box
-  // left ~4px of inner padding on each side, which read as the whole
-  // icon+label cluster sitting to the right inside its button.
-  return <svg viewBox="4 4 12 12" aria-hidden="true"><path d="M10 5.2c.9 3.1 1.7 3.9 4.8 4.8-3.1.9-3.9 1.7-4.8 4.8-.9-3.1-1.7-3.9-4.8-4.8 3.1-.9 3.9-1.7 4.8-4.8Z" /></svg>;
+/** 思考强度不再用文字，用火花的数量表示：低 1 颗、高 2 颗、最大 3 颗。
+ *  图标盒固定 16px，三档尺寸一致。 */
+function EffortIcon({ level = 'max' }: { level?: EffortLevel }) {
+  const spark = (cx: number, cy: number) => (
+    <path key={`${cx}-${cy}`} d={`M${cx} ${cy - 3.4}c.5 2.1.9 2.5 3 3-2.1.5-2.5.9-3 3-.5-2.1-.9-2.5-3-3 2.1-.5 2.5-.9 3-3Z`} />
+  );
+  const points: Array<[number, number]> = level === 'low'
+    ? [[10, 10]]
+    : level === 'high' ? [[6, 10], [14, 10]] : [[10, 5.5], [5.5, 13], [14.5, 13]];
+  return <svg viewBox="0 0 20 20" aria-hidden="true">{points.map(([x, y]) => spark(x, y))}</svg>;
 }
 
 function ConversationsIcon() {
@@ -289,7 +323,8 @@ export const TimelineItem = memo(function TimelineItem({ entry, running = false,
       <div className="panel-event-avatar" aria-hidden="true" onContextMenu={onAvatarMenu}>
         {entry.kind === 'user' || entry.kind === 'assistant'
           ? <AvatarGlyph kind={entry.kind} fallback={entry.kind === 'user' ? '你' : '鲸'}
-              name={entry.kind === 'user' ? display.avatars.user : display.avatars.assistant} />
+              name={entry.kind === 'user' ? display.avatars.user : display.avatars.assistant}
+              presetSrc={entry.kind === 'user' ? null : display.personaAvatar} />
           : <span className="panel-event-glyph">系</span>}
         {display.showTimestamps && <time className="panel-event-time" dateTime={entry.time}>{timeLabel}</time>}
       </div>
@@ -299,13 +334,16 @@ export const TimelineItem = memo(function TimelineItem({ entry, running = false,
 }, (prev, next) => prev.running === next.running && sameTimelineEntry(prev.entry, next.entry) &&
   prev.display.showTimestamps === next.display.showTimestamps &&
   (prev.display.avatars.user ?? null) === (next.display.avatars.user ?? null) &&
-  (prev.display.avatars.assistant ?? null) === (next.display.avatars.assistant ?? null));
+  (prev.display.avatars.assistant ?? null) === (next.display.avatars.assistant ?? null) &&
+  (prev.display.personaAvatar ?? null) === (next.display.personaAvatar ?? null));
 
 
 /** The display preferences a row needs beyond its entry itself. */
 interface RowDisplay {
   showTimestamps: boolean
   avatars: { user: string | null; assistant: string | null }
+  /** Built-in avatar of the current persona, used when no custom one exists. */
+  personaAvatar?: string | null
 }
 
 /** Thinking entries get their own expandable row; everything else keeps the message layout. */
@@ -319,17 +357,17 @@ function EntryItem({ entry, running, onOpenImage, display }: { entry: TimelineEn
  *  never go stale. */
 const avatarCache = new Map<string, string | null>();
 
-function AvatarGlyph({ kind, name, fallback }: { kind: 'user' | 'assistant'; name: string | null; fallback: string }) {
-  const [url, setUrl] = useState<string | null>(() => name ? avatarCache.get(name) ?? null : null);
+function AvatarGlyph({ kind, name, fallback, presetSrc }: { kind: 'user' | 'assistant'; name: string | null; fallback: string; presetSrc?: string | null }) {
+  const [url, setUrl] = useState<string | null>(() => name ? avatarCache.get(name) ?? null : presetSrc ?? null);
   useEffect(() => {
-    if (!name) { setUrl(null); return; }
+    if (!name) { setUrl(presetSrc ?? null); return; }
     let cancelled = false;
     void petBridge().readAvatar(kind).then((data) => {
       avatarCache.set(name, data);
       if (!cancelled) setUrl(data);
     }).catch(() => { if (!cancelled) setUrl(null); });
     return () => { cancelled = true; };
-  }, [kind, name]);
+  }, [kind, name, presetSrc]);
   return url
     ? <img className="panel-avatar-img" src={url} alt="" />
     : <span className="panel-event-glyph">{fallback}</span>;
@@ -553,6 +591,8 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
   const composeDockRef = useRef<HTMLDivElement>(null);
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   const [effortMenuOpen, setEffortMenuOpen] = useState(false);
+  const [approvalMenuOpen, setApprovalMenuOpen] = useState(false);
+  const [bypassConfirmOpen, setBypassConfirmOpen] = useState(false);
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
   const [goalPrompting, setGoalPrompting] = useState(false);
   const [imageViewer, setImageViewer] = useState<{ name: string; url: string } | null>(null);
@@ -579,6 +619,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
   composerStateRef.current = { draft, attachments };
   const modelPickerRef = useRef<HTMLDivElement>(null);
   const effortMenuRef = useRef<HTMLDivElement>(null);
+  const approvalMenuRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const composeTriggerRef = useRef<HTMLButtonElement>(null);
   const voiceManagerRef = useRef<VoiceManager | null>(null);
@@ -733,7 +774,8 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
   }, []);
   const rowDisplay: RowDisplay = {
     showTimestamps: library?.settings.showMessageTimestamps ?? true,
-    avatars: { user: library?.settings.userAvatar ?? null, assistant: library?.settings.assistantAvatar ?? null }
+    avatars: { user: library?.settings.userAvatar ?? null, assistant: library?.settings.assistantAvatar ?? null },
+    personaAvatar: personaAvatarUrl(library?.settings.personaId)
   };
   // Stable while the display settings are unchanged — that is what keeps the
   // memoized clusters from re-rendering on every stream tick. The image
@@ -924,6 +966,31 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
   }, [effortMenuOpen]);
 
   useEffect(() => {
+    if (!approvalMenuOpen) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!approvalMenuRef.current?.contains(event.target as Node)) setApprovalMenuOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setApprovalMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutsideClick, true);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsideClick, true);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [approvalMenuOpen]);
+
+  useEffect(() => {
+    if (!bypassConfirmOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.stopPropagation(); setBypassConfirmOpen(false); }
+    };
+    document.addEventListener('keydown', closeOnEscape, true);
+    return () => document.removeEventListener('keydown', closeOnEscape, true);
+  }, [bypassConfirmOpen]);
+
+  useEffect(() => {
     if (!imageViewer) return;
     const closeOnEscape = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') { event.stopPropagation(); setImageViewer(null); }
@@ -1082,6 +1149,26 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
     const frame = requestAnimationFrame(() => { feed.scrollTop = feed.scrollHeight; });
     return () => cancelAnimationFrame(frame);
   }, [visible, composerOpen, snapshot?.timeline.length, newestText, snapshot?.proposal?.id]);
+
+  // 启动就停在最新一条，等于先替用户按一次「回到底部」。面板重载后默认在
+  // 顶部；content-visibility 的占位高度会在首屏之后才展开，所以补两拍，
+  // 让滚动到底之后的最终高度也跟得上。只在挂载时执行一次。
+  useEffect(() => {
+    const feed = feedRef.current;
+    if (!feed) return;
+    followFeedRef.current = true;
+    setFeedAtBottom(true);
+    const jump = () => { feed.scrollTop = feed.scrollHeight; };
+    jump();
+    const frame = requestAnimationFrame(jump);
+    const soon = window.setTimeout(jump, 120);
+    const settle = window.setTimeout(jump, 400);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(soon);
+      window.clearTimeout(settle);
+    };
+  }, []);
 
   function restoreRejectedSubmission(originId: string | null, sentDraft: string,
     sentAttachments: DroppedAttachment[], goal = false): void {
@@ -1322,10 +1409,44 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
     await run((bridge) => bridge.setEffort(level));
   }
 
+  /** 上下文弹窗里的阈值行：滚轮一格改一个百分点，限制在 50–90。 */
+  function nudgeAutoCompact(delta: number) {
+    const current = library?.settings.autoCompactPercent ?? AUTO_COMPACT_DEFAULT_PERCENT;
+    const next = Math.min(AUTO_COMPACT_MAX_PERCENT, Math.max(AUTO_COMPACT_MIN_PERCENT, current + delta));
+    if (next === current) return;
+    void run((bridge) => bridge.setAutoCompactPercent(next));
+  }
+
   async function choosePlanMode(on: boolean) {
     if (Boolean(snapshot?.planMode) === on) return;
     const sideId = destinationRef.current === 'side' ? sideChatRef.current?.sessionId : null;
     await run((bridge) => sideId ? bridge.setSideChatPlanMode(sideId, on) : bridge.setPlanMode(on));
+  }
+
+  async function applyApprovalMode(mode: ApprovalMode) {
+    if ((snapshot?.approvalMode ?? 'bypassPermissions') === mode) {
+      setApprovalMenuOpen(false);
+      setBypassConfirmOpen(false);
+      return;
+    }
+    // Side chats inherit the main conversation's permission mode.
+    if (destinationRef.current === 'side') { setApprovalMenuOpen(false); return; }
+    const accepted = await run((bridge) => bridge.setApprovalMode(mode));
+    if (accepted) {
+      setApprovalMenuOpen(false);
+      setBypassConfirmOpen(false);
+    }
+  }
+
+  async function chooseApprovalMode(mode: ApprovalMode) {
+    // Full access asks once, in words, before it takes effect. The menu closes
+    // first so the warning is the only thing left on screen.
+    if (mode === 'bypassPermissions' && (snapshot?.approvalMode ?? 'bypassPermissions') !== 'bypassPermissions') {
+      setApprovalMenuOpen(false);
+      setBypassConfirmOpen(true);
+      return;
+    }
+    await applyApprovalMode(mode);
   }
 
   /** Goal mode is the CLI's own /goal: the command starts the stop-hook loop.
@@ -2111,26 +2232,43 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
 
   // 展开面板的左上角拖拽：面板锚在右下，向右下没有空间，所以向左上拖大。
   // 尺寸每帧最多发一次；主进程按窗口布局重算并节流落盘。
-  const resizeSession = useRef<{ startX: number; startY: number; startW: number; startH: number; lastSent: number } | null>(null);
+  // 拖动缩放用屏幕坐标而不是视口坐标：窗口左/上缘会跟着鼠标移动，视口坐标
+  // 会随窗口一起变，形成反馈回路——之前的高频抖动和「差一截」都来自这里。
+  const resizeSession = useRef<{ startScreenX: number; startScreenY: number; startW: number; startH: number; lastSent: number; lastWidth: number; lastHeight: number } | null>(null);
   const [resizingPanel, setResizingPanel] = useState(false);
   function beginPanelResize(event: ReactPointerEvent<HTMLDivElement>): void {
-    if (!expanded) return;
+    if (!expanded || event.button !== 0) return;
     const rect = event.currentTarget.closest('.panel-bubble')?.getBoundingClientRect();
     if (!rect) return;
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    resizeSession.current = { startX: event.clientX, startY: event.clientY, startW: rect.width, startH: rect.height, lastSent: 0 };
+    resizeSession.current = {
+      startScreenX: event.screenX, startScreenY: event.screenY,
+      startW: rect.width, startH: rect.height, lastSent: 0,
+      lastWidth: Math.round(rect.width), lastHeight: Math.round(rect.height)
+    };
     setResizingPanel(true);
   }
   function movePanelResize(event: ReactPointerEvent<HTMLDivElement>): void {
     const session = resizeSession.current;
     if (!session) return;
+    // pointerup 偶尔会在窗口移动时丢掉；没有按键还留着会话的话，鼠标
+    // 再移回手柄就会继续改尺寸（表现为“自己往左上缩”）。
+    if ((event.buttons & 1) === 0) {
+      endPanelResize(event);
+      return;
+    }
     const maxWidth = Math.max(PANEL_MIN_WIDTH, window.screen.availWidth - 20);
-    const maxHeight = Math.max(PANEL_MIN_HEIGHT, window.screen.availHeight - 192);
-    const width = Math.round(Math.min(maxWidth, Math.max(PANEL_MIN_WIDTH, session.startW + (session.startX - event.clientX))));
-    const height = Math.round(Math.min(maxHeight, Math.max(PANEL_MIN_HEIGHT, session.startH + (session.startY - event.clientY))));
+    // 头像可以向下伸出工作区，面板顶要够得到工作区顶；多出来的部分由
+    // 主进程按头像底边裁掉，不会真的长到屏幕外。
+    const maxHeight = Math.max(PANEL_MIN_HEIGHT, window.screen.availHeight);
+    const width = Math.round(Math.min(maxWidth, Math.max(PANEL_MIN_WIDTH, session.startW + (session.startScreenX - event.screenX))));
+    const height = Math.round(Math.min(maxHeight, Math.max(PANEL_MIN_HEIGHT, session.startH + (session.startScreenY - event.screenY))));
+    if (width === session.lastWidth && height === session.lastHeight) return;
     const now = performance.now();
     if (now - session.lastSent < 16) return;
+    session.lastWidth = width;
+    session.lastHeight = height;
     session.lastSent = now;
     void petBridge().setPanelSize(width, height);
   }
@@ -2149,9 +2287,12 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
     }
   }, [layout, compactComposerHeight]);
 
-  // A parked question or plan takes over the composer slot until it is settled.
+  // A parked question, plan or tool approval takes over the composer slot
+  // until it is settled.
   const ask = snapshot?.question ?? null;
   const plan = snapshot?.plan ?? null;
+  const permission = snapshot?.permission ?? null;
+  const approvalMode = snapshot?.approvalMode ?? 'bypassPermissions';
 
   return (
     <section className={`panel-bubble${compactEmpty ? ' is-empty' : ''}${expanded ? ' is-expanded' : ''}${sideExpanded ? ' is-side-chat' : ''}${composerOpen || composerExit.closing || ask || plan ? ' is-composing' : ''}${attachments.length ? ' has-attachments' : ''}${modelPickerOpen ? ' is-choosing-model' : ''}`} style={compactEmpty && (composerOpen || composerExit.closing) ? { height: compactComposerHeight } : undefined} aria-label="交互气泡" hidden={!visible} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => {
@@ -2308,9 +2449,9 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
               if (group.kind === 'single') return <EntryItem key={group.entry.id} entry={group.entry} running={false} onOpenImage={openImageViewer} display={rowDisplay} />;
               const segments = segmentTurn(group.items);
               const isLiveTurn = index === latestTurnIndex && active;
-              // 思考中：插话按顺序留在过程流里——那就是当时的现场，不提前搬走。
-              // 这一轮结束、过程合并成一条之后，插话才整体抬到折叠链的上方，
-              // 按条数叠成一列：折叠不被插话打断，链任何时候都能收起来。
+              // 思考中：插话按顺序留在过程流里——那就是当时的现场，不提前
+              // 搬走。这一轮结束、过程合并成一条之后，插话才整体抬到折叠链
+              // 上方，按条数叠成一列：折叠不被插话打断，链任何时候都能收。
               const { asides, flow } = isLiveTurn
                 ? { asides: [] as Array<Extract<TurnSegment, { kind: 'user' }>>, flow: segments }
                 : liftAsides(segments);
@@ -2334,7 +2475,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                 {runAnchor && <article className="panel-event panel-event-assistant is-run" data-entry-id={firstReplyId ?? runAnchor.id}
                   aria-label={`${kindLabels.assistant}，${timeText(runAnchor.time)}`}>
                   <div className="panel-event-avatar" aria-hidden="true" onContextMenu={sideExpanded ? undefined : (event) => showTurnMenu(event, group.user.id, turnMenuTitle(group.user), isLiveTurn)}>
-                    <AvatarGlyph kind="assistant" fallback="鲸" name={rowDisplay.avatars.assistant} />
+                    <AvatarGlyph kind="assistant" fallback="鲸" name={rowDisplay.avatars.assistant} presetSrc={rowDisplay.personaAvatar} />
                     {rowDisplay.showTimestamps && <time className="panel-event-time" dateTime={runAnchor.time}>{timeText(runAnchor.time)}</time>}
                   </div>
                   <div className="panel-event-body">
@@ -2357,7 +2498,9 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                   showMissingUsage={index === latestTurnIndex && !active} />
               </div>;
             })}
-            <WorkingIndicator sending={sendingCurrent} thinking={liveThinking} status={status} tool={runningTool} startedAt={snapshot?.taskMetrics?.startedAt} />
+            <WorkingIndicator sending={sendingCurrent} thinking={liveThinking} status={status} tool={runningTool}
+              compacting={Boolean(snapshot?.contextCompacting)} compactingAuto={Boolean(snapshot?.contextCompactingAuto)}
+              startedAt={snapshot?.taskMetrics?.startedAt} />
             {snapshot?.proposal && (
               <ApprovalCard
                 proposal={snapshot.proposal}
@@ -2413,7 +2556,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
 
         {!compactEmpty && !sideExpanded && snapshot?.goal && <GoalBanner goal={snapshot.goal} onClear={clearGoal} />}
 
-        <div className={`panel-compose-dock${composerOpen || composerExit.closing || ask || plan ? ' is-open' : ''}`} ref={composeDockRef}>
+        <div className={`panel-compose-dock${composerOpen || composerExit.closing || ask || plan || permission ? ' is-open' : ''}`} ref={composeDockRef}>
           {ask ? (
             <AskQuestionPanel
               key={ask.id}
@@ -2426,6 +2569,12 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
               key={plan.id}
               request={plan}
               onDecide={(approved) => run((bridge) => sideExpanded && sideSessionId ? bridge.answerSideChatPlan(sideSessionId, plan.id, approved) : bridge.answerPlan(plan.id, approved))}
+            />
+          ) : permission ? (
+            <ToolApprovalPanel
+              key={permission.id}
+              request={permission}
+              onDecide={(allow) => run((bridge) => bridge.answerPermission(permission.id, allow))}
             />
           ) : composerOpen || composerExit.closing ? (
           <form className={`panel-composer${composerOpen ? '' : ' is-closing'}`} ref={composerRef} onAnimationEnd={composerExit.endClose} onSubmit={(event) => { event.preventDefault(); void send('queue'); }} onKeyDown={(event) => {
@@ -2544,13 +2693,44 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                         <span>目标模式</span>
                         <span className="panel-mode-switch" aria-hidden="true" />
                       </button>
+                      <button type="button" role="switch" aria-checked={library?.settings.webSearchEnabled !== false}
+                        className={`panel-mode-toggle${library?.settings.webSearchEnabled !== false ? ' is-on' : ''}`}
+                        disabled={sideExpanded || snapshot?.mode !== 'claude_code'}
+                        title={library?.settings.webSearchEnabled !== false ? '关闭后模型不会尝试联网搜索' : '打开后模型可以联网搜索'}
+                        onClick={() => { void run((bridge) => bridge.setWebSearchEnabled(library?.settings.webSearchEnabled === false)); }}>
+                        <span>允许联网搜索</span>
+                        <span className="panel-mode-switch" aria-hidden="true" />
+                      </button>
                     </div>
                   </div>
                 </div>
+                {snapshot?.mode === 'claude_code' && <div className="panel-approval-wrap" ref={approvalMenuRef}>
+                  <button type="button" className={`panel-tool-button panel-approval-button is-${approvalMode === 'acceptEdits' ? 'edits' : approvalMode === 'bypassPermissions' ? 'bypass' : 'default'}`}
+                    aria-label={`审批模式：${APPROVAL_MODE_LABELS[approvalMode]}`}
+                    aria-haspopup="dialog" aria-expanded={approvalMenuOpen}
+                    title={`审批模式：${APPROVAL_MODE_LABELS[approvalMode]}`}
+                    disabled={sideExpanded}
+                    onClick={() => setApprovalMenuOpen((open) => !open)}>
+                    <ApprovalIcon mode={approvalMode} />
+                  </button>
+                  <div className={`panel-approval-menu${approvalMenuOpen ? ' is-open' : ''}`} role="dialog" aria-label="审批模式" aria-hidden={!approvalMenuOpen} inert={!approvalMenuOpen}
+                    onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); setApprovalMenuOpen(false); } }}>
+                    <div className="panel-popover-heading">审批模式</div>
+                    {APPROVAL_MODES.map((mode) => <button key={mode} type="button" role="radio" aria-checked={approvalMode === mode}
+                      className={`panel-approval-pick${approvalMode === mode ? ' is-active' : ''}`}
+                      onClick={() => { void chooseApprovalMode(mode); }}>
+                      <span className={`panel-approval-pick-icon is-${mode}`} aria-hidden="true"><ApprovalIcon mode={mode} /></span>
+                      <span className="panel-approval-pick-text">
+                        <span>{APPROVAL_MODE_LABELS[mode]}</span>
+                        <small>{APPROVAL_MODE_HINTS[mode]}</small>
+                      </span>
+                      {approvalMode === mode && <span className="panel-model-check" aria-hidden="true">✓</span>}
+                    </button>)}
+                  </div>
+                </div>}
                 {!sideExpanded && <div className="panel-effort-wrap" ref={effortMenuRef}>
                   <button type="button" className={`panel-tool-button panel-effort-button${snapshot?.effort && snapshot.effort !== 'max' ? ' is-on' : ''}`} aria-label={`思考强度：${EFFORT_LABELS[snapshot?.effort ?? 'max']}`} aria-haspopup="dialog" aria-expanded={effortMenuOpen} title={`思考强度：${EFFORT_LABELS[snapshot?.effort ?? 'max']}`} disabled={!snapshot} onClick={() => setEffortMenuOpen((open) => !open)}>
-                    <EffortIcon />
-                    <span className="panel-effort-badge">{EFFORT_LABELS[snapshot?.effort ?? 'max']}</span>
+                    <EffortIcon level={snapshot?.effort ?? 'max'} />
                   </button>
                   <div className={`panel-effort-menu${effortMenuOpen ? ' is-open' : ''}`} role="dialog" aria-label="思考强度" aria-hidden={!effortMenuOpen} inert={!effortMenuOpen}
                     onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); setEffortMenuOpen(false); } }}>
@@ -2566,8 +2746,18 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                     {contextUsage?.status === 'available' && Number.isFinite(contextUsage.usedPercent) ? <>
                       <div className="panel-context-stat"><span>已用</span><strong>{Math.round(contextUsage.usedPercent!)}%</strong></div>
                       {contextUsage.maxTokens !== undefined && contextUsage.usedTokens !== undefined && <div className="panel-context-tokens">{contextUsage.usedTokens.toLocaleString()} / {contextUsage.maxTokens.toLocaleString()} token</div>}
-                      {contextUsage.autoCompactThresholdPercent !== undefined && <div className="panel-context-tokens">自动压缩阈值 {Math.round(contextUsage.autoCompactThresholdPercent)}%</div>}
                     </> : <div className="panel-context-unknown">用量暂不可读取</div>}
+                    <div className="panel-context-tokens panel-context-threshold" role="slider" tabIndex={0}
+                      aria-label="自动压缩阈值" aria-valuemin={AUTO_COMPACT_MIN_PERCENT} aria-valuemax={AUTO_COMPACT_MAX_PERCENT}
+                      aria-valuenow={library?.settings.autoCompactPercent ?? AUTO_COMPACT_DEFAULT_PERCENT}
+                      title="滚轮上下调整（50%–90%）"
+                      onWheel={(event) => { event.preventDefault(); nudgeAutoCompact(event.deltaY < 0 ? 1 : -1); }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'ArrowUp' || event.key === 'ArrowRight') { event.preventDefault(); nudgeAutoCompact(1); }
+                        else if (event.key === 'ArrowDown' || event.key === 'ArrowLeft') { event.preventDefault(); nudgeAutoCompact(-1); }
+                      }}>
+                      自动压缩阈值 {library?.settings.autoCompactPercent ?? AUTO_COMPACT_DEFAULT_PERCENT}%
+                    </div>
                     <button type="button" className="panel-compact-button" disabled={contextCompacting || !snapshot || snapshot.mode === 'demo'} onClick={() => { void compactContext(); }}>{contextCompacting ? '压缩中…' : '压缩上下文'}</button>
                   </div>
                 </div>
@@ -2589,6 +2779,17 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
       {imageViewer && <button type="button" className="panel-image-viewer" aria-label={`关闭图片预览：${imageViewer.name}`} onClick={() => setImageViewer(null)}>
         <img src={imageViewer.url} alt={imageViewer.name} />
       </button>}
+      {bypassConfirmOpen && <div className="panel-bypass-backdrop" onClick={() => setBypassConfirmOpen(false)}>
+        <section className="panel-bypass" role="dialog" aria-modal="true" aria-labelledby="bypass-title" onClick={(event) => event.stopPropagation()}>
+          <h3 id="bypass-title">开启「完全访问」？</h3>
+          <p>这个模式会跳过所有工具调用的确认——AI 可以直接执行命令、修改文件、访问网络，不再逐条征求你的同意。</p>
+          <p>请先充分了解其中的风险，再决定是否开启。另一方面，AI Agent 的顺畅运行依赖宽松的审批；从任务完成效率出发，了解风险后开启是合理的。开启之后，建议在对话中为它设定明确、有效的行为边界与约束。</p>
+          <div className="panel-bypass-actions">
+            <button type="button" className="panel-bypass-cancel" onClick={() => setBypassConfirmOpen(false)}>取消</button>
+            <button type="button" className="panel-bypass-confirm" onClick={() => { void applyApprovalMode('bypassPermissions'); }}>我已了解风险，开启</button>
+          </div>
+        </section>
+      </div>}
     </section>
   );
 }

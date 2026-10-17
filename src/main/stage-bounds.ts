@@ -17,15 +17,17 @@ export interface StageRect {
 export const STAGE_WIDTH = 554
 export const STAGE_HEIGHT = 560
 
-/** The strip at the window's bottom edge where the avatar itself lives. */
-export const AVATAR_STRIP = 185
+/** The strip at the window's bottom edge where the avatar itself lives.
+ *  193 = the 128 px portrait + 12 px animation slack + the 53 px the bubble
+ *  keeps clear of the character's hair. */
+export const AVATAR_STRIP = 193
 
 /** Smallest bubble area (window height minus the avatar strip) that still fits
  *  a header, the composer and a couple of message lines. */
 export const BUBBLE_MIN_HEIGHT = 400
 
 /** Vertical room the bubble leaves for the avatar strip below it. */
-const BUBBLE_BOTTOM = AVATAR_STRIP + 7
+export const BUBBLE_BOTTOM = AVATAR_STRIP + 7
 
 export interface PanelSize { width: number; height: number }
 
@@ -36,7 +38,13 @@ export function computeStageBounds(previous: StageRect, work: StageRect, expande
   // 右下）。没拖过时保持出厂行为：固定宽度、展开时向上顶到工作区顶端。
   if (expanded && panelSize) {
     const width = Math.min(work.width, Math.max(PANEL_MIN_WIDTH, panelSize.width) + 20)
-    const height = Math.min(work.height, Math.max(PANEL_MIN_HEIGHT, panelSize.height) + BUBBLE_BOTTOM)
+    // 头像允许向下伸出工作区（脚贴任务栏）。舞台高度若压回 work.height，
+    // 面板顶部就永远差那一段，拖缩放手柄也顶不到工作区顶。上限放到
+    // bottom - work.y：顶部刚好停在 work.y，面板底仍咬着头像底边。
+    const height = Math.min(
+      Math.max(PANEL_MIN_HEIGHT, panelSize.height) + BUBBLE_BOTTOM,
+      Math.max(BUBBLE_MIN_HEIGHT + BUBBLE_BOTTOM, bottom - work.y)
+    )
     const x = Math.max(work.x, Math.min(right - width, work.x + work.width - width))
     const y = Math.max(work.y, Math.min(bottom - height, work.y + work.height - height))
     return { x, y, width, height }
@@ -44,7 +52,10 @@ export function computeStageBounds(previous: StageRect, work: StageRect, expande
   const width = Math.min(work.width, STAGE_WIDTH)
   const x = Math.max(work.x, Math.min(right - width, work.x + work.width - width))
   if (!expanded) return { x, y: bottom - STAGE_HEIGHT, width, height: STAGE_HEIGHT }
-  const height = Math.min(work.height, Math.max(BUBBLE_MIN_HEIGHT + AVATAR_STRIP, bottom - work.y))
+  // 头像窗口贴着舞台底边；舞台底部允许跟着头像伸出工作区（人物可以拖到
+  // 任务栏边缘），面板窗口自己按这个底边定位。这里不再把高度压回工作区，
+  // 否则展开时头像会被迫上移。
+  const height = Math.max(BUBBLE_MIN_HEIGHT + AVATAR_STRIP, bottom - work.y)
   // Prefer keeping the bottom edge (the avatar stays put) and reaching for the
   // top of the work area; if that would leave the bubble under the usable
   // minimum, or the stage hanging outside the work area, pull it back in.

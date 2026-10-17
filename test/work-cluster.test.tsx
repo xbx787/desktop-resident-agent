@@ -35,12 +35,12 @@ describe('workFacts', () => {
     expect(facts.toolCount).toBe(3)
     expect(facts.thinkingSeconds).toBe(12)
     expect(facts.elapsedSeconds).toBe(26)
-    expect(workFactsText(facts)).toBe('思考 00:12，3 项操作，执行命令 ×2、读取 ×1，用时 00:26')
+    expect(workFactsText(facts)).toBe('思考 00:12，3 项操作，执行命令 ×2、读取 ×1')
   })
 
   it('runs the clock from the start while the stretch is still going', () => {
     const facts = workFacts([thought('t1', 0, 3), tool('x1', 'Bash', 3, 'running')], start + 9_000, true)
-    expect(workFactsText(facts)).toBe('思考 00:03，1 项操作，执行命令 ×1，用时 00:09')
+    expect(workFactsText(facts)).toBe('思考 00:03，1 项操作，执行命令 ×1')
   })
 
   it('names the tail of a long tool list by category', () => {
@@ -56,15 +56,14 @@ describe('WorkCluster', () => {
   it('shows the folded summary header with the facts, and no restated request', () => {
     const items = [thought('t1', 0, 12), tool('x1', 'Bash', 12)]
     const html = render(<WorkCluster items={items} running={false} renderEntry={entry} />)
-    // One timer on the row — the thinking seconds live on the rows inside
-    // (and in the hover title), never beside the elapsed time.
+    // The row carries the operation count, never a per-second clock.
     expect(html).not.toContain('<span>思考 00:12</span>')
-    expect(html).toContain('<span>00:12</span>')
-    // The header says what state the stretch is in; the clock stays bare.
+    expect(html).not.toContain('<span>00:12</span>')
+    // The header says what state the stretch is in.
     expect(html).toContain('已工作')
     // The tool breakdown moved off the row: it is the hover title now.
-    expect(html).toContain('title="思考 00:12，1 项操作，执行命令 ×1，用时 00:12"')
-    expect(html).not.toContain('<span>1 项操作</span>')
+    expect(html).toContain('title="思考 00:12，1 项操作，执行命令 ×1"')
+    expect(html).toContain('<span>1 项操作</span>')
     expect(html).not.toContain('panel-cluster-purpose')
     expect(html).not.toMatch(/<details[^>]*\sopen/)
   })
@@ -112,11 +111,12 @@ describe('TurnProcess', () => {
     expect(html).toContain('is-turn-process')
     // Closed by default — the reader sees the outcome, not the process.
     expect(html).not.toMatch(/<details[^>]*\sopen/)
-    // The row states the whole stretch, alive and visible: the settled state
-    // word plus the bare clock.
+    // The row states the whole stretch: the settled state word plus the
+    // operation count; no clock on the bar.
     expect(html).toContain('已工作')
-    expect(html).toContain('<span>00:52</span>')
-    expect(html).toContain('title="思考 00:24，1 项操作，执行命令 ×1，用时 00:52"')
+    expect(html).toContain('<span>1 项操作</span>')
+    expect(html).not.toContain('<span>00:52</span>')
+    expect(html).toContain('title="思考 00:24，1 项操作，执行命令 ×1"')
     // Opening it lays the same pieces back out: the work cluster and the note.
     expect(html).toContain('panel-cluster-summary')
     expect(html).toContain('note-row')

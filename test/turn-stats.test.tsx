@@ -18,10 +18,10 @@ describe('TurnStats', () => {
       tool('c', 'Read', '{"file_path":"D:\\\\projects\\\\panel.tsx"}'),
       tool('d', 'Edit', '{"file_path":"panel.tsx"}', 'error')
     ]} />)
-    expect(html).toContain('4 次工具')
+    expect(html).toContain('使用了 4 次工具')
     // The failure count rides right after the tool count, in parentheses, so
     // the two read as one phrase.
-    expect(html).toContain('4 次工具<span class="panel-turn-tools-errors">（1 次失败）</span>')
+    expect(html).toContain('使用了 4 次工具<span class="panel-turn-tools-errors">（1 次失败）</span>')
     // One line of type counts, most used first, spaced — never glued with
     // punctuation, and files are not named. Every type carries its count,
     // even a single run ("×1").
@@ -32,7 +32,7 @@ describe('TurnStats', () => {
     expect(html).toContain('失败：编辑 panel.tsx')
     expect(html).toContain('panel-turn-tools-line is-error')
     // The count sits after the token figure, as asked.
-    expect(html.indexOf('token')).toBeLessThan(html.indexOf('4 次工具'))
+    expect(html.indexOf('token')).toBeLessThan(html.indexOf('使用了 4 次工具'))
   })
 
   it('reads the output speed beside the token figure', () => {

@@ -7,7 +7,9 @@ import { toolLabel } from '../shared/tool-labels'
  *  that the panel says something during the gaps — while the message is still
  *  travelling, while the model thinks between tool calls, while a command runs —
  *  instead of leaving the timeline unchanged until the next token arrives. */
-export function workingPhrase(input: { sending: boolean; thinking: boolean; status: TaskStatus; tool?: string }): string | null {
+export function workingPhrase(input: { sending: boolean; thinking: boolean; status: TaskStatus; tool?: string; compacting?: boolean; compactingAuto?: boolean }): string | null {
+  // Compaction outranks thinking and tools: while it runs, nothing else moves.
+  if (input.compacting) return input.compactingAuto ? '正在自动压缩上下文' : '正在压缩上下文'
   if (input.sending) return '正在发送消息'
   if (input.thinking) return '正在思考'
   switch (input.status) {
@@ -24,14 +26,16 @@ export function workingPhrase(input: { sending: boolean; thinking: boolean; stat
   }
 }
 
-export function WorkingIndicator({ sending, thinking, status, tool, startedAt }: {
+export function WorkingIndicator({ sending, thinking, status, tool, compacting, compactingAuto, startedAt }: {
   sending: boolean
   thinking: boolean
   status: TaskStatus
   tool?: string
+  compacting?: boolean
+  compactingAuto?: boolean
   startedAt?: string
 }) {
-  const phrase = workingPhrase({ sending, thinking, status, tool })
+  const phrase = workingPhrase({ sending, thinking, status, tool, compacting, compactingAuto })
   const mountedAt = useRef(Date.now())
   const [now, setNow] = useState(mountedAt.current)
   useEffect(() => {

@@ -17,7 +17,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 import { ClaudeAgentClient, boundedConversation } from '../src/main/claude-agent'
 import { AgentTurnError } from '../src/main/agent-errors'
 import type { DialogueLine, ModelToolEvent } from '../src/main/deepseek'
-import type { PlanApprovalRequest, TaskUsage } from '../src/shared/contracts'
+import type { ApprovalMode, CompactionState, PlanApprovalRequest, TaskUsage, ToolPermissionRequest } from '../src/shared/contracts'
 
 const executable = path.join(process.cwd(), 'package.json')
 const sessionId = '11111111-1111-4111-8111-111111111111'
@@ -32,7 +32,12 @@ type Request = {
     mcpServers: Record<string, unknown>
     disallowedTools?: string[]
     tools?: string[]
-    hooks: { PostCompact: Array<{ hooks: Array<() => Promise<unknown>> }> }
+    permissionMode?: string
+    systemPrompt?: { append?: string }
+    hooks: {
+      PreCompact?: Array<{ hooks: Array<(input: { hook_event_name: string; trigger?: string }) => Promise<unknown>> }>
+      PostCompact: Array<{ hooks: Array<() => Promise<unknown>> }>
+    }
     canUseTool: (toolName: string, input: Record<string, unknown>, options: { signal: AbortSignal }) =>
       Promise<{ behavior: string; message?: string; interrupt?: boolean; updatedInput?: unknown }>
   }
@@ -360,6 +365,36 @@ describe('Claude Agent SDK persistent streaming session', () => {
     } finally { await client.dispose() }
   })
 
+  it('reports the configured compaction threshold, not the SDK estimate', async () => {
+    queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* (message) {
+      yield { type: 'result', subtype: 'success', is_error: false, result: '完成', session_id: sessionId,
+        user_message_uuids: [message.uuid], queued_turn_count: 0 }
+    }, () => ({ totalTokens: 500_000, maxTokens: 1_000_000, autoCompactThreshold: 970_000,
+      isAutoCompactEnabled: true, model: 'deepseek-flash[1m]' })))
+    const client = new ClaudeAgentClient(executable, 'test-key', process.cwd())
+    try {
+      await client.respond([{ role: 'user', content: '你好' }], new AbortController().signal)
+      const usage = await client.getContextUsage(sessionId)
+      expect(usage.autoCompactThresholdPercent).toBe(80)
+      expect(usage.autoCompactThresholdTokens).toBe(800_000)
+    } finally { await client.dispose() }
+  })
+
+  it('applies a changed threshold to the next query and the usage report', async () => {
+    queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* (message) {
+      yield { type: 'result', subtype: 'success', is_error: false, result: '完成', session_id: sessionId,
+        user_message_uuids: [message.uuid], queued_turn_count: 0 }
+    }, () => ({ totalTokens: 100_000, maxTokens: 1_000_000, autoCompactThreshold: 970_000,
+      isAutoCompactEnabled: true, model: 'deepseek-flash[1m]' })))
+    const client = new ClaudeAgentClient(executable, 'test-key', process.cwd())
+    try {
+      client.setAutoCompactPercent(60)
+      await client.respond([{ role: 'user', content: '你好' }], new AbortController().signal)
+      expect((queryMock.mock.calls[0][0] as Request).options.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe('60')
+      expect((await client.getContextUsage(sessionId)).autoCompactThresholdPercent).toBe(60)
+    } finally { await client.dispose() }
+  })
+
   it('emits structured tool activity with the configured MCP server available', async () => {
     queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* (message) {
       yield { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'tool-1', name: 'mcp__windows-mcp__click', input: { target: 'safe' } }] } }
@@ -442,9 +477,9 @@ describe('Claude Agent SDK persistent streaming session', () => {
     } finally { await client.dispose() }
   })
 
-  it('precompacts before the next message when its conservative budget crosses 70%', async () => {
+  it('precompacts before the next message when its conservative budget crosses 80%', async () => {
     const sent: string[] = []
-    let used = 690_000
+    let used = 790_000
     queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* (message) {
       const prompt = String(message.message.content)
       sent.push(prompt)
@@ -462,7 +497,7 @@ describe('Claude Agent SDK persistent streaming session', () => {
       await client.respond([{ role: 'user', content: '第二次' }], new AbortController().signal,
         undefined, sessionId)
       expect(sent).toEqual(['第一次', '/compact', '第二次'])
-      expect((queryMock.mock.calls[0][0] as Request).options.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe('70')
+      expect((queryMock.mock.calls[0][0] as Request).options.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe('80')
     } finally { await client.dispose() }
   })
 
@@ -564,17 +599,42 @@ describe('Claude Agent SDK persistent streaming session', () => {
       })
       generator.getContextUsage.mockImplementation(async () => {
         if (sent.includes('/compact')) throw new Error('context control unavailable')
-        return { totalTokens: 690_000, maxTokens: 1_000_000, autoCompactThreshold: 700_000,
+        return { totalTokens: 790_000, maxTokens: 1_000_000, autoCompactThreshold: 800_000,
           isAutoCompactEnabled: true, model: 'deepseek-flash[1m]' }
       })
       return generator
     })
     const client = new ClaudeAgentClient(executable, 'test-key', process.cwd())
     try {
+      const states: CompactionState[] = []
+      client.setCompactingListener((state) => states.push(state))
       await client.respond([{ role: 'user', content: '第一条' }], new AbortController().signal)
       await expect(client.respond([{ role: 'user', content: '第二条' }], new AbortController().signal,
         undefined, sessionId)).rejects.toThrow('压缩后无法核验')
       expect(sent).toEqual(['第一条', '/compact'])
+      // 发送前的主动压缩也要露面：先是 manual 的 active，失败后也必须回到 false。
+      expect(states.some((state) => state.active && !state.auto)).toBe(true)
+      expect(states.at(-1)).toEqual({ active: false, auto: false })
+    } finally { await client.dispose() }
+  })
+})
+
+describe('compaction status', () => {
+  it('marks the CLI threshold compaction as auto and clears it on PostCompact', async () => {
+    queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* () {}))
+    const client = new ClaudeAgentClient(executable, 'test-key', process.cwd())
+    try {
+      await client.getContextUsage(sessionId)
+      const request = queryMock.mock.calls[0][0] as Request
+      const states: CompactionState[] = []
+      client.setCompactingListener((state) => states.push(state))
+      await request.options.hooks.PreCompact![0].hooks[0]({ hook_event_name: 'PreCompact', trigger: 'auto' })
+      expect(states.at(-1)).toEqual({ active: true, auto: true })
+      await request.options.hooks.PostCompact[0].hooks[0]()
+      expect(states.at(-1)).toEqual({ active: false, auto: false })
+      // A manual /compact uses the same channel but is not labelled auto.
+      await request.options.hooks.PreCompact![0].hooks[0]({ hook_event_name: 'PreCompact', trigger: 'manual' })
+      expect(states.at(-1)).toEqual({ active: true, auto: false })
     } finally { await client.dispose() }
   })
 })
@@ -656,6 +716,76 @@ describe('ExitPlanMode plan approval parking', () => {
       await vi.waitFor(() => expect(parked).toHaveLength(1))
       await client.dispose()
       await expect(verdict).resolves.toEqual({ behavior: 'deny', message: 'User cancelled the plan review.', interrupt: true })
+    } finally { await client.dispose() }
+  })
+})
+
+describe('web search switch', () => {
+  it('removes both search tool sets and tells the model the web is off', async () => {
+    queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* () {}))
+    const client = new ClaudeAgentClient(executable, 'test-key', process.cwd())
+    try {
+      client.setWebSearchEnabled(false)
+      await client.getContextUsage(sessionId)
+      const request = queryMock.mock.calls[0][0] as Request
+      expect(request.options.mcpServers.deepseek).toBeUndefined()
+      expect(request.options.disallowedTools).toEqual(['WebSearch', 'WebFetch', 'mcp__deepseek__search', 'mcp__deepseek__fetch'])
+      expect(request.options.systemPrompt?.append).toContain('已禁用联网搜索')
+      await expect(request.options.canUseTool('WebSearch', { query: 'x' }, { signal: new AbortController().signal }))
+        .resolves.toMatchObject({ behavior: 'deny' })
+    } finally { await client.dispose() }
+  })
+})
+
+describe('tool approval parking', () => {
+  /** Starts a query in `mode` without running a turn, then hands back the
+   *  canUseTool the SDK would call. */
+  async function openClient(mode: ApprovalMode) {
+    queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* () {}))
+    const client = new ClaudeAgentClient(executable, 'test-key', process.cwd())
+    await client.setApprovalMode(mode)
+    await client.getContextUsage(sessionId)
+    const request = queryMock.mock.calls[0][0] as Request
+    return { client, canUseTool: request.options.canUseTool, request }
+  }
+
+  it('parks a tool call in default mode until the panel allows it', async () => {
+    const { client, canUseTool, request } = await openClient('default')
+    try {
+      expect(request.options.permissionMode).toBe('default')
+      const parked: (ToolPermissionRequest | null)[] = []
+      client.setPermissionListener((item) => parked.push(item))
+      const verdict = canUseTool('Bash', { command: 'npm test' }, { signal: new AbortController().signal })
+      await vi.waitFor(() => expect(parked).toHaveLength(1))
+      expect(parked[0]).toMatchObject({ tool: 'Bash' })
+      expect(parked[0]!.summary).toContain('npm test')
+      expect(client.answerPermission(parked[0]!.id, true)).toBe(true)
+      await expect(verdict).resolves.toEqual({ behavior: 'allow' })
+      expect(parked[1]).toBeNull()
+    } finally { await client.dispose() }
+  })
+
+  it('denies the call when the panel rejects it', async () => {
+    const { client, canUseTool } = await openClient('acceptEdits')
+    try {
+      const parked: (ToolPermissionRequest | null)[] = []
+      client.setPermissionListener((item) => parked.push(item))
+      const verdict = canUseTool('Bash', { command: 'rm -rf build' }, { signal: new AbortController().signal })
+      await vi.waitFor(() => expect(parked).toHaveLength(1))
+      expect(client.answerPermission(parked[0]!.id, false)).toBe(true)
+      await expect(verdict).resolves.toEqual({ behavior: 'deny', message: 'The user denied this tool call.' })
+    } finally { await client.dispose() }
+  })
+
+  it('still runs tools straight through in bypass mode', async () => {
+    const { client, canUseTool, request } = await openClient('bypassPermissions')
+    try {
+      expect(request.options.permissionMode).toBe('bypassPermissions')
+      const parked: (ToolPermissionRequest | null)[] = []
+      client.setPermissionListener((item) => parked.push(item))
+      await expect(canUseTool('Bash', { command: 'npm test' }, { signal: new AbortController().signal }))
+        .resolves.toEqual({ behavior: 'allow' })
+      expect(parked).toEqual([])
     } finally { await client.dispose() }
   })
 })

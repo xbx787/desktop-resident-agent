@@ -4,6 +4,7 @@
  *  claude-agent.ts.) */
 import { existsSync } from 'node:fs'
 import path from 'node:path'
+import { AUTO_COMPACT_DEFAULT_PERCENT, AUTO_COMPACT_MAX_PERCENT, AUTO_COMPACT_MIN_PERCENT } from '../shared/contracts'
 
 export const CLAUDE_BASE_URL = 'https://api.deepseek.com/anthropic'
 export const DEFAULT_CLAUDE_MODEL = 'deepseek-flash[1m]'
@@ -88,8 +89,18 @@ export interface ClaudeEnvironmentOptions {
   /** Small/fast model for the Haiku slot and subagents. */
   smallModel?: string
   configDir?: string
+  /** Auto-compaction threshold as a percentage of the context window. */
+  autoCompactPercent?: number
+  /** The directory this child works in; exposed to it as DESKTOP_PET_WORKSPACE. */
+  workspace?: string
   /** Extra KEY=VALUE lines from the profile's advanced field, applied last. */
   extraEnv?: string
+}
+
+/** Clamps any caller value into the supported 50–90 percent band. */
+export function normalizeAutoCompactPercent(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return AUTO_COMPACT_DEFAULT_PERCENT
+  return Math.min(AUTO_COMPACT_MAX_PERCENT, Math.max(AUTO_COMPACT_MIN_PERCENT, Math.round(value)))
 }
 
 /** Builds the CLI child environment for one provider configuration. */
@@ -108,7 +119,11 @@ export function claudeEnvironment(env: NodeJS.ProcessEnv, options: ClaudeEnviron
   childEnv.ANTHROPIC_DEFAULT_HAIKU_MODEL = smallModel
   childEnv.CLAUDE_CODE_SUBAGENT_MODEL = smallModel
   childEnv.CLAUDE_CODE_SUBPROCESS_ENV_SCRUB = '1'
-  childEnv.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = '70'
+  childEnv.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = String(normalizeAutoCompactPercent(options.autoCompactPercent))
+  // The app owns this value; it is injected per child, never written to the
+  // user's Windows environment. A profile's advanced field can still override
+  // it (that field is applied last).
+  if (options.workspace) childEnv.DESKTOP_PET_WORKSPACE = options.workspace
   // Engine builds since 2.1.233 hide the todo/task tools on model names they do
   // not recognise — an Anthropic-compatible provider's model is one of those.
   // The flag keeps TaskCreate/TaskUpdate/TaskList available there.

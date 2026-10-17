@@ -533,6 +533,50 @@ describe('plan mode and /goal truth', () => {
     expect(runtime.getSnapshot().timeline.at(-1)?.text).toContain('SDK 未确认')
   })
 
+  it('switches the approval mode through the client and reports it in the snapshot', async () => {
+    const switched = vi.fn(async () => true)
+    const model: ModelClient = { respond: async () => ({ text: 'ok' }), setApprovalMode: switched }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    await runtime.setApprovalMode('default')
+    expect(switched).toHaveBeenCalledWith('default')
+    expect(runtime.getSnapshot().approvalMode).toBe('default')
+    expect(runtime.getSnapshot().planMode).toBe(false)
+    await runtime.setApprovalMode('plan')
+    expect(runtime.getSnapshot().approvalMode).toBe('plan')
+    expect(runtime.getSnapshot().planMode).toBe(true)
+    expect(runtime.exportConversationState().approvalMode).toBe('plan')
+  })
+
+  it('parks a tool permission on the snapshot and forwards the verdict', async () => {
+    let report!: (request: { id: string; tool: string; summary: string; input: string } | null) => void
+    const answered: Array<[string, boolean]> = []
+    const model: ModelClient = {
+      respond: async () => ({ text: 'ok' }),
+      setApprovalMode: async () => true,
+      setPermissionListener: (listener) => { report = listener },
+      answerPermission: (id, allow) => { answered.push([id, allow]); return true }
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    report({ id: 'p1', tool: 'Bash', summary: '执行命令：npm test', input: '{"command":"npm test"}' })
+    expect(runtime.getSnapshot().permission).toMatchObject({ id: 'p1', tool: 'Bash' })
+    await runtime.answerPermission('p1', true)
+    expect(answered).toEqual([['p1', true]])
+  })
+
+  it('restores a saved approval mode, including records written before it existed', async () => {
+    const record = await new ConversationStore(testRoot).createConversation('审批', 'claude_code')
+    const current: ModelClient = { respond: async () => ({ text: 'ok' }), setApprovalMode: async () => true }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, current)
+    runtime.restoreConversation({ ...record, approvalMode: 'acceptEdits' })
+    expect(runtime.getSnapshot().approvalMode).toBe('acceptEdits')
+    // Legacy record: only the plan flag exists.
+    const legacy: ModelClient = { respond: async () => ({ text: 'ok' }), setPlanMode: () => true }
+    const restored = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, legacy)
+    restored.restoreConversation({ ...record, planMode: true })
+    expect(restored.getSnapshot().approvalMode).toBe('plan')
+    expect(restored.getSnapshot().planMode).toBe(true)
+  })
+
   it('does not invent an iteration after a reply, then accepts SDK rounds and null clear', async () => {
     let report!: Parameters<NonNullable<ModelClient['setGoalListener']>>[0]
     const model: ModelClient = {

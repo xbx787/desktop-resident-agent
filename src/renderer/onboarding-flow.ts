@@ -2,7 +2,7 @@
  *  DOM: one step at a time, forward/back navigation, and the gate that keeps
  *  the user from leaving the key step empty. */
 
-export const ONBOARDING_STEPS = ['welcome', 'register', 'key', 'test'] as const
+export const ONBOARDING_STEPS = ['welcome', 'register', 'key', 'workspace', 'test'] as const
 export type OnboardingStep = typeof ONBOARDING_STEPS[number]
 
 export function stepIndex(step: OnboardingStep): number {
@@ -20,7 +20,8 @@ export function previousStep(step: OnboardingStep): OnboardingStep | null {
 }
 
 /** Which step's primary button may move forward. */
-export function canAdvance(step: OnboardingStep, apiKey: string): boolean {
+export function canAdvance(step: OnboardingStep, apiKey: string, workspace = ''): boolean {
   if (step === 'key') return apiKey.trim().length > 0
+  if (step === 'workspace') return workspace.trim().length > 0
   return true
 }

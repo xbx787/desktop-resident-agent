@@ -13,10 +13,6 @@ export interface WorkFacts {
   elapsedSeconds: number | null
 }
 
-function clockText(seconds: number): string {
-  return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`
-}
-
 function toolSummaryOf(names: string[]): string {
   const counts = new Map<string, number>()
   for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1)
@@ -41,12 +37,11 @@ export function workFacts(items: TimelineEntry[], nowMs: number, running: boolea
   return { steps: items.length, toolCount: tools.length, toolSummary: toolSummaryOf(tools), thinkingSeconds, elapsedSeconds }
 }
 
-/** The header's one phrase: how long the stretch took, as a bare clock. The
- *  turn's own footer says "用时 XX" — the stretch's number deliberately reads
- *  differently, and the full story (thinking, tools, elapsed) stays in the
- *  hover title. */
+/** The header's extra fact: how many operations ran. No clock — a per-second
+ *  number forced the live row to repaint every second and kept restarting its
+ *  sheen animation. The hover title carries the rest. */
 export function workFactsParts(facts: WorkFacts): string[] {
-  return facts.elapsedSeconds === null ? [] : [clockText(facts.elapsedSeconds)]
+  return facts.toolCount > 0 ? [`${facts.toolCount} 项操作`] : []
 }
 
 /** Everything the header knows, tool breakdown included — the hover title and
@@ -55,7 +50,6 @@ export function workFactsText(facts: WorkFacts): string {
   const parts: string[] = []
   if (facts.thinkingSeconds > 0) parts.push(`思考 ${thinkingDurationText(facts.thinkingSeconds)}`)
   if (facts.toolCount > 0) parts.push(`${facts.toolCount} 项操作`, facts.toolSummary)
-  if (facts.elapsedSeconds !== null) parts.push(`用时 ${clockText(facts.elapsedSeconds)}`)
   return parts.join('，')
 }
 
@@ -84,7 +78,6 @@ export const WorkCluster = memo(function WorkCluster({ items, running, renderEnt
   // A fold made by hand sticks, live or not: the running row used to refuse
   // the click. Only the automatic fold at the end still closes it.
   const foldedByHandRef = useRef(false)
-  const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     if (!running) { setOpen(false); return }
     // A stretch that is still running opens on its own: a transient
@@ -92,13 +85,14 @@ export const WorkCluster = memo(function WorkCluster({ items, running, renderEnt
     // and its rows are the live view of the work anyway. It folds once it
     // ends — but a fold the owner made by hand is not reopened.
     if (!foldedByHandRef.current) setOpen(true)
-    setNow(Date.now())
-    const timer = window.setInterval(() => setNow(Date.now()), 1000)
-    return () => window.clearInterval(timer)
   }, [running])
-  const facts = workFacts(items, now, running)
+  const facts = workFacts(items, Date.now(), running)
   const parts = workFactsParts(facts)
   const fullText = workFactsText(facts)
+  const fold = () => {
+    foldedByHandRef.current = true
+    setOpen(false)
+  }
   return <details className={`panel-cluster${running ? ' is-running' : ''}`} open={open}
     onToggle={(event) => {
       foldedByHandRef.current = !event.currentTarget.open
@@ -111,6 +105,12 @@ export const WorkCluster = memo(function WorkCluster({ items, running, renderEnt
       <span className={`panel-cluster-state${running ? ' is-running' : ''}`} aria-hidden="true">{running ? '…' : '✓'}</span>
     </summary>
     <div className="panel-cluster-body">{items.map((entry, index) => <Fragment key={entry.id}>{renderEntry(entry, running && index === items.length - 1)}</Fragment>)}</div>
+    {/* 展开时最底下的一行：箭头落在竖线的中轴上，点它把整段收起。
+        标题本身也能收，但长链滚到底之后，这一行就在手边。 */}
+    <button type="button" className="panel-cluster-fold" onClick={fold}>
+      <span className="panel-cluster-fold-arrow" aria-hidden="true"><svg viewBox="0 0 20 20"><path d="m5 12 5-5 5 5" /></svg></span>
+      <span>收起</span>
+    </button>
   </details>
 }, (prev, next) => prev.running === next.running && prev.renderEntry === next.renderEntry &&
   prev.items.length === next.items.length && prev.items.every((entry, index) => sameTimelineEntry(entry, next.items[index])))

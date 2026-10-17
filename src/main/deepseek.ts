@@ -1,5 +1,5 @@
 import { buildXiaojingPersona } from './persona'
-import type { AgentGoal, AskAnswers, AskQuestionRequest, EffortLevel, PlanApprovalRequest, TaskUsage } from '../shared/contracts'
+import type { AgentGoal, ApprovalMode, AskAnswers, AskQuestionRequest, CompactionState, EffortLevel, PlanApprovalRequest, TaskUsage, ToolPermissionRequest } from '../shared/contracts'
 
 export interface DialogueLine {
   role: 'user' | 'assistant'
@@ -48,6 +48,20 @@ export interface ModelClient {
   /** false means a cold query has not yet sent an SDK confirmation. */
   setPlanMode?(on: boolean): Promise<boolean | void> | boolean | void
   setPlanModeListener?(listener: (on: boolean) => void): void
+  /** Clients that can switch permission modes implement this. */
+  setApprovalMode?(mode: ApprovalMode): Promise<boolean | void> | boolean | void
+  /** Clients that can remove web tools implement this. */
+  setWebSearchEnabled?(on: boolean): void
+  /** Clients that can change the auto-compaction threshold implement this. */
+  setAutoCompactPercent?(percent: number): void
+  /** Clients that switch the persona preset implement this. */
+  setPersonaId?(id: string): void
+  setApprovalModeListener?(listener: (mode: ApprovalMode) => void): void
+  /** Clients that park tool calls for approval implement this. */
+  setPermissionListener?(listener: (request: ToolPermissionRequest | null) => void): void
+  answerPermission?(id: string, allow: boolean): boolean
+  /** Compaction start/end; `auto` marks the CLI's own threshold trigger. */
+  setCompactingListener?(listener: (state: CompactionState) => void): void
   /** Clients that can abort what the current turn is doing implement this
    *  (the SDK client maps it to the CLI's own Esc). */
   interrupt?(): Promise<void>

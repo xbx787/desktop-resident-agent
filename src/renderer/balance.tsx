@@ -41,7 +41,7 @@ export function BalanceCard({ visible, snapshot, loading, error, onRefresh, onCl
         <span className="balance-heading">
           <strong>DeepSeek</strong><small>余额</small>
           {/* 更新时间贴着「余额」，底行只在有提示时才占位——正常状态省下一行。 */}
-          {checked && <small className="balance-updated">{checked} 更新</small>}
+          {checked && <small className="balance-updated" title="上次更新时间">{checked}</small>}
         </span>
         <div className="balance-actions">
           <button type="button" aria-label="刷新余额" title="刷新余额" disabled={loading} onClick={onRefresh}>↻</button>

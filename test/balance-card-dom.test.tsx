@@ -42,7 +42,7 @@ describe('the balance card layout', () => {
     await mount(snapshot)
     const heading = host.querySelector('.balance-heading')!
     expect(heading.textContent).toContain('余额')
-    expect(heading.querySelector('.balance-updated')?.textContent).toBe('18:03 更新')
+    expect(heading.querySelector('.balance-updated')?.textContent).toBe('18:03')
     // 正常状态：底部那行整个不在，卡片不多占一行。
     expect(host.querySelector('.balance-foot')).toBeNull()
     expect(host.querySelector('.balance-peek')!.className).not.toContain('has-notice')
@@ -53,6 +53,6 @@ describe('the balance card layout', () => {
     expect(host.querySelector('.balance-foot')?.textContent).toContain('账户当前不可调用 API')
     expect(host.querySelector('.balance-peek')!.className).toContain('has-notice')
     // 时间仍留在标题行——它不该跟着提示行一起消失。
-    expect(host.querySelector('.balance-updated')?.textContent).toBe('18:03 更新')
+    expect(host.querySelector('.balance-updated')?.textContent).toBe('18:03')
   })
 })

@@ -62,4 +62,12 @@ describe('folding a work cluster by hand', () => {
     await mount(false)
     expect(details().open).toBe(false)
   })
+
+  it('folds from the explicit 收起 row at the bottom', async () => {
+    await mount(true)
+    const fold = host.querySelector<HTMLButtonElement>('.panel-cluster-fold')
+    expect(fold?.textContent).toContain('收起')
+    await act(async () => { fold!.click() })
+    expect(details().open).toBe(false)
+  })
 })

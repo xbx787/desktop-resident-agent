@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { ConversationSettings, GrowthProposal, ModelProfile } from '../shared/contracts'
+import { PERSONA_PRESETS } from '../shared/personas'
+import { personaAvatarUrl } from './avatar-art'
 import { PROVIDER_CATALOG } from '../shared/provider-catalog'
 import type { GrowthOverview, SettingsAPI } from '../preload/settings'
 import type { MemoryItem } from '../main/memory-service'
@@ -36,14 +38,20 @@ const SETTINGS_TABS = [
   { id: 'appearance', label: '外观' },
   { id: 'models', label: '模型' },
   { id: 'memory', label: '记忆' },
-  { id: 'growth', label: '成长' },
   { id: 'identity', label: '称呼' },
-  { id: 'avatar', label: '头像' }
+  { id: 'avatar', label: '人设' }
 ] as const
 type SettingsTab = typeof SETTINGS_TABS[number]['id']
 
 /** 界面尺寸档：小是原来的样子，中、大各上调一档。 */
 const UI_SIZE_OPTIONS: ReadonlyArray<{ id: ConversationSettings['uiSize']; label: string }> = [
+  { id: 'small', label: '小' },
+  { id: 'medium', label: '中' },
+  { id: 'large', label: '大' }
+]
+
+/** 人物大小档：小 = 现在，中 = 之前的尺寸，大 = 再上一档。 */
+const AVATAR_SIZE_OPTIONS: ReadonlyArray<{ id: ConversationSettings['avatarSize']; label: string }> = [
   { id: 'small', label: '小' },
   { id: 'medium', label: '中' },
   { id: 'large', label: '大' }
@@ -88,6 +96,9 @@ export function SettingsPage() {
   const [growthObjective, setGrowthObjective] = useState('')
   const [growthEvidence, setGrowthEvidence] = useState('')
   const [tab, setTab] = useState<SettingsTab>('conversation')
+  const [workspace, setWorkspace] = useState<{ path: string; saved: boolean } | null>(null)
+  const [workspacePending, setWorkspacePending] = useState<string | null>(null)
+  const [workspaceBusy, setWorkspaceBusy] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -113,6 +124,9 @@ export function SettingsPage() {
     void Promise.all([window.whaleSettings.readAvatar('user'), window.whaleSettings.readAvatar('assistant')])
       .then(([user, assistant]) => { if (active) setAvatars({ user, assistant }) })
       .catch(() => undefined)
+    void window.whaleSettings.workspace()
+      .then((current) => { if (active) setWorkspace(current) })
+      .catch(() => undefined)
     return () => { active = false }
   }, [])
 
@@ -129,7 +143,9 @@ export function SettingsPage() {
   }, [tab])
 
   useEffect(() => {
-    if (tab !== 'growth') return
+    // 成长实验不在设置里暴露：面板入口已移除，这段轮询永远不会启动。
+    // 数据仍由主进程写进本地 data/growth/（见 GrowthStore 的 proposals.md）。
+    if ((tab as string) !== 'growth') return
     let active = true
     const refresh = (): void => {
       void window.whaleSettings.growthStatus().then((current) => {
@@ -147,6 +163,33 @@ export function SettingsPage() {
   useEffect(() => {
     setGrowthNotesDraft(selectedGrowth?.releaseNotes ?? '')
   }, [selectedGrowth?.id, selectedGrowth?.releaseNotes])
+
+  async function chooseWorkspace(): Promise<void> {
+    if (workspaceBusy) return
+    setNotice(null)
+    try {
+      const picked = await window.whaleSettings.pickWorkspace()
+      if (picked && picked !== workspace?.path) setWorkspacePending(picked)
+    } catch (cause) {
+      setNotice({ text: errorMessage(cause), error: true })
+    }
+  }
+
+  async function migrateWorkspace(): Promise<void> {
+    if (!workspacePending || workspaceBusy) return
+    setWorkspaceBusy(true)
+    setNotice(null)
+    try {
+      const next = await window.whaleSettings.migrateWorkspace(workspacePending)
+      setWorkspace({ path: next.path, saved: true })
+      setWorkspacePending(null)
+      setNotice({ text: `工作目录已迁移到 ${next.path}`, error: false })
+    } catch (cause) {
+      setNotice({ text: errorMessage(cause), error: true })
+    } finally {
+      setWorkspaceBusy(false)
+    }
+  }
 
   async function update(patch: Partial<ConversationSettings>): Promise<void> {
     if (busy) return
@@ -414,6 +457,24 @@ export function SettingsPage() {
     </nav>
     <main>
       {tab === 'conversation' && <section className="settings-section" role="tabpanel" id="settings-panel-conversation" aria-labelledby="settings-tab-conversation">
+        <div className="settings-row settings-workspace-row">
+          <div className="settings-copy">
+            <label>工作目录</label>
+            <p>小鲸读写和搜索文件都从这个目录开始。迁移不会移动旧目录里的文件，已有对话会在下一条消息时重新连接。</p>
+            <code className="settings-workspace-path">{workspace?.path ?? '读取中…'}</code>
+          </div>
+          <button type="button" disabled={!workspace || workspaceBusy} onClick={() => { void chooseWorkspace(); }}>
+            {workspaceBusy ? '迁移中…' : '迁移工作目录…'}
+          </button>
+        </div>
+        {workspacePending && <div className="settings-workspace-confirm" role="alertdialog" aria-label="确认迁移工作目录">
+          <p>将工作目录迁移到 <code>{workspacePending}</code>？</p>
+          <p>之后的消息在新目录中工作；正在运行的任务不能迁移；旧目录里的文件保持原样。</p>
+          <div className="settings-workspace-confirm-actions">
+            <button type="button" disabled={workspaceBusy} onClick={() => setWorkspacePending(null)}>取消</button>
+            <button type="button" disabled={workspaceBusy} onClick={() => { void migrateWorkspace(); }}>确认迁移</button>
+          </div>
+        </div>}
         <div className="settings-row">
           <div className="settings-copy"><label htmlFor="visible-tabs">顶部快捷标签</label><p>放大聊天窗口时显示最近的会话。会话总数不受限制。</p></div>
           <form onSubmit={(event) => { event.preventDefault(); saveTabs() }}>
@@ -457,6 +518,17 @@ export function SettingsPage() {
               return <button key={option.id} type="button" role="radio" aria-checked={active}
                 className={`settings-size-option${active ? ' is-active' : ''}`} disabled={!settings || busy}
                 onClick={() => { void update({ uiSize: option.id }) }}>{option.label}</button>
+            })}
+          </div>
+        </div>
+        <div className="settings-row">
+          <div className="settings-copy"><label>人物大小</label><p>小是现在的尺寸；中、大逐级放大桌面人物，命中区会跟着变。</p></div>
+          <div className="settings-size-picker" role="radiogroup" aria-label="人物大小">
+            {AVATAR_SIZE_OPTIONS.map((option) => {
+              const active = (settings?.avatarSize ?? 'small') === option.id
+              return <button key={option.id} type="button" role="radio" aria-checked={active}
+                className={`settings-size-option${active ? ' is-active' : ''}`} disabled={!settings || busy}
+                onClick={() => { void update({ avatarSize: option.id }) }}>{option.label}</button>
             })}
           </div>
         </div>
@@ -541,7 +613,7 @@ export function SettingsPage() {
           </>}
         </article>)}
       </section>}
-      {tab === 'growth' && <section className="settings-section settings-growth-section" role="tabpanel" id="settings-panel-growth" aria-labelledby="settings-tab-growth">
+      {(tab as string) === 'growth' && <section className="settings-section settings-growth-section" role="tabpanel" id="settings-panel-growth" aria-labelledby="settings-tab-growth">
         <div className="settings-growth-intro">
           <strong>先提出，再实验，最后由你采纳。</strong>
           <p>小鲸会根据重复失败留下改进建议。实验改动和检查结果在此审阅；GitHub 发布是独立操作。</p>
@@ -623,6 +695,21 @@ export function SettingsPage() {
         </div>
       </section>}
       {tab === 'avatar' && <section className="settings-section" role="tabpanel" id="settings-panel-avatar" aria-labelledby="settings-tab-avatar">
+        <div className="settings-copy"><label>人设预设</label><p>切换时同时更新人设文字、对话头像和桌面形象。</p></div>
+        <div className="settings-personas" role="radiogroup" aria-label="人设预设">
+          {PERSONA_PRESETS.map((preset) => {
+            const active = (settings?.personaId ?? 'xiaojing') === preset.id
+            const avatar = personaAvatarUrl(preset.id) ?? (preset.id === 'xiaojing' ? avatars.assistant : null)
+            return <button key={preset.id} type="button" role="radio" aria-checked={active}
+              className={`settings-persona${active ? ' is-active' : ''}`} disabled={!settings || busy}
+              onClick={() => { setAvatars((current) => ({ ...current, assistant: null })); void update({ personaId: preset.id, assistantAvatar: null }); }}>
+              <span className="settings-persona-avatar">{avatar ? <img src={avatar} alt="" /> : <span>鲸</span>}</span>
+              <span className="settings-persona-name">{preset.name}</span>
+              <span className="settings-persona-trait">{preset.trait}</span>
+              <small>{preset.tagline}</small>
+            </button>
+          })}
+        </div>
         <div className="settings-row">
           <div className="settings-copy"><label htmlFor="user-avatar">你的头像</label><p>消息左侧的小头像。PNG 或 JPEG，小于 2 MB。</p></div>
           <label className="settings-avatar">
@@ -632,7 +719,7 @@ export function SettingsPage() {
           </label>
         </div>
         <div className="settings-row">
-          <div className="settings-copy"><label htmlFor="assistant-avatar">小鲸头像</label><p>消息左侧的小头像。PNG 或 JPEG，小于 2 MB。</p></div>
+          <div className="settings-copy"><label htmlFor="assistant-avatar">对话头像</label><p>上传后覆盖当前预设的头像。PNG 或 JPEG，小于 2 MB。</p></div>
           <label className="settings-avatar">
             {avatars.assistant ? <img src={avatars.assistant} alt="" /> : <span>鲸</span>}
             <input id="assistant-avatar" type="file" accept="image/png,image/jpeg" hidden disabled={busy}

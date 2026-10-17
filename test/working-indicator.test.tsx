@@ -19,6 +19,14 @@ describe('workingPhrase', () => {
     expect(workingPhrase({ sending: false, thinking: false, status: 'awaiting_approval' })).toBeNull()
     expect(workingPhrase({ sending: false, thinking: false, status: 'done' })).toBeNull()
   })
+
+  it('names compaction, and says when the CLI is doing it by itself', () => {
+    expect(workingPhrase({ sending: false, thinking: false, status: 'idle', compacting: true, compactingAuto: true })).toBe('正在自动压缩上下文')
+    expect(workingPhrase({ sending: false, thinking: false, status: 'idle', compacting: true })).toBe('正在压缩上下文')
+    // Compaction outranks a tool that was running when the CLI paused to compact.
+    expect(workingPhrase({ sending: false, thinking: true, status: 'executing', tool: 'Bash', compacting: true, compactingAuto: true }))
+      .toBe('正在自动压缩上下文')
+  })
 })
 
 describe('WorkingIndicator', () => {

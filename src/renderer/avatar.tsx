@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { AvatarBox, BalanceSnapshot, PetAPI } from '../shared/contracts';
 import { WhalePortrait } from './WhalePortrait';
+import { avatarArtFor } from './avatar-art';
 import { BalanceCard } from './balance';
 import { balanceErrorMessage } from './balance-error';
 import { PanelBubble } from './panel';
@@ -32,6 +33,8 @@ function samePosition(a: { x: number; y: number } | null, b: { x: number; y: num
 
 function Avatar() {
   const { snapshot, error, run } = usePetState();
+  const personaId = snapshot?.conversationLibrary?.settings.personaId ?? 'xiaojing';
+  const personaArt = avatarArtFor(personaId);
   const [panelOpen, setPanelOpen] = useState(false);
   const pointer = useRef<PointerSession | null>(null);
   const lastPointerPosition = useRef({ x: 0, y: 0 });
@@ -103,12 +106,13 @@ function Avatar() {
 
   useEffect(() => startIdleFidgets(portraitRef.current), []);
   useEffect(() => {
+    if (!personaArt.poses) return;
     preloadPoses();
     return startPoseClock((pose) => {
       if (faceActive.current) return;
       playPoseSwap(portraitRef.current, () => setPoseId(pose ? pose.id : null));
     });
-  }, []);
+  }, [personaArt.poses]);
 
   // State faces: focus while a reply is being produced, a smile for a beat
   // once it lands. The smile window shields itself from the states that
@@ -315,12 +319,6 @@ function Avatar() {
 
   return (
     <main className={`avatar-stage${panelOpen ? ' is-panel-open' : ''}${snapshot?.avatarState === 'speaking' ? ' is-speaking' : snapshot?.avatarState === 'listening' ? ' is-listening' : ''}`} onContextMenu={(event) => { void openContextMenu(event); }}>
-      <PanelBubble
-        visible={panelOpen}
-        snapshot={snapshot}
-        error={error}
-        run={run}
-      />
       <button
         className="avatar-hit-target"
         type="button"
@@ -350,7 +348,9 @@ function Avatar() {
         }}
       >
         <WhalePortrait containerRef={portraitRef} ahogeRef={ahogeRef}
-          artworkUrl={faceId ? poseSrc(faceId) : poseId ? poseSrc(poseId) : null}
+          artworkUrl={personaArt.poses ? (faceId ? poseSrc(faceId) : poseId ? poseSrc(poseId) : null) : null}
+          personaId={personaId}
+          size={snapshot?.conversationLibrary?.settings.avatarSize ?? 'small'}
           onBoxChange={(box: AvatarBox) => { void petBridge().setAvatarBox(box).catch(() => undefined); }} />
         {dot && <span className={`avatar-task-dot is-${dot.tone}${dot.pulse ? ' is-pulsing' : ''}`} aria-hidden="true" />}
       </button>
@@ -400,6 +400,16 @@ function BalanceOverlay() {
   />;
 }
 
-const balanceOnly = new URLSearchParams(window.location.search).get('balance') === '1';
+/** 面板窗口：与头像分开的透明窗口，只渲染对话面板。窗口尺寸/位置由主进程
+ *  控制，这里只管把快照接上。 */
+function PanelWindow() {
+  const { snapshot, error, run } = usePetState();
+  return <PanelBubble visible snapshot={snapshot} error={error} run={run} />;
+}
+
+const query = new URLSearchParams(window.location.search);
+const balanceOnly = query.get('balance') === '1';
+const panelOnly = query.get('mode') === 'panel';
 if (balanceOnly) document.body.classList.add('balance-window');
-createRoot(document.getElementById('root')!).render(balanceOnly ? <BalanceOverlay /> : <Avatar />);
+if (panelOnly) document.body.classList.add('panel-window');
+createRoot(document.getElementById('root')!).render(panelOnly ? <PanelWindow /> : balanceOnly ? <BalanceOverlay /> : <Avatar />);

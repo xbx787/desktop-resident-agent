@@ -183,6 +183,26 @@ describe('persistent conversation library', () => {
     await expect(store.updateSettings({ uiSize: 'huge' as never })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
   })
 
+  it('saves and validates the avatar size', async () => {
+    const store = new ConversationStore(testRoot)
+    expect((await store.getState()).settings.avatarSize).toBe('small')
+    await store.updateSettings({ avatarSize: 'medium' })
+    expect((await new ConversationStore(testRoot).getState()).settings.avatarSize).toBe('medium')
+    await store.updateSettings({ avatarSize: 'large' })
+    expect((await new ConversationStore(testRoot).getState()).settings.avatarSize).toBe('large')
+    await expect(store.updateSettings({ avatarSize: 'huge' as never })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+  })
+
+  it('saves and validates the auto-compaction percentage', async () => {
+    const store = new ConversationStore(testRoot)
+    expect((await store.getState()).settings.autoCompactPercent).toBe(80)
+    await store.updateSettings({ autoCompactPercent: 65 })
+    expect((await new ConversationStore(testRoot).getState()).settings.autoCompactPercent).toBe(65)
+    await expect(store.updateSettings({ autoCompactPercent: 49 })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    await expect(store.updateSettings({ autoCompactPercent: 91 })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    await expect(store.updateSettings({ autoCompactPercent: 70.5 })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+  })
+
   it('migrates v1 libraries without losing records, queues or SDK sessions', async () => {
     const old = new ConversationStore(testRoot)
     const created = await Promise.all(Array.from({ length: 8 }, (_, index) => old.createConversation(`旧会话 ${index}`)))
@@ -209,7 +229,8 @@ describe('persistent conversation library', () => {
       modelProfiles: [], activeModelProfileId: null, enableAutoTitleGeneration: true,
       showMessageTimestamps: true, userName: '主人', assistantName: '小鲸',
       userAvatar: null, assistantAvatar: null, tabOrder: [],
-      goalMaxIterations: 30, goalMaxMinutes: 180, memoryEnabled: true, uiSize: 'small'
+      goalMaxIterations: 30, goalMaxMinutes: 180, memoryEnabled: true, uiSize: 'small', avatarSize: 'small',
+      webSearchEnabled: true, personaId: 'xiaojing', autoCompactPercent: 80
     })
     expect((await migrated.listConversations()).length).toBe(8)
     expect((await migrated.getConversation(created[0].id))?.pendingMessages[0].text).toBe('继续执行')

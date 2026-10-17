@@ -1,15 +1,18 @@
 import { useEffect, useRef, type Ref } from 'react';
-import type { AvatarBox } from '../shared/contracts';
-import { avatarAhogeUrl, avatarBodyUrl } from './avatar-art';
+import type { AvatarBox, AvatarSize } from '../shared/contracts';
+import { avatarArtFor } from './avatar-art';
 import { avatarDisplaySize } from './avatar-geometry';
 
-export function WhalePortrait({ containerRef, ahogeRef, artworkUrl, onBoxChange }: {
+export function WhalePortrait({ containerRef, ahogeRef, artworkUrl, size, personaId, onBoxChange }: {
   containerRef?: Ref<HTMLDivElement>;
   ahogeRef?: Ref<HTMLImageElement>;
   artworkUrl?: string | null;
+  size?: AvatarSize;
+  personaId?: string | null;
   onBoxChange?: (box: AvatarBox) => void;
 }) {
-  const src = artworkUrl ?? avatarBodyUrl;
+  const art = avatarArtFor(personaId);
+  const src = artworkUrl ?? art.body;
   const imageRef = useRef<HTMLImageElement | null>(null);
   const lastBox = useRef<AvatarBox | null>(null);
   const changeRef = useRef(onBoxChange);
@@ -20,9 +23,9 @@ export function WhalePortrait({ containerRef, ahogeRef, artworkUrl, onBoxChange 
   const sync = (): void => {
     const image = imageRef.current;
     if (!image || !image.naturalWidth || !image.naturalHeight) return;
-    const size = avatarDisplaySize(image.naturalWidth, image.naturalHeight);
-    document.documentElement.style.setProperty('--avatar-w', `${size.width.toFixed(2)}px`);
-    document.documentElement.style.setProperty('--avatar-h', `${size.height.toFixed(2)}px`);
+    const box = avatarDisplaySize(image.naturalWidth, image.naturalHeight, size);
+    document.documentElement.style.setProperty('--avatar-w', `${box.width.toFixed(2)}px`);
+    document.documentElement.style.setProperty('--avatar-h', `${box.height.toFixed(2)}px`);
     const hit = image.closest('.avatar-hit-target');
     if (!hit) return;
     const rect = hit.getBoundingClientRect();
@@ -43,10 +46,10 @@ export function WhalePortrait({ containerRef, ahogeRef, artworkUrl, onBoxChange 
     return () => window.removeEventListener('resize', schedule);
   }, []);
 
-  // 缓存命中时 onLoad 可能在挂载前就结束了；src 变化后再补量一次。
+  // 缓存命中时 onLoad 可能在挂载前就结束了；图片或大小档变化后再补量一次。
   useEffect(() => {
     if (imageRef.current?.complete) schedule();
-  }, [src]);
+  }, [src, size]);
 
   return (
     <div className="avatar-portrait" ref={containerRef}>
@@ -55,8 +58,8 @@ export function WhalePortrait({ containerRef, ahogeRef, artworkUrl, onBoxChange 
       )}
       {/* The swingable ahoge rides only over the base artwork; pose sprites
           bring their own ahoge and hide this layer. */}
-      {!artworkUrl && avatarAhogeUrl && (
-        <img className="avatar-ahoge" ref={ahogeRef} src={avatarAhogeUrl} alt="" draggable={false} />
+      {!artworkUrl && art.ahoge && (
+        <img className="avatar-ahoge" ref={ahogeRef} src={art.ahoge} alt="" draggable={false} />
       )}
     </div>
   );

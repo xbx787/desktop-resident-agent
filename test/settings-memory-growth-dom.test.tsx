@@ -14,7 +14,7 @@ const settings: ConversationSettings = {
   goalMaxMinutes: 180, memoryEnabled: true, effort: 'max', modelProfiles: [],
   activeModelProfileId: null, enableAutoTitleGeneration: true,
   showMessageTimestamps: true, userName: '主人', assistantName: '小鲸',
-  userAvatar: null, assistantAvatar: null, tabOrder: [], uiSize: 'small'
+  userAvatar: null, assistantAvatar: null, tabOrder: [], uiSize: 'small', avatarSize: 'small'
 }
 const memory: MemoryItem = {
   id: 'memory-1', text: '喜欢蓝色界面', sourceConversationId: 'conversation-123',
@@ -56,6 +56,9 @@ function bridge(overrides: Partial<SettingsAPI> = {}): SettingsAPI {
   return {
     get: async () => settings, update: async (patch) => ({ ...settings, ...patch }),
     version: async () => '0.0.47', close: async () => {}, setAvatar: async () => {},
+    workspace: async () => ({ path: 'D:\\project', saved: false }),
+    pickWorkspace: async () => null,
+    migrateWorkspace: async (next) => ({ path: next }),
     readAvatar: async () => null, saveModelProfile: async () => {},
     deleteModelProfile: async () => {}, testModelProfile: async () => ({ ok: true, message: '' }),
     memoryList: async () => [memory], memorySetEnabled: async (enabled) => enabled,
@@ -101,30 +104,10 @@ describe('SettingsPage memory and growth review', () => {
     expect(memorySetEnabled).toHaveBeenCalledWith(false)
   })
 
-  it('requires separate experiment, adoption and GitHub publish clicks', async () => {
-    let current: GrowthProposal = proposal
-    const growthExperiment = vi.fn(async () => {
-      current = { ...current, status: 'ready', diff: '+ fixed', releaseNotes: '修复重复失败',
-        checks: [{ name: 'check', ok: true, output: 'passed' }] }
-      return current
-    })
-    const growthAdopt = vi.fn(async () => { current = { ...current, status: 'adopted', version: '0.0.48' }; return current })
-    const growthPublish = vi.fn(async () => { current = { ...current, status: 'published' }; return current })
-    await mount(bridge({
-      growthStatus: async () => ({ available: true, proposals: [current] }),
-      growthExperiment, growthAdopt, growthPublish
-    }))
-    await act(async () => click('成长'))
-    expect(container!.textContent).toContain('同一工具连续失败两次')
-    expect(growthExperiment).not.toHaveBeenCalled()
-    await act(async () => click('同意实验'))
-    expect(growthExperiment).toHaveBeenCalledOnce()
-    expect(container!.textContent).toContain('查看源码差异')
-    expect(growthAdopt).not.toHaveBeenCalled()
-    await act(async () => click('采纳并安装本机版本'))
-    expect(growthAdopt).toHaveBeenCalledOnce()
-    expect(growthPublish).not.toHaveBeenCalled()
-    await act(async () => click('发布 GitHub'))
-    expect(growthPublish).toHaveBeenCalledOnce()
+  it('keeps the growth review out of the visible settings tabs', async () => {
+    // 成长实验只写在本机 data/growth/proposals.md，不再给普通用户一个入口。
+    await mount(bridge({ growthStatus: async () => ({ available: true, proposals: [proposal] }) }))
+    expect([...container!.querySelectorAll('[role="tab"]')].map((node) => node.textContent)).not.toContain('成长')
+    expect(container!.textContent).not.toContain('同一工具连续失败两次')
   })
 })

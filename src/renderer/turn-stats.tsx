@@ -163,7 +163,7 @@ export function TurnStats({ entries, metrics, running, showMissingUsage = false 
       </span>}
     </span>}
     {toolCount > 0 && <span className="panel-turn-usage panel-turn-tools" tabIndex={0}>
-      {toolCount} 次工具
+      使用了 {toolCount} 次工具
       {errorCount > 0 && <span className="panel-turn-tools-errors">（{errorCount} 次失败）</span>}
       <span className="panel-turn-usage-tip panel-turn-tools-tip" role="tooltip">
         <span className="panel-turn-tools-count">

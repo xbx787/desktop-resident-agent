@@ -11,7 +11,7 @@ const settings: ConversationSettings = {
   goalMaxIterations: 30, goalMaxMinutes: 180, memoryEnabled: false, effort: 'max',
   modelProfiles: [], activeModelProfileId: null, enableAutoTitleGeneration: false,
   showMessageTimestamps: true, userName: '用户', assistantName: '助手',
-  userAvatar: null, assistantAvatar: null, tabOrder: [], uiSize: 'small'
+  userAvatar: null, assistantAvatar: null, tabOrder: [], uiSize: 'small', avatarSize: 'small'
 }
 
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {

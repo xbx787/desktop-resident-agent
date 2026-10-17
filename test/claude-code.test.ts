@@ -31,7 +31,7 @@ describe('Claude Code child environment', () => {
     expect(child.ANTHROPIC_API_KEY).toBeUndefined()
     expect(child.ANTHROPIC_AUTH_TOKEN).toBe('deepseek-key')
     expect(child.ANTHROPIC_BASE_URL).toBe('https://api.deepseek.com/anthropic')
-    expect(child.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe('70')
+    expect(child.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe('80')
     expect(child.CLAUDE_CONFIG_DIR).toBe('D:\\DesktopPetProject\\data\\claude')
     expect(child.DISABLE_AUTO_COMPACT).toBeUndefined()
     expect(child.DISABLE_COMPACT).toBeUndefined()
@@ -53,6 +53,20 @@ describe('Claude Code child environment', () => {
 })
 
 describe('provider environment', () => {
+  it('passes the configured auto-compaction percentage and clamps it to 50–90', () => {
+    const child = claudeEnvironment({}, { apiKey: 'k', autoCompactPercent: 65 })
+    expect(child.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe('65')
+    expect(claudeEnvironment({}, { apiKey: 'k', autoCompactPercent: 20 }).CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe('50')
+    expect(claudeEnvironment({}, { apiKey: 'k', autoCompactPercent: 99 }).CLAUDE_AUTOCOMPACT_PCT_OVERRIDE).toBe('90')
+  })
+
+  it('exposes the workspace to the child without touching the parent environment', () => {
+    const parent = { PATH: 'C:\\Windows', DESKTOP_PET_WORKSPACE: 'C:\\stale' }
+    const child = claudeEnvironment(parent, { apiKey: 'k', workspace: 'D:\\project' })
+    expect(child.DESKTOP_PET_WORKSPACE).toBe('D:\\project')
+    expect(parent.DESKTOP_PET_WORKSPACE).toBe('C:\\stale')
+  })
+
   it('injects the profile model names and the host-managed marker', () => {
     const child = claudeEnvironment({}, { apiKey: 'k', baseUrl: 'https://example.test/anthropic', model: 'm1', smallModel: 'm0' })
     expect(child.ANTHROPIC_BASE_URL).toBe('https://example.test/anthropic')

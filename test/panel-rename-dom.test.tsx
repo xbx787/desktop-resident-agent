@@ -14,7 +14,7 @@ const settings: ConversationSettings = {
   visibleConversationTabs: 5, autoArchiveAfterDays: 0, goalMaxIterations: 30, goalMaxMinutes: 180,
   memoryEnabled: true, effort: 'high', modelProfiles: [], activeModelProfileId: null,
   enableAutoTitleGeneration: true, showMessageTimestamps: true, userName: '主人', assistantName: '小鲸',
-  userAvatar: null, assistantAvatar: null, tabOrder: [], uiSize: 'small'
+  userAvatar: null, assistantAvatar: null, tabOrder: [], uiSize: 'small', avatarSize: 'small'
 }
 
 function conversation(id: string, title: string): ConversationSummary {

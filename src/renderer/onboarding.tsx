@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { PROVIDER_CATALOG } from '../shared/provider-catalog';
 import { apiKeyHint, normalizeApiKey } from '../shared/onboarding';
@@ -8,6 +8,9 @@ import './onboarding.css';
 interface OnboardingBridge {
   test(apiKey: string, model: string): Promise<{ ok: boolean; message: string }>;
   save(apiKey: string, model: string): Promise<void>;
+  defaultWorkspace(): Promise<string>;
+  pickWorkspace(): Promise<string | null>;
+  setWorkspace(path: string): Promise<{ path: string }>;
   open(page: 'signup' | 'api-keys' | 'top-up'): Promise<void>;
   finish(outcome: 'completed' | 'skipped'): Promise<void>;
 }
@@ -46,8 +49,20 @@ function Onboarding() {
   const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [notice, setNotice] = useState('');
   const [finished, setFinished] = useState(false);
+  const [workspace, setWorkspace] = useState('');
+  const [workspaceBusy, setWorkspaceBusy] = useState(false);
 
   const hint = apiKeyHint(apiKey);
+
+  // Start from whatever the app already resolved (the project directory in a
+  // source checkout), so the common case is a single click on "下一步".
+  useEffect(() => {
+    let active = true;
+    bridge().defaultWorkspace()
+      .then((path) => { if (active) setWorkspace(path); })
+      .catch(() => { /* the picker still works without a default */ });
+    return () => { active = false; };
+  }, []);
 
   function go(direction: 1 | -1): void {
     const target = direction > 0 ? nextStep(step) : previousStep(step);
@@ -89,6 +104,33 @@ function Onboarding() {
     }
   }
 
+  async function chooseWorkspace(): Promise<void> {
+    if (workspaceBusy) return;
+    setNotice('');
+    try {
+      const picked = await bridge().pickWorkspace();
+      if (picked) setWorkspace(picked);
+    } catch (error) {
+      setNotice(errorText(error));
+    }
+  }
+
+  /** Saves the directory on its own, before the key is ever involved. */
+  async function saveWorkspaceAndContinue(): Promise<void> {
+    if (workspaceBusy || !canAdvance('workspace', apiKey, workspace)) return;
+    setWorkspaceBusy(true);
+    setNotice('');
+    try {
+      const saved = await bridge().setWorkspace(workspace.trim());
+      setWorkspace(saved.path);
+      go(1);
+    } catch (error) {
+      setNotice(errorText(error));
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }
+
   /** Records the outcome (best effort — main also infers a skip from the
    *  window's close) and lets the window go. */
   async function close(outcome: 'completed' | 'skipped'): Promise<void> {
@@ -113,6 +155,7 @@ function Onboarding() {
         <section className="onboarding-card">
           <h1>配置完成</h1>
           <p className="onboarding-copy">现在点击桌面上的小鲸就能对话了。以后要添加 Kimi、智谱等其他模型或更换 Key，右键托盘图标 →「选项」里随时可以管理。</p>
+          {workspace && <p className="onboarding-note">工作目录：<code>{workspace}</code>。之后可以在「选项 → 对话 → 工作目录」里迁移。</p>}
           <div className="onboarding-actions">
             <button type="button" className="onboarding-primary" onClick={() => { void close('completed'); }}>开始使用</button>
           </div>
@@ -182,6 +225,31 @@ function Onboarding() {
           <div className="onboarding-actions">
             <button type="button" className="onboarding-secondary" onClick={() => go(-1)}>上一步</button>
             <button type="button" className="onboarding-primary" disabled={!canAdvance(step, apiKey)} onClick={() => go(1)}>下一步</button>
+          </div>
+        </section>
+      ) : step === 'workspace' ? (
+        <section className="onboarding-card">
+          <h2>工作目录</h2>
+          <p className="onboarding-copy">小鲸读写文件、搜索文件都从这个目录开始。选一个你希望它工作的项目文件夹。</p>
+          <div className="onboarding-key-row">
+            <input
+              type="text"
+              value={workspace}
+              readOnly
+              placeholder="选择一个文件夹"
+              spellCheck={false}
+            />
+            <button type="button" className="onboarding-reveal" disabled={workspaceBusy} onClick={() => { void chooseWorkspace(); }}>
+              选择…
+            </button>
+          </div>
+          <p className="onboarding-hint">应用会把该路径作为环境变量 DESKTOP_PET_WORKSPACE 交给模型进程，不会修改 Windows 系统设置。</p>
+          {notice && <p className="onboarding-notice">{notice}</p>}
+          <div className="onboarding-actions">
+            <button type="button" className="onboarding-secondary" onClick={() => go(-1)}>上一步</button>
+            <button type="button" className="onboarding-primary" disabled={workspaceBusy || !canAdvance(step, apiKey, workspace)} onClick={() => { void saveWorkspaceAndContinue(); }}>
+              {workspaceBusy ? '保存中…' : '下一步'}
+            </button>
           </div>
         </section>
       ) : (

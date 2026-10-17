@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { AVATAR_STRIP, BUBBLE_MIN_HEIGHT, computeStageBounds, STAGE_HEIGHT, STAGE_WIDTH } from '../src/main/stage-bounds'
+import { AVATAR_STRIP, BUBBLE_BOTTOM, BUBBLE_MIN_HEIGHT, computeStageBounds, STAGE_HEIGHT, STAGE_WIDTH } from '../src/main/stage-bounds'
 import { PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH } from '../src/shared/contracts'
 
 /** A 2048×1112 DIP work area (2560×1440 at 125%), the shape of the machine
@@ -39,10 +39,13 @@ describe('computeStageBounds', () => {
     expect(next.y + next.height).toBeLessThanOrEqual(short.y + short.height)
   })
 
-  it('pulls the stage back up when it hangs below the work area', () => {
-    const below = { x: 200, y: 1000, width: STAGE_WIDTH, height: STAGE_HEIGHT }
+  it('keeps the avatar bottom anchored when it sits below the work edge', () => {
+    // 头像窗口允许比工作区底多出一点（拖到任务栏边缘）；展开时不能因为
+    // 舞台高度被压回工作区就把头像往上跳，舞台底边必须跟着头像底边。
+    const below = { x: 200, y: 1000, width: 200, height: 220 }
     const next = computeStageBounds(below, work, true)
-    expect(next.y + next.height).toBeLessThanOrEqual(work.y + work.height)
+    expect(next.y + next.height).toBe(below.y + below.height)
+    expect(next.y + next.height - below.height).toBe(below.y)
   })
 
   it('clamps the width to the work area', () => {
@@ -53,15 +56,25 @@ describe('computeStageBounds', () => {
 
   it('honours a user-chosen panel size on expanded, anchored bottom-right', () => {
     const next = computeStageBounds(resting, work, true, { width: 700, height: 500 })
-    expect(next.width).toBe(700 + 20)      // 面板 + 左右各 10 的留白
-    expect(next.height).toBe(500 + 192)    // 面板 + 头像条与间距
+    expect(next.width).toBe(700 + 20)               // 面板 + 左右各 10 的留白
+    expect(next.height).toBe(500 + BUBBLE_BOTTOM)   // 面板 + 头像条与间距
     expect(next.x + next.width).toBe(resting.x + resting.width)
     expect(next.y + next.height).toBe(resting.y + resting.height)
+  })
+
+  it('lets a resized panel reach the work-area top when the avatar hangs below it', () => {
+    // 头像拖到任务栏边缘后底边在工作区外；把面板往高处拖时，顶部仍要能
+    // 一路顶到工作区顶——不能因为舞台高度被压回 work.height 就停在半路。
+    const below = { x: 1800, y: 1000, width: 200, height: 220 } // 底边 1220，超出 108
+    const next = computeStageBounds(below, work, true, { width: 484, height: 1112 })
+    expect(next.y).toBe(work.y)
+    expect(next.y + next.height).toBe(below.y + below.height)
+    expect(next.height).toBe(below.y + below.height - work.y)
   })
 
   it('clamps a tiny saved size up to the usable minimum', () => {
     const next = computeStageBounds(resting, work, true, { width: 100, height: 100 })
     expect(next.width).toBe(PANEL_MIN_WIDTH + 20)
-    expect(next.height).toBe(PANEL_MIN_HEIGHT + 192)
+    expect(next.height).toBe(PANEL_MIN_HEIGHT + BUBBLE_BOTTOM)
   })
 })

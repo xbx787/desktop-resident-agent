@@ -27,7 +27,10 @@ function ThoughtIcon() {
  * behind a click; once the block closes it folds and freezes at its mm:ss.
  */
 export const ThinkingItem = memo(function ThinkingItem({ entry, running }: { entry: TimelineEntry; running: boolean }) {
-  const streaming = running && !entry.endedAt
+  // 是否“思考中”只由数据决定：只要这一条还没写 endedAt，它就是在流式。
+  // 之前还要求 running，导致任务运行中最后一段思考有时被标成「已思考」，
+  // 而底部的工作指示同时显示「正在思考」。
+  const streaming = !entry.endedAt
   const [open, setOpen] = useState(false)
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {

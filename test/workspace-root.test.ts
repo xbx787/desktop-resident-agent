@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { findSourceProjectRoot, resolveAgentWorkspace } from '../src/main/workspace-root'
+import { findSourceProjectRoot, isUsableWorkspace, readSavedWorkspace, resolveAgentWorkspace, writeSavedWorkspace } from '../src/main/workspace-root'
 
 const testRoot = path.join(process.cwd(), '.cache', 'tests', `workspace-${randomUUID()}`)
 
@@ -29,5 +29,34 @@ describe('packaged Agent working directory', () => {
     await fs.mkdir(chosen)
 
     expect(resolveAgentWorkspace(install, true, { DESKTOP_PET_WORKSPACE: chosen }, testRoot)).toBe(chosen)
+  })
+
+  it('uses the saved wizard choice when no environment override exists', async () => {
+    const install = path.join(testRoot, 'install')
+    const saved = path.join(testRoot, 'saved')
+    await fs.mkdir(install, { recursive: true })
+    await fs.mkdir(saved)
+
+    expect(resolveAgentWorkspace(install, true, {}, testRoot, saved)).toBe(saved)
+    // An explicit environment variable still wins over the saved choice.
+    const envDir = path.join(testRoot, 'env')
+    await fs.mkdir(envDir)
+    expect(resolveAgentWorkspace(install, true, { DESKTOP_PET_WORKSPACE: envDir }, testRoot, saved)).toBe(envDir)
+  })
+
+  it('persists the workspace and rejects missing or relative paths', async () => {
+    const dataRoot = path.join(testRoot, 'data')
+    const chosen = path.join(testRoot, 'chosen')
+    await fs.mkdir(dataRoot, { recursive: true })
+    await fs.mkdir(chosen)
+
+    expect(readSavedWorkspace(dataRoot)).toBeNull()
+    writeSavedWorkspace(dataRoot, chosen)
+    expect(readSavedWorkspace(dataRoot)).toBe(path.normalize(chosen))
+
+    expect(isUsableWorkspace(chosen)).toBe(true)
+    expect(isUsableWorkspace('relative/path')).toBe(false)
+    expect(isUsableWorkspace(path.join(testRoot, 'missing'))).toBe(false)
+    expect(() => writeSavedWorkspace(dataRoot, path.join(testRoot, 'missing'))).toThrow('工作目录')
   })
 })

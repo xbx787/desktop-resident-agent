@@ -14,7 +14,7 @@ const settings: ConversationSettings = {
   visibleConversationTabs: 5, autoArchiveAfterDays: 0, goalMaxIterations: 5, goalMaxMinutes: 30,
   memoryEnabled: true, effort: 'high', modelProfiles: [], activeModelProfileId: null,
   enableAutoTitleGeneration: true, showMessageTimestamps: true, userName: '主人', assistantName: '小鲸',
-  userAvatar: null, assistantAvatar: null, tabOrder: [], uiSize: 'small'
+  userAvatar: null, assistantAvatar: null, tabOrder: [], uiSize: 'small', avatarSize: 'small'
 }
 
 const conversation: ConversationSummary = {
@@ -98,7 +98,8 @@ describe('a steered line inside a finished turn', () => {
     await act(async () => {
       root.render(<PanelBubble visible snapshot={live} error={null} run={async (action) => { await action(window.pet); return true }} />)
     })
-    // 思考中：插话按顺序留在过程流里，不提前搬到折叠链上方。
+    // 主人明确要求：思考中的插话留在过程流里发生的位置，不能提前搬走；
+    // 这一轮结束后才整体抬到折叠链上方。
     expect(host.querySelector('.panel-turn-asides')).toBeNull()
     expect(host.textContent).toContain('插话：用另一种方案')
   })
