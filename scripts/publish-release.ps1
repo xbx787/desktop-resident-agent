@@ -28,8 +28,8 @@ try {
   finally { $stream.Dispose() }
 } finally { $sha256.Dispose() }
 if ($actual -ne $expected) { throw 'Archive checksum mismatch.' }
-$repository = & gh repo view --json isPrivate,nameWithOwner | ConvertFrom-Json
-if ($LASTEXITCODE -ne 0 -or -not $repository.isPrivate) { throw 'GitHub repository must be private.' }
+$repository = & gh repo view --json nameWithOwner | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) { throw 'GitHub repository lookup failed.' }
 & git push origin HEAD:master
 if ($LASTEXITCODE -ne 0) { throw 'Branch push failed.' }
 & git push origin $tag
