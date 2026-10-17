@@ -6,6 +6,58 @@
 
 仓库地址：<https://github.com/xbx787/desktop-resident-agent>。逐版更新见 [CHANGELOG.md](./CHANGELOG.md)。
 
+## 安装（Windows 成品）
+
+### 系统要求
+
+- Windows 10 或 Windows 11，64 位。
+- 能访问 DeepSeek API（`api.deepseek.com`）的网络。
+- 一个 DeepSeek 账号和 API Key。API 按量计费，账户里需要少量余额；没有 Key 时配置向导里有注册和创建入口。
+- 可选：Git for Windows。不装也能聊天，但执行命令类工具会受影响；`windows-mcp` 等 MCP 工具还需要额外配置 `~/.claude.json`。
+- 不需要安装 Node.js、Claude Code 或其他运行环境，引擎已经打进包里。
+
+### 下载
+
+1. 打开项目的 Releases 页面：<https://github.com/xbx787/desktop-resident-agent/releases/latest>
+2. 下载两个文件：
+   - `whale-companion-v<版本>-win-x64.zip`
+   - `whale-companion-v<版本>.sha256.txt`
+3. 仓库是私有的，需要登录有权限的 GitHub 账号才能下载。
+
+下载后可以校验一下文件完整性（把文件名换成实际版本）：
+
+```powershell
+Get-FileHash .\whale-companion-v0.0.75-win-x64.zip -Algorithm SHA256
+Get-Content .\whale-companion-v0.0.75.sha256.txt
+```
+
+两条命令输出的 SHA-256 应该一致。
+
+### 解压与启动
+
+1. 把 ZIP 解压到一个**有写权限**的目录，例如 `D:\Apps\WhaleCompanion`。不要放进 `C:\Program Files`，否则会话和设置写不进去。
+2. 进入解压后的 `win-unpacked` 文件夹，双击 `Whale Companion Preview.exe`。
+3. 如果 Windows SmartScreen 提示“已保护你的电脑”，点“更多信息”→“仍要运行”。程序没有代码签名，这是正常提示。
+4. 启动后角色出现在桌面右下角，通知区域出现小鲸图标。左键角色打开对话气泡，右键图标或角色可以打开选项、打开设置或退出。
+5. ZIP 里不带桌面快捷方式。需要的话，右键 `Whale Companion Preview.exe`→“发送到”→“桌面快捷方式”。
+
+### 首次配置
+
+首次启动约 1 秒后会自动打开配置向导：
+
+1. 按向导里的链接注册 DeepSeek、创建 API Key，把以 `sk-` 开头的 Key 粘贴进去。
+2. 选择**工作目录**。小鲸只在这个目录里读写文件、搜索文件和执行命令；默认是自动探测到的项目目录（独立安装时是程序所在目录），建议改成你真正要它工作的文件夹。之后可以在“设置 → 对话 → 工作目录”里迁移。
+3. 点“测试连接”，成功后完成配置。Key 使用 Windows 本机密钥保护加密，只保存在这台电脑的 `data` 目录里，不会上传到其他地方。
+
+如果向导没有自动出现，右键通知区域的小鲸图标 →“选项”，在“模型”页添加或重新填写 DeepSeek 配置。
+
+### 数据、更新与卸载
+
+- 所有运行数据都在 `win-unpacked\data`：会话、附件、记忆、人设、模型配置、Claude 配置和工作目录选择。
+- 更新版本：先退出旧版，把旧版的 `data` 文件夹复制到新版 `win-unpacked` 下，再启动新版。不要直接覆盖正在运行的目录。
+- 卸载：退出小鲸，删除整个 `win-unpacked` 文件夹即可；想保留记录就先备份 `data`。
+- 换电脑的完整步骤见下面的“迁移到另一台电脑”。
+
 ## 功能亮点
 
 - **会呼吸的桌宠**：点击沉弹 + 甩呆毛四帧手绘动画；闲置时随机呼吸、伸懒腰，每半分钟左右换一个姿态（挥手 / 打盹 / 欢呼 / 微笑 / 害羞……9 张生成素材，全合成器动画）。
@@ -21,12 +73,6 @@
 - **用量与余额**：每轮 token、可计算的峰谷费用随会话保存；中键余额卡读取已保存的 DeepSeek 配置。旧记录可用项目内的[保守恢复工具](./docs/transcript-usage-recovery.md)补出可核对部分，估算值会单独标注。
 - **可携带**：包内自带 Claude Code 引擎，拷到一台**没装任何依赖**的 Windows 机器即可运行（需要 API Key 与网络；执行命令类功能建议有 Git）。密钥采用本机加密，迁移到另一台电脑后需重新填写；会话等其他数据保留。
 - **个人设定文件**：首次启动在 `data/claude/CLAUDE.md` 生成可编辑的小鲸设定，随数据目录迁移。
-
-## 安装与运行（成品）
-
-发布包在 `release/whale-companion-v<版本>`。桌面与项目根各有一个 `小鲸.lnk`，双击即可；运行后驻留通知栏。
-
-首次使用需在**设置窗口 → 模型**里添加一个模型配置（填入厂商与 API Key）。运行时数据（会话、附件、设定、Claude 配置）保存在 `data/` 目录。
 
 ## 本机开发
 
