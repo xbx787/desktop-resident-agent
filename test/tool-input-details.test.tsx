@@ -32,7 +32,7 @@ describe('ToolInputDetails', () => {
     expect(container.innerHTML).toBe('');
     await render('{"command":"npm test","description":"完整说明"}');
     expect(container.querySelector('details')?.open).toBe(false);
-    expect(container.querySelector('summary')?.textContent).toBe('完整入参');
+    expect(container.querySelector('summary')?.textContent).toBe('输入参数');
     expect(container.querySelector('pre')).toBeNull();
     expect(container.textContent).not.toContain('完整说明');
   });

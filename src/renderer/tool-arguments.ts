@@ -1,5 +1,7 @@
-/** Keys that answer "what is this call acting on?", most specific first. */
-const argumentKeys = ['command', 'file_path', 'pattern', 'path', 'query', 'url', 'plan', 'description', 'prompt', 'notebook_path', 'glob'];
+/** Keys that answer "what is this call acting on?", most specific first.
+ *  `description` leads: when a call carries one (our Bash calls do), it reads
+ *  clearer after the row's label than the raw command does. */
+const argumentKeys = ['description', 'command', 'file_path', 'pattern', 'path', 'query', 'url', 'plan', 'prompt', 'notebook_path', 'glob'];
 
 function flatten(value: string): string {
   return value.replace(/\s+/g, ' ').trim();

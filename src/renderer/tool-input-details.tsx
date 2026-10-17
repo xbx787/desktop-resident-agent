@@ -11,7 +11,7 @@ export function ToolInputDetails({ input }: { input: string | undefined }) {
   return <details className="panel-tool-input-details" onToggle={(event) => {
     if (event.currentTarget.open) setOpenedOnce(true);
   }}>
-    <summary title="查看完整入参">完整入参</summary>
-    {openedOnce && <pre className="panel-tool-input-code" aria-label="完整入参内容" tabIndex={0}>{toolArgumentDetails(input)}</pre>}
+    <summary title="查看输入参数">输入参数</summary>
+    {openedOnce && <pre className="panel-tool-input-code" aria-label="输入参数内容" tabIndex={0}>{toolArgumentDetails(input)}</pre>}
   </details>;
 }

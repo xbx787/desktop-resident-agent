@@ -40,6 +40,14 @@ describe('avatar thread geometry', () => {
     expect(bridge).toContain(`left: ${bridgeLeft}px`)
   })
 
+  it('never lets the feed scroll sideways', () => {
+    // 绝对定位的悬停提示与扫光条会撑 scrollWidth；横向 auto 会把它们变成
+    // 窗口底部常驻的粗横条。对话流的宽内容（代码块、表格）各自内部滚动。
+    const feed = rule('.panel-feed')
+    expect(feed).toContain('overflow-x: hidden')
+    expect(feed).toContain('overflow-y: auto')
+  })
+
   it('keeps the status dot and the working dots on the same axis as the thread', () => {
     const axis = Number(rule('.panel-event-glyph').match(/width:\s*(\d+)px/)![1]) / 2
     // 状态点：13px 内边距后，点（宽 7）的中心落在轴线上。

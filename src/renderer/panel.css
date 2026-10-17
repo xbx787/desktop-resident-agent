@@ -189,7 +189,11 @@
   flex: 1;
   min-height: 0;
   padding: 17px 15px 3px;
-  overflow: auto;
+  /* 对话流永远不横向滚动：悬停提示、扫光这些绝对定位的装饰不占流但会计入
+     scrollWidth，横向 auto 会把它们变成窗口底部常驻的一条粗横条（横向滚动
+     条没有自定义样式，用的是系统默认高度）。宽的代码块与表格各自内部滚动。 */
+  overflow-x: hidden;
+  overflow-y: auto;
   scrollbar-color: rgba(170, 195, 245, .38) transparent;
   scrollbar-width: thin;
 }

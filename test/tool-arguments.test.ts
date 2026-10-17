@@ -3,7 +3,10 @@ import { toolArgumentDetails, toolArgumentPreview, toolPlanText } from '../src/r
 
 describe('toolArgumentPreview', () => {
   it('picks the field that names the object of the call', () => {
-    expect(toolArgumentPreview('{"command":"npm test","description":"跑测试"}')).toBe('npm test')
+    // 带 description 的命令显示描述（放在「执行命令」四个字后面更清楚），
+    // 没有 description 的调用仍回退到命令本身。
+    expect(toolArgumentPreview('{"command":"npm test","description":"跑测试"}')).toBe('跑测试')
+    expect(toolArgumentPreview('{"command":"npm test"}')).toBe('npm test')
     expect(toolArgumentPreview('{"file_path":"D:\\\\DesktopPetProject\\\\src\\\\main\\\\index.ts"}')).toBe('D:\\DesktopPetProject\\src\\main\\index.ts')
     expect(toolArgumentPreview('{"pattern":"panel-live-label","path":"src"}')).toBe('panel-live-label')
     expect(toolArgumentPreview('{"url":"https://example.com/a"}')).toBe('https://example.com/a')
