@@ -14,6 +14,11 @@ export interface ModelReply {
   note?: { title: string; content: string }
   sdkSessionId?: string | null
   compacted?: boolean
+  /** 连续生成的累计时长（毫秒；相邻流式增量间隔 ≤1.5s 的时段之和）——
+   *  token/s 的分母，不含工具执行与等待。非流式路径没有这个字段。 */
+  generationMs?: number
+  /** The user stopped this turn on purpose; it ended without a failure. */
+  interrupted?: boolean
   /** The model already emitted its final text through onProgress in timeline order. */
   timelineHandled?: boolean
 }

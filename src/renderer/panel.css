@@ -90,7 +90,14 @@
 .panel-side-strip .panel-side-chip { padding: 0 8px; border: 1px solid rgba(173, 205, 255, .27); border-radius: 14px; background: rgba(111, 161, 239, .13); }
 .panel-side-strip .panel-side-discard { width: 24px; padding: 0; margin-left: auto; color: #b8ccef; font-size: 16px; line-height: 1; }
 .panel-side-strip:not(.is-expanded) .panel-side-discard { margin-left: 0; }
+/* 展开的临时会话把状态文字收进顶栏，返回按钮右边就是当前进度；字号压到
+   10px 与「主线」同档，圆点沿用状态行的 7px。 */
+.panel-side-strip .panel-status { padding-left: 0; gap: 6px; font-size: 10px; }
+/* 右侧组：暂停提示和「临时会话」一起靠右，剩下的宽度由这组之前的空白吃掉。 */
+.panel-side-meta { display: inline-flex; align-items: center; gap: 7px; min-width: 0; margin-left: auto; overflow: hidden; }
+.panel-side-strip.is-expanded .panel-side-discard { margin-left: 0; }
 .panel-side-paused { min-width: 0; margin-left: auto; overflow: hidden; color: #eac18d; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.panel-side-meta .panel-side-paused { margin-left: 0; }
 .panel-side-intro { margin: 2px 0 12px; padding: 0 2px; color: #9db9e6; font-size: 10px; line-height: 1.45; }
 .panel-bubble.is-side-chat .panel-composer { border-color: rgba(155, 195, 255, .42); }
 

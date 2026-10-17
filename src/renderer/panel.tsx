@@ -53,9 +53,9 @@ function sideOnlySlashError(text: string): string | null {
   const name = /^\/([a-z][a-z0-9_-]*)(?=\s|$)/iu.exec(text.trim())?.[1]?.toLowerCase();
   if (!name || !MAIN_ONLY_SIDE_COMMANDS.has(name)) return null;
   return name === 'side' || name === 'btw'
-    ? '当前已在临时侧聊；先收起，再从主线开启。'
-    : name === 'compact' ? '请使用侧聊上下文菜单中的「压缩上下文」。'
-    : `/${name} 仅适用于主线，请先收起侧聊。`;
+    ? '当前已在临时会话；先收起，再从主线开启。'
+    : name === 'compact' ? '请使用临时会话上下文菜单中的「压缩上下文」。'
+    : `/${name} 仅适用于主线，请先收起临时会话。`;
 }
 
 const kindLabels: Record<TimelineEntry['kind'], string> = {
@@ -848,7 +848,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
           : options;
         setSuggestionItems(workflowSuggestionItems(available.map((option) =>
           !sideExpanded && option.kind === 'command' && (option.name === 'side' || option.name === 'btw')
-            ? { ...option, description: '填写问题后开启临时侧聊；空命令不会开启' }
+            ? { ...option, description: '填写问题后开启临时会话；空命令不会开启' }
             : option), suggestionTrigger));
       }).catch(() => { if (!cancelled) { setSuggestionItems([]); setSuggestionFailed(true); } }).finally(() => { if (!cancelled) setSuggestionLoading(false); });
     } else {
@@ -1167,7 +1167,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
       setDraft(restored.draft);
       setAttachments(restored.attachments);
       setComposerOpen(true);
-      setAttachmentError('临时侧聊发送失败，草稿已恢复。');
+      setAttachmentError('临时会话发送失败，草稿已恢复。');
     }
   }
 
@@ -2241,15 +2241,18 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
           </div>}
         </aside>}
         <div className="panel-chat-main">
-        {sideSessionId && <div className={`panel-side-strip${sideExpanded ? ' is-expanded' : ''}`} aria-label="临时侧聊">
+        {sideSessionId && <div className={`panel-side-strip${sideExpanded ? ' is-expanded' : ''}`} aria-label="临时会话">
           {sideExpanded ? <>
-            <button type="button" className="panel-side-back" aria-label="收起侧聊，返回主线" title="返回主线，侧聊继续保留" onClick={() => { void setSideExpanded(false); }}><BackIcon /><span>主线</span></button>
-            <span className="panel-side-name"><i className={`panel-task-dot panel-task-dot-${sideStatus}`} aria-hidden="true" />临时侧聊</span>
-            {sideChat?.queuePaused && <span className="panel-side-paused" title={sideChat.pauseReason || '发送新消息后继续处理保留的队列'}>已停止，队列保留</span>}
-          </> : <button type="button" className="panel-side-chip" aria-label={`展开临时侧聊，${sideChat?.queuePaused ? '已停止，队列保留' : taskLabels[sideStatus]}`} title={sideChat?.queuePaused ? '已停止，队列保留；点击展开' : '展开临时侧聊'} onClick={() => { void setSideExpanded(true); }}><i className={`panel-task-dot panel-task-dot-${sideStatus}`} aria-hidden="true" />侧聊</button>}
-          <button type="button" className="panel-side-discard" aria-label="结束并丢弃临时侧聊" title="结束临时侧聊，记录不进入会话库" onClick={() => { void discardSide(); }}>×</button>
+            <button type="button" className="panel-side-back" aria-label="收起临时会话，返回主线" title="返回主线，临时会话继续保留" onClick={() => { void setSideExpanded(false); }}><BackIcon /><span>主线</span></button>
+            {status !== 'idle' && <span className={`panel-status panel-status-${status}`} role="status"><i />{statusLive ? <span className="panel-live-label">{taskLabels[status]}</span> : taskLabels[status]}</span>}
+            <span className="panel-side-meta">
+              {sideChat?.queuePaused && <span className="panel-side-paused" title={sideChat.pauseReason || '发送新消息后继续处理保留的队列'}>已停止，队列保留</span>}
+              <span className="panel-side-name">临时会话</span>
+            </span>
+          </> : <button type="button" className="panel-side-chip" aria-label={`展开临时会话，${sideChat?.queuePaused ? '已停止，队列保留' : taskLabels[sideStatus]}`} title={sideChat?.queuePaused ? '已停止，队列保留；点击展开' : '展开临时会话'} onClick={() => { void setSideExpanded(true); }}><i className={`panel-task-dot panel-task-dot-${sideStatus}`} aria-hidden="true" />临时会话</button>}
+          <button type="button" className="panel-side-discard" aria-label="结束并丢弃临时会话" title="结束临时会话，记录不进入会话库" onClick={() => { void discardSide(); }}>×</button>
         </div>}
-        {status !== 'idle' && (
+        {status !== 'idle' && !sideExpanded && (
           <div className="panel-status-row">
             <span className={`panel-status panel-status-${status}`} role="status"><i />{statusLive ? <span className="panel-live-label">{taskLabels[status]}</span> : taskLabels[status]}</span>
           </div>
@@ -2266,7 +2269,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
             // Reaching the top pulls in the next stretch of older history.
             if (feed.scrollTop < 240) loadEarlier();
           }}>
-            {sideExpanded && <p className="panel-side-intro">临时侧聊，记录不进入会话库</p>}
+            {sideExpanded && <p className="panel-side-intro">临时会话，记录不进入会话库</p>}
             {visibleGroups.map((group, index) => {
               if (group.kind === 'single') return <EntryItem key={group.entry.id} entry={group.entry} running={false} onOpenImage={openImageViewer} display={rowDisplay} />;
               const segments = segmentTurn(group.items);
@@ -2423,7 +2426,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                   maxLength={8000}
                   rows={1}
                   style={{ height: composerHeight }}
-                  placeholder={sideExpanded ? '在临时侧聊中提问…' : goalPrompting ? '请输入当前的目标，回车设定' : '输入消息…'}
+                  placeholder={sideExpanded ? '在临时会话中提问…' : goalPrompting ? '请输入当前的目标，回车设定' : '输入消息…'}
                   aria-controls={suggestionOpen ? 'panel-composer-suggestions' : undefined}
                   aria-expanded={suggestionOpen && (suggestionLoading || suggestionItems.length > 0)}
                   aria-activedescendant={suggestionOpen && suggestionItems.length > 0 ? `panel-suggestion-${suggestionSelected}` : undefined}
@@ -2472,7 +2475,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                     onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); setModelPickerOpen(false); } }}>
                     <div className="panel-popover-heading">模型</div>
                     <div className="panel-model-list" role="radiogroup" aria-label="选择模型配置">
-                      {sideExpanded && <div className="panel-model-empty">临时侧聊沿用开启时的模型。回到主线可切换配置。</div>}
+                      {sideExpanded && <div className="panel-model-empty">临时会话沿用开启时的模型。回到主线可切换配置。</div>}
                       {(library?.settings.modelProfiles ?? []).length === 0 &&
                         <div className="panel-model-empty">还没有模型配置——<button type="button" className="panel-model-empty-link" onClick={() => { void run((bridge) => bridge.openOnboarding()); }}>打开配置向导</button></div>}
                       {(library?.settings.modelProfiles ?? []).map((profile) => (

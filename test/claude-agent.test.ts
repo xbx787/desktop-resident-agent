@@ -832,6 +832,38 @@ describe('Agent failure classification', () => {
     } finally { await client.dispose() }
   })
 
+  it('treats error_during_execution after interrupt() as a user stop, not a failure', async () => {
+    let sent!: () => void
+    const sendSeen = new Promise<void>((resolve) => { sent = resolve })
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    queryMock.mockImplementation((request: Request) => {
+      const generator = (async function* () {
+        for await (const message of request.prompt) {
+          sent()
+          yield { type: 'stream_event', parent_tool_use_id: null,
+            event: { type: 'content_block_delta', delta: { type: 'text_delta', text: '做到一半' } } }
+          await gate
+          yield { type: 'result', subtype: 'error_during_execution', is_error: true, session_id: sessionId,
+            user_message_uuids: [message.uuid], queued_turn_count: 0 }
+          return
+        }
+      })()
+      return Object.assign(generator, {
+        getContextUsage: vi.fn(async () => ({ totalTokens: 120, maxTokens: 1_000_000,
+          isAutoCompactEnabled: true, model: 'deepseek-flash[1m]' })),
+        close: vi.fn(), interrupt: vi.fn(async () => { release() })
+      })
+    })
+    const client = new ClaudeAgentClient(executable, 'test-key', process.cwd())
+    try {
+      const run = client.respond([{ role: 'user', content: '跑个长命令' }], new AbortController().signal)
+      await sendSeen
+      await client.interrupt()
+      await expect(run).resolves.toMatchObject({ interrupted: true, text: '做到一半' })
+    } finally { await client.dispose() }
+  })
+
   it('routes interrupt() to the SDK query that owns the running turn', async () => {
     queryMock.mockImplementation((request: Request) => {
       // Take the send, then hang the stream without ever producing a result —

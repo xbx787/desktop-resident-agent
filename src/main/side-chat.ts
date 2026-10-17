@@ -41,14 +41,14 @@ interface ActiveSideChat {
 /** Validate before creating a child so a rejected /side command leaves the
  * existing child and the main composer untouched. */
 export function validateSideChatMessage(text: string, attachments: UserAttachment[], mode: ModelMode): string {
-  if (typeof text !== 'string' || !validAttachmentList(attachments)) throw new Error('临时侧聊消息无效。')
+  if (typeof text !== 'string' || !validAttachmentList(attachments)) throw new Error('临时会话消息无效。')
   const clean = text.trim()
   const prompt = [clean, attachmentContext(attachments)].filter(Boolean).join('\n\n')
   if (!prompt || prompt.length > 8_000) throw new Error('消息不能为空，且单条消息最多 8000 字。')
   const slash = parseAppSlashCommand(clean)
   if (slash || /^\/goal(?:\s|$)/iu.test(clean)) {
     if (attachments.length) throw new Error('应用命令不能附带文件。')
-    if (slash?.name === 'side' || slash?.name === 'btw') throw new Error('已经在临时侧聊中。')
+    if (slash?.name === 'side' || slash?.name === 'btw') throw new Error('已经在临时会话中。')
     throw new Error(`/${slash?.name ?? 'goal'} 仅适用于主会话。`)
   }
   if (mode !== 'claude_code' && attachments.some((item) => item.path && !item.content)) {
@@ -97,7 +97,7 @@ export class SideChatController {
   private require(sessionId: string): ActiveSideChat {
     const side = this.currentSide()
     if (!side || side.sessionId !== sessionId) {
-      throw new Error('临时侧聊已关闭或主会话已切换。')
+      throw new Error('临时会话已关闭或主会话已切换。')
     }
     return side
   }
@@ -284,16 +284,16 @@ export class SideChatController {
 
   async send(sessionId: string, text: string, attachments: UserAttachment[] = [], strategy: 'queue' | 'steer' = 'queue'): Promise<void> {
     const side = this.require(sessionId)
-    if (strategy !== 'queue' && strategy !== 'steer') throw new Error('临时侧聊消息无效。')
+    if (strategy !== 'queue' && strategy !== 'steer') throw new Error('临时会话消息无效。')
     const clean = validateSideChatMessage(text, attachments, side.runtime.getSnapshot().mode)
     const generation = side.generation
     const wasPaused = side.paused
     if (strategy === 'steer' && await side.runtime.steerMessage(clean, attachments)) {
-      if (!this.owns(side) || generation !== side.generation) throw new Error('临时侧聊已停止或关闭。')
+      if (!this.owns(side) || generation !== side.generation) throw new Error('临时会话已停止或关闭。')
       this.changed(side)
       return
     }
-    if (!this.owns(side) || generation !== side.generation) throw new Error('临时侧聊已停止或关闭。')
+    if (!this.owns(side) || generation !== side.generation) throw new Error('临时会话已停止或关闭。')
     if (wasPaused) side.paused = false
     const message: PendingMessage = { id: randomUUID(), text: clean, attachments: structuredClone(attachments), createdAt: new Date().toISOString() }
     if (wasPaused || strategy === 'steer') side.pending.unshift(message)
@@ -371,7 +371,7 @@ export class SideChatController {
   }
   async compact(sessionId: string): Promise<void> {
     const side = this.require(sessionId)
-    if (side.pending.length || side.draining) throw new Error('请等待临时侧聊的待发送消息完成后再压缩。')
+    if (side.pending.length || side.draining) throw new Error('请等待临时会话的待发送消息完成后再压缩。')
     await side.runtime.compactConversation()
   }
   setModelMode(sessionId: string, mode: ModelMode): void {

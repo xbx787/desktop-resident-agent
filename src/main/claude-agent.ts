@@ -60,6 +60,12 @@ interface OwnedTurn {
   messageUsages: Map<string, TaskUsage>
   signal: AbortSignal
   onAbort: () => void
+  /** The user pressed the panel's kill switch for this turn. The CLI answers
+   *  with `error_during_execution`; that is a hand-back, not a broken run. */
+  interruptedByUser: boolean
+  /** 连续生成时长（相邻流式增量间隔 ≤1.5s 的时段累计），token/s 的分母。 */
+  generationActiveMs: number
+  lastGenerationAt?: number
   onProgress?: (text: string, segment?: number) => void
   onThinking?: (text: string, segment?: number) => void
   onToolEvent?: (event: ModelToolEvent) => void
@@ -404,7 +410,7 @@ export class ClaudeAgentClient implements ModelClient {
   async compact(sdkSessionId?: string | null): Promise<AgentContextUsage> {
     if (!sdkSessionId && !this.sessionId) throw new Error('当前对话还没有可压缩的上下文。')
     if (this.activeTurn) throw new Error('请等待当前任务完成后再压缩上下文。')
-    if (!this.persistSession && !this.agentQuery) throw new Error('临时侧聊的模型上下文已释放，不能恢复后压缩。')
+    if (!this.persistSession && !this.agentQuery) throw new Error('临时会话的模型上下文已释放，不能恢复后压缩。')
     await this.ensureQuery(sdkSessionId ?? this.sessionId)
     const reply = await this.runTurn('/compact', new AbortController().signal)
     const compactionOutcome = reply.compacted ? 'compacted'
@@ -425,6 +431,9 @@ export class ClaudeAgentClient implements ModelClient {
    *  command included — and hand control back. The turn then winds down
    *  through its normal result path; the session stays alive. */
   async interrupt(): Promise<void> {
+    // Mark before the round-trip: the result races the interrupt reply, and
+    // whichever arrives first must already know why the turn is ending.
+    if (this.activeTurn) this.activeTurn.interruptedByUser = true
     try {
       await this.agentQuery?.interrupt()
     } catch {
@@ -677,7 +686,8 @@ export class ClaudeAgentClient implements ModelClient {
       }
       const turn: OwnedTurn = {
         pendingIds: new Set([message.uuid!]), activeToolIds: new Set(), completedTexts: [], partial: '', thinkingPartial: '', segment: 0, compacted: false,
-        completedUsage: emptyUsage(), messageUsages: new Map(),
+        completedUsage: emptyUsage(), messageUsages: new Map(), interruptedByUser: false,
+        generationActiveMs: 0,
         signal, onAbort, onProgress, onThinking, onToolEvent, onTaskUsage, resolve, reject
       }
       this.activeTurn = turn
@@ -741,6 +751,8 @@ export class ClaudeAgentClient implements ModelClient {
     if (turn) this.emitToolEvents(message, turn)
     if (message.type === 'stream_event' && message.parent_tool_use_id === null && turn) {
       const event = message.event
+      // 所有增量（思考、正文、工具参数）都是模型在生成：按间隔累计生成时长。
+      if (event.type === 'content_block_delta') this.noteGenerationDelta(turn)
       if (event.type === 'content_block_delta' && event.delta.type === 'thinking_delta') {
         if (turn.thinkingPartial.length <= MAX_REPLY_LENGTH) turn.thinkingPartial += event.delta.thinking
         turn.onThinking?.(this.redact(turn.thinkingPartial), turn.segment)
@@ -771,6 +783,13 @@ export class ClaudeAgentClient implements ModelClient {
     }
     turn.messageUsages.clear()
     if (message.subtype !== 'success' || message.is_error) {
+      // A user interrupt ends the turn as `error_during_execution`. It is not
+      // a failure of the run: resolve with what was said so far and let the
+      // host mark the turn cancelled instead of failed.
+      if (turn.interruptedByUser && message.subtype === 'error_during_execution') {
+        this.finishTurn(turn, undefined, this.interruptedReply(turn))
+        return
+      }
       // The CLI can synthesize a success-subtype result that still carries
       // is_error (the 404 during the proxy outage was one). Its `result` text is
       // the real explanation; "运行失败（success）" would read as noise.
@@ -797,7 +816,8 @@ export class ClaudeAgentClient implements ModelClient {
     }
     const text = turn.completedTexts.join('\n\n').trim()
     this.finishTurn(turn, undefined, { text: this.redact(text), sdkSessionId: this.sessionId,
-      compacted: turn.compacted, ...(turn.onProgress ? { timelineHandled: true } : {}) })
+      compacted: turn.compacted, ...(turn.generationActiveMs > 0 ? { generationMs: turn.generationActiveMs } : {}),
+      ...(turn.onProgress ? { timelineHandled: true } : {}) })
   }
 
   private emitToolEvents(message: SDKMessage, turn: OwnedTurn): void {
@@ -859,7 +879,8 @@ export class ClaudeAgentClient implements ModelClient {
     if (this.activeTurn !== turn) return
     for (const id of turn.activeToolIds) {
       turn.onToolEvent?.({ toolUseId: id, toolName: this.toolNames.get(id) ?? '未知工具',
-        phase: 'result', output: error ? this.redact(error.message) : '工具未返回结果。', isError: true })
+        phase: 'result', output: error ? this.redact(error.message)
+          : turn.interruptedByUser ? '已由人工中止。' : '工具未返回结果。', isError: true })
       this.toolNames.delete(id)
     }
     turn.activeToolIds.clear()
@@ -889,9 +910,30 @@ export class ClaudeAgentClient implements ModelClient {
     this.idleReleaseTimer = undefined
   }
 
+  /** 相邻流式增量的间隔 ≤1.5 秒视为同一段连续生成，累计为「生成时长」。
+   *  token/s 的通行口径是输出 token ÷ 生成耗时，工具执行与等待不算在内。 */
+  private noteGenerationDelta(turn: OwnedTurn): void {
+    const now = Date.now()
+    if (turn.lastGenerationAt !== undefined) {
+      const gap = now - turn.lastGenerationAt
+      if (gap >= 0 && gap <= 1500) turn.generationActiveMs += gap
+    }
+    turn.lastGenerationAt = now
+  }
+
+  private interruptedReply(turn: OwnedTurn): ModelReply {
+    return { text: this.redact(turn.partial.trim()), sdkSessionId: this.sessionId,
+      compacted: turn.compacted, interrupted: true, ...(turn.generationActiveMs > 0 ? { generationMs: turn.generationActiveMs } : {}),
+      ...(turn.onProgress ? { timelineHandled: true } : {}) }
+  }
+
   private failQuery(error: Error): void {
     const turn = this.activeTurn
-    if (turn) this.finishTurn(turn, error)
+    if (turn?.interruptedByUser) {
+      // The stream can end without a result when the CLI exits right after
+      // an interrupt; that is the same hand-back, not a crash.
+      this.finishTurn(turn, undefined, this.interruptedReply(turn))
+    } else if (turn) this.finishTurn(turn, error)
     this.messageChannel?.close()
     this.agentQuery = undefined
     this.queryAbort = undefined

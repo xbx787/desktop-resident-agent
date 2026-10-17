@@ -4,10 +4,12 @@ import { describe, expect, it } from 'vitest'
 
 const css = readFileSync(path.join(process.cwd(), 'src', 'renderer', 'panel.css'), 'utf8')
 
-/** The raw declaration block of a selector — enough for a flat value guard. */
+/** The raw declaration block of a selector — enough for a flat value guard.
+ *  Anchored to the start of a line so a prefixed variant (e.g.
+ *  `.panel-side-strip .panel-status`) cannot shadow the base rule. */
 function rule(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const match = css.match(new RegExp(escaped + '\\s*\\{([^}]*)\\}'))
+  const match = css.match(new RegExp('(?:^|\\n)' + escaped + '\\s*\\{([^}]*)\\}'))
   return match ? match[1] : ''
 }
 

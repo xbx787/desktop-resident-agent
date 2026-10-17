@@ -44,6 +44,17 @@ describe('TurnStats', () => {
     expect(html).toContain('1.2K token（25 token/s）')
   })
 
+  it('divides output by generation time, not by the whole turn', () => {
+    // 8 秒的轮里只生成了 4 秒（其余是工具等待）：200 token ÷ 4s = 50 token/s，
+    // 而不是 ÷8s 的 25——这是服务商与 benchmark 的通行口径。
+    const html = renderToStaticMarkup(<TurnStats running={false} entries={[]} metrics={{
+      startedAt: '2026-10-10T10:00:00.000Z', finishedAt: '2026-10-10T10:00:08.000Z',
+      usage: { total: 1234, input: 1000, output: 200 }, generationMs: 4000
+    }} />)
+    expect(html).toContain('50 token/s')
+    expect(html).not.toContain('25 token/s')
+  })
+
   it('stays silent about speed when the turn is too short or the split is unknown', () => {
     const brief = renderToStaticMarkup(<TurnStats running={false} entries={[]} metrics={{
       startedAt: '2026-10-10T10:00:00.000Z', finishedAt: '2026-10-10T10:00:00.400Z',

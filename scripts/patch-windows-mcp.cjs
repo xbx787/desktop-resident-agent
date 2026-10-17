@@ -76,6 +76,10 @@ for _index in range(_RIPPLE_FRAMES):
     _ripple_frame_bgra(_index, (255, 170, 55))`
       },
       {
+        old: `_NOTICE_SHORTCUT = "Ctrl + Alt + Shift + Backspace"`,
+        new: `_NOTICE_SHORTCUT = "ESC"`
+      },
+      {
         old: [
           `_NOTICE_TITLE = "AI is controlling this computer"`,
           `_NOTICE_TITLE = "AI 正在控制这台电脑"`
@@ -589,7 +593,131 @@ def _note_pointer_activity(owner: Any, dx: float, dy: float) -> None:
     if raw is None:
         return  # Null devices can be touchpads; do not infer source.
     _note_pointer_activity(owner, raw[1], raw[2])
-    if owner._suppress:`
+    if owner._suppress:`,
+        // The next hunk removes the trailing `if owner._suppress:` line, so
+        // the full replacement text never survives in the patched file; this
+        // marker is the durable evidence that this hunk has been applied.
+        present: `    _note_pointer_activity(owner, raw[1], raw[2])`
+      },
+      {
+        old: `        if wparam == 0x200 and owner._suppress:
+            owner._fast_pending = True  # Pause AI before queued movement is processed.
+            owner.input_ledger.block_new()
+`,
+        new: `        if wparam == 0x200 and owner._suppress:
+            # Pure pointer movement must not pause AI control: the user can
+            # move the mouse while the AI works without taking over.
+            pass
+`
+      },
+      {
+        old: `    _note_pointer_activity(owner, raw[1], raw[2])
+    if owner._suppress:
+        owner._fast_pending = True
+        owner.input_ledger.block_new()
+    owner._queue(("raw", *raw))`,
+        new: `    _note_pointer_activity(owner, raw[1], raw[2])
+    owner._queue(("raw", *raw))`
+      },
+      {
+        old: `        owner._queue(("point", data.pt.x, data.pt.y, int(wparam)))
+        if owner._suppress and not owner._emergency:
+            if time.monotonic() <= owner._deadline:
+                return 1
+            owner._fail_open()`,
+        new: `        owner._queue(("point", data.pt.x, data.pt.y, int(wparam)))
+        if owner._suppress and not owner._emergency:
+            if time.monotonic() <= owner._deadline:
+                # Physical input passes through while the AI works; a click
+                # or key press hands control back instead of being swallowed.
+                pass
+            else:
+                owner._fail_open()`
+      },
+      {
+        old: `        owner._queue(("key",))
+        if owner._suppress and not owner._emergency:
+            if time.monotonic() <= owner._deadline:
+                return 1
+            owner._fail_open()`,
+        new: `        owner._queue(("key",))
+        if owner._suppress and not owner._emergency:
+            if time.monotonic() <= owner._deadline:
+                pass  # Physical keys pass through; the coordinator yields.
+            else:
+                owner._fail_open()`
+      },
+      {
+        old: `            and vk == 0x08`,
+        new: `            and vk in _CHORD`
+      }
+    ]
+  },
+  {
+    file: 'tools/control_notifications.py',
+    hunks: [
+      {
+        old: `class ControlToolGate(Middleware):
+    """All present and future MCP tools use the same ownership decision."""`,
+        new: `_BACKGROUND_TOOLS = frozenset({"PowerShell", "FileSystem", "Process", "Registry"})
+
+
+class ControlToolGate(Middleware):
+    """Ownership gate for tools that touch the desktop.
+
+    Background tools (shell, files, processes, registry) never move the
+    pointer or send keystrokes, so they run without a desktop lease; gating
+    them made a stray mouse move abort a long command.
+    """`
+      },
+      {
+        old: `        name = context.message.name
+        if name == "ControlStatus":
+            return await call_next(context)`,
+        new: `        name = context.message.name
+        if name == "ControlStatus" or name in _BACKGROUND_TOOLS:
+            return await call_next(context)`
+      },
+      {
+        old: `        def reject_user_state() -> None:
+            status = self.controller.status()
+            if status["state"] not in ("ready", "ai"):
+                raise self._blocked(
+                    ControlBlocked(
+                        {"user": "USER_CONTROL", "takeover_pending": "TAKEOVER_PENDING"}.get(
+                            status["state"], "CONTROL_UNAVAILABLE"
+                        ),
+                        status,
+                    )
+                )
+
+        reject_user_state()`,
+        new: `        async def reject_user_state() -> None:
+            status = self.controller.status()
+            if status["state"] not in ("ready", "ai"):
+                # The hand-back window belongs to the user, but its last
+                # fraction is usually one stray keystroke with the pointer
+                # already still: wait it out off-loop and look once more.
+                # Any further input re-arms the window, so a real user wins.
+                wait = float(status.get("wait_seconds") or 0.0)
+                if status["state"] == "user" and 0.0 < wait <= 3.0:
+                    await asyncio.sleep(wait + 0.02)
+                    status = self.controller.status()
+            if status["state"] not in ("ready", "ai"):
+                raise self._blocked(
+                    ControlBlocked(
+                        {"user": "USER_CONTROL", "takeover_pending": "TAKEOVER_PENDING"}.get(
+                            status["state"], "CONTROL_UNAVAILABLE"
+                        ),
+                        status,
+                    )
+                )
+
+        await reject_user_state()`
+      },
+      {
+        old: `                reject_user_state()`,
+        new: `                await reject_user_state()`
       }
     ]
   },
@@ -621,11 +749,71 @@ class ControlBlocked(RuntimeError):`
       },
       {
         old: `            if now - self._last_physical_event < 10.0:`,
-        new: `            if now - self._last_physical_event < _HANDOFF_SECONDS:`
+        new: `            if now - self._last_physical_event < _HANDOFF_SECONDS:`,
+        // Covered by the `_tick_locked` hunk above in the current upstream
+        // text; keep the hunk for older installs, but treat the patched
+        // comparison as already present here.
+        present: `if self._state == "ready" and now - self._last_physical_event < _HANDOFF_SECONDS:`
       },
       {
         old: `            recent_input = self._last_physical_event > 0 and now - self._last_physical_event < 10.0`,
         new: `            recent_input = self._last_physical_event > 0 and now - self._last_physical_event < _HANDOFF_SECONDS`
+      },
+      {
+        old: `            if self._pressed or self._mouse_down:
+                raise ControlBlocked("PHYSICAL_INPUT_HELD", self._snapshot_locked(now))`,
+        new: `            # Physical presses no longer block a new AI call: pointer and
+            # keyboard activity pass through until ESC takes over.`
+      },
+      {
+        old: `        if self._state == "ai" and not self._active_calls and now >= self._lease_until:
+            if now - self._last_physical_event < _HANDOFF_SECONDS:
+                self._last_user = self._last_physical_event
+                return self._set_locked("user")
+            return self._set_locked("ready")`,
+        new: `        if self._state == "ai" and not self._active_calls and now >= self._lease_until:
+            # Only the takeover key ends a lease; physical activity does not.
+            return self._set_locked("ready")`
+      },
+      {
+        old: `                elif kind == "point" and self._state in ("ai", "takeover_pending"):
+                    if event[3] == 0x200:  # WM_MOUSEMOVE
+                        changed = self._candidate_locked(now) or changed
+                        if self._point_origin is None:
+                            self._point_origin = (event[1], event[2])
+                        ox, oy = self._point_origin
+                        if math.hypot(event[1] - ox, event[2] - oy) >= self.mouse_takeover_pixels:
+                            self._last_user = now
+                            changed = self._set_locked("user") or changed`,
+        new: `                elif kind == "point" and self._state in ("ai", "takeover_pending"):
+                    # Pointer movement and clicks pass through; only ESC ends
+                    # the AI's lease.
+                    pass`
+      },
+      {
+        old: `                elif kind == "raw" and self._state in ("ai", "takeover_pending"):
+                    changed = self._candidate_locked(now) or changed
+                    device, dx, dy = event[1:]
+                    if self._raw_device is not None and device != self._raw_device:
+                        self._raw_origin.clear()  # A new device starts a new segment.
+                    self._raw_device = device
+                    x, y = self._raw_origin.get(device, (0, 0))
+                    x, y = x + dx, y + dy
+                    self._raw_origin[device] = (x, y)
+                    if math.hypot(x, y) >= self.mouse_takeover_units:
+                        self._last_user = now
+                        changed = self._set_locked("user") or changed`,
+        new: `                elif kind == "raw" and self._state in ("ai", "takeover_pending"):
+                    pass  # Relative motion never ends a lease.`
+      }
+    ]
+  },
+  {
+    file: 'desktop/control_win32.py',
+    hunks: [
+      {
+        old: `_CHORD = {0x10, 0x11, 0x12, 0x08}`,
+        new: `_CHORD = {0x1B}  # ESC takes over from the AI.`
       }
     ]
   },
@@ -661,7 +849,7 @@ for (const { file, hunks } of PATCHES) {
   let text = readFileSync(target, 'utf8')
   let dirty = false
   hunks.forEach((hunk, index) => {
-    if (text.includes(hunk.new)) { skipped++; return }
+    if (text.includes(hunk.present ?? hunk.new)) { skipped++; return }
     const anchors = Array.isArray(hunk.old) ? hunk.old : [hunk.old]
     const anchor = anchors.find(old => text.includes(old))
     if (!anchor) {

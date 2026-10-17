@@ -29,7 +29,7 @@ const mainSnapshot: AppSnapshot = {
 const sideRuntime: AppSnapshot = {
   mode: 'claude_code', avatarState: 'idle', taskStatus: 'idle', modelReady: true, claudeCodeReady: true,
   conversationId: 'side-1', timelineRevision: 1,
-  timeline: [{ id: 'side-entry', kind: 'assistant', time: '2026-10-15T10:01:00.000Z', text: '侧聊里的内容' }]
+  timeline: [{ id: 'side-entry', kind: 'assistant', time: '2026-10-15T10:01:00.000Z', text: '临时会话里的内容' }]
 }
 
 const emptySide = (parentConversationId = 'main-a'): SideChatSnapshot => ({ sessionId: null, parentConversationId,
@@ -42,7 +42,7 @@ const side = (expanded = true, runtime = sideRuntime): SideChatSnapshot => ({
 const sideB = (expanded = true): SideChatSnapshot => ({
   sessionId: 'side-b', parentConversationId: 'main-b', expanded, queuePaused: false,
   snapshot: { ...sideRuntime, conversationId: 'side-b',
-    timeline: [{ id: 'side-b-entry', kind: 'assistant', time: '2026-10-15T10:04:00.000Z', text: 'B 侧聊里的内容' }] },
+    timeline: [{ id: 'side-b-entry', kind: 'assistant', time: '2026-10-15T10:04:00.000Z', text: 'B 临时会话里的内容' }] },
   pendingMessages: []
 })
 
@@ -191,11 +191,11 @@ describe('temporary side chat stays in the same panel', () => {
     const input = await editor()
     await act(async () => { type(input, '/side 先问个旁支问题'); enter(input) })
     expect(sendMain).toHaveBeenCalledWith('/side 先问个旁支问题', [], 'queue', 'main-a')
-    expect(host.textContent).toContain('侧聊里的内容')
+    expect(host.textContent).toContain('临时会话里的内容')
     expect(host.textContent).not.toContain('主线里的内容')
-    expect(host.textContent).toContain('临时侧聊，记录不进入会话库')
-    await act(async () => { type(input, '继续侧聊'); enter(input) })
-    expect(sendSide).toHaveBeenCalledWith('side-1', '继续侧聊', [], 'queue')
+    expect(host.textContent).toContain('临时会话，记录不进入会话库')
+    await act(async () => { type(input, '继续临时会话'); enter(input) })
+    expect(sendSide).toHaveBeenCalledWith('side-1', '继续临时会话', [], 'queue')
     expect(sendMain).toHaveBeenCalledTimes(1)
   })
 
@@ -205,14 +205,14 @@ describe('temporary side chat stays in the same panel', () => {
     await act(async () => { type(input, '主线草稿') })
     await act(async () => { for (const listener of sideListeners) listener(side()) })
     expect(input.value).toBe('')
-    await act(async () => { type(input, '侧聊草稿') })
-    await act(async () => click(host.querySelector('button[aria-label="收起侧聊，返回主线"]')!))
+    await act(async () => { type(input, '临时会话草稿') })
+    await act(async () => click(host.querySelector('button[aria-label="收起临时会话，返回主线"]')!))
     expect(input.value).toBe('主线草稿')
     expect(host.textContent).toContain('主线里的内容')
-    expect(host.textContent).not.toContain('侧聊里的内容')
-    await act(async () => click(host.querySelector('button[aria-label^="展开临时侧聊"]')!))
-    expect(input.value).toBe('侧聊草稿')
-    expect(saveDraft.mock.calls.every(([_, value]) => value !== '侧聊草稿')).toBe(true)
+    expect(host.textContent).not.toContain('临时会话里的内容')
+    await act(async () => click(host.querySelector('button[aria-label^="展开临时会话"]')!))
+    expect(input.value).toBe('临时会话草稿')
+    expect(saveDraft.mock.calls.every(([_, value]) => value !== '临时会话草稿')).toBe(true)
   })
 
   it.each(['side-first', 'main-first'] as const)(
@@ -220,45 +220,45 @@ describe('temporary side chat stays in the same panel', () => {
       await mount(selectedMain('main-a'))
       await editor()
       await publishSide(side())
-      await act(async () => { type((await editor()), 'A 侧聊未发出的内容'); drop(host, 'A-note.docx') })
+      await act(async () => { type((await editor()), 'A 临时会话未发出的内容'); drop(host, 'A-note.docx') })
       await act(async () => click(host.querySelector('button[aria-label="收起输入框"]')!))
       await act(async () => { await new Promise((resolve) => setTimeout(resolve, 250)) })
       expect(host.querySelector('textarea[aria-label="输入消息"]')).toBeNull()
 
       if (order === 'side-first') {
         await publishSide(sideB())
-        expect(host.textContent).toContain('侧聊里的内容')
+        expect(host.textContent).toContain('临时会话里的内容')
         await mount(selectedMain('main-b'))
       } else {
         await mount(selectedMain('main-b'))
         expect(host.textContent).toContain('B 主线里的内容')
         await publishSide(sideB())
       }
-      expect(host.textContent).toContain('B 侧聊里的内容')
+      expect(host.textContent).toContain('B 临时会话里的内容')
       expect((await editor()).value).toBe('')
-      await act(async () => { type((await editor()), 'B 侧聊未发出的内容'); drop(host, 'B-note.pdf') })
+      await act(async () => { type((await editor()), 'B 临时会话未发出的内容'); drop(host, 'B-note.pdf') })
 
       if (order === 'side-first') {
         await publishSide(side())
-        expect((await editor()).value).toBe('B 侧聊未发出的内容')
+        expect((await editor()).value).toBe('B 临时会话未发出的内容')
         await mount(selectedMain('main-a'))
       } else {
         await mount(selectedMain('main-a'))
         await publishSide(side())
       }
-      expect(host.textContent).toContain('侧聊里的内容')
-      expect(host.textContent).not.toContain('B 侧聊里的内容')
+      expect(host.textContent).toContain('临时会话里的内容')
+      expect(host.textContent).not.toContain('B 临时会话里的内容')
       expect(host.querySelector('textarea[aria-label="输入消息"]')).toBeNull()
       const aInput = await editor()
-      expect(aInput.value).toBe('A 侧聊未发出的内容')
+      expect(aInput.value).toBe('A 临时会话未发出的内容')
       expect(host.querySelector('[aria-label="已添加附件"]')?.textContent).toContain('A-note')
       expect(host.querySelector('[aria-label="已添加附件"]')?.textContent).not.toContain('B-note')
 
       await mount(selectedMain('main-b'))
-      expect((await editor()).value).toBe('B 侧聊未发出的内容')
+      expect((await editor()).value).toBe('B 临时会话未发出的内容')
       expect(host.querySelector('[aria-label="已添加附件"]')?.textContent).toContain('B-note')
       expect(host.querySelector('[aria-label="已添加附件"]')?.textContent).not.toContain('A-note')
-      expect(saveDraft.mock.calls.every(([_, value]) => !value.includes('侧聊未发出的内容'))).toBe(true)
+      expect(saveDraft.mock.calls.every(([_, value]) => !value.includes('临时会话未发出的内容'))).toBe(true)
     }
   )
 
@@ -267,23 +267,23 @@ describe('temporary side chat stays in the same panel', () => {
       await mount(selectedMain('main-a'))
       await editor()
       await publishSide(side())
-      await act(async () => type((await editor()), '折叠的 A 侧聊草稿'))
-      await act(async () => click(host.querySelector('button[aria-label="收起侧聊，返回主线"]')!))
-      expect(host.querySelector('button[aria-label^="展开临时侧聊"]')).not.toBeNull()
+      await act(async () => type((await editor()), '折叠的 A 临时会话草稿'))
+      await act(async () => click(host.querySelector('button[aria-label="收起临时会话，返回主线"]')!))
+      expect(host.querySelector('button[aria-label^="展开临时会话"]')).not.toBeNull()
       if (order === 'side-first') {
         await publishSide(emptySide('main-b'))
-        expect(host.querySelector('button[aria-label^="展开临时侧聊"]')).not.toBeNull()
+        expect(host.querySelector('button[aria-label^="展开临时会话"]')).not.toBeNull()
         await mount(selectedMain('main-b'))
       } else {
         await mount(selectedMain('main-b'))
         await publishSide(emptySide('main-b'))
       }
-      expect(host.querySelector('[aria-label="临时侧聊"]')).toBeNull()
+      expect(host.querySelector('[aria-label="临时会话"]')).toBeNull()
       expect((await editor()).value).toBe('B 保存的草稿')
       await mount(selectedMain('main-a'))
-      expect(host.querySelector('button[aria-label^="展开临时侧聊"]')).not.toBeNull()
-      await act(async () => click(host.querySelector('button[aria-label^="展开临时侧聊"]')!))
-      expect((await editor()).value).toBe('折叠的 A 侧聊草稿')
+      expect(host.querySelector('button[aria-label^="展开临时会话"]')).not.toBeNull()
+      await act(async () => click(host.querySelector('button[aria-label^="展开临时会话"]')!))
+      expect((await editor()).value).toBe('折叠的 A 临时会话草稿')
     }
   )
 
@@ -291,7 +291,7 @@ describe('temporary side chat stays in the same panel', () => {
     await mount(selectedMain('main-a'))
     await editor()
     await publishSide(side())
-    await act(async () => type((await editor()), '旧侧聊草稿'))
+    await act(async () => type((await editor()), '旧临时会话草稿'))
     await publishSide(emptySide('main-a'))
     await publishSide({ ...side(), sessionId: 'side-new', snapshot: { ...sideRuntime, conversationId: 'side-new' } })
     expect((await editor()).value).toBe('')
@@ -342,9 +342,9 @@ describe('temporary side chat stays in the same panel', () => {
     await act(async () => { for (const listener of sideListeners) listener(side()) })
     await act(async () => { drop(host, 'brief.docx') })
     expect(host.querySelector('[aria-label="已添加附件"]')?.textContent).toContain('brief')
-    await act(async () => click(host.querySelector('button[aria-label="收起侧聊，返回主线"]')!))
+    await act(async () => click(host.querySelector('button[aria-label="收起临时会话，返回主线"]')!))
     expect(host.querySelector('[aria-label="已添加附件"]')).toBeNull()
-    await act(async () => click(host.querySelector('button[aria-label^="展开临时侧聊"]')!))
+    await act(async () => click(host.querySelector('button[aria-label^="展开临时会话"]')!))
     expect(host.querySelector('[aria-label="已添加附件"]')?.textContent).toContain('brief')
     await act(async () => { type((await editor()), '看看文件'); enter((await editor())) })
     expect(sendSide).toHaveBeenCalledWith('side-1', '看看文件', [
@@ -353,10 +353,10 @@ describe('temporary side chat stays in the same panel', () => {
     let finishFile!: (attachment: { name: string; content: string; path: string }) => void
     prepareDroppedFile.mockImplementationOnce(() => new Promise((resolve) => { finishFile = resolve }))
     await act(async () => { drop(host, 'later.txt') })
-    await act(async () => click(host.querySelector('button[aria-label="收起侧聊，返回主线"]')!))
+    await act(async () => click(host.querySelector('button[aria-label="收起临时会话，返回主线"]')!))
     await act(async () => finishFile({ name: 'later.txt', content: '', path: 'C:\\workspace\\later.txt' }))
     expect(host.querySelector('[aria-label="已添加附件"]')).toBeNull()
-    await act(async () => click(host.querySelector('button[aria-label^="展开临时侧聊"]')!))
+    await act(async () => click(host.querySelector('button[aria-label^="展开临时会话"]')!))
     expect(host.querySelector('[aria-label="已添加附件"]')?.textContent).toContain('later')
   })
 
@@ -371,7 +371,7 @@ describe('temporary side chat stays in the same panel', () => {
     await act(async () => { type(input, '/side 失败后保留的问题'); enter(input) })
     expect(input.value).toBe('/side 失败后保留的问题')
     expect(host.textContent).toContain('主线里的内容')
-    expect(host.querySelector('[aria-label="临时侧聊"]')).toBeNull()
+    expect(host.querySelector('[aria-label="临时会话"]')).toBeNull()
     expect(sendSide).not.toHaveBeenCalled()
     expect(saveDraft.mock.calls.some(([id, value]) => id === 'main-a' && value === '/side 失败后保留的问题')).toBe(false)
   })
@@ -380,12 +380,12 @@ describe('temporary side chat stays in the same panel', () => {
     await mount()
     const input = await editor()
     await act(async () => { type(input, '/'); })
-    expect(host.querySelector('[aria-label="选择命令"]')?.textContent).toContain('填写问题后开启临时侧聊')
+    expect(host.querySelector('[aria-label="选择命令"]')?.textContent).toContain('填写问题后开启临时会话')
     sideRuntimeState = { ...sideRuntime, taskStatus: 'executing' }
     await act(async () => { for (const listener of sideListeners) listener(side(true, sideRuntimeState)) })
-    await act(async () => click(host.querySelector('button[aria-label="收起侧聊，返回主线"]')!))
-    expect(host.querySelector('button[aria-label="展开临时侧聊，正在执行"]')).not.toBeNull()
-    await act(async () => click(host.querySelector('button[aria-label^="展开临时侧聊"]')!))
+    await act(async () => click(host.querySelector('button[aria-label="收起临时会话，返回主线"]')!))
+    expect(host.querySelector('button[aria-label="展开临时会话，正在执行"]')).not.toBeNull()
+    await act(async () => click(host.querySelector('button[aria-label^="展开临时会话"]')!))
     await act(async () => { type(input, '/'); })
     const choices = host.querySelector('[aria-label="选择命令"]')?.textContent ?? ''
     expect(choices).toContain('/review')
@@ -403,16 +403,16 @@ describe('temporary side chat stays in the same panel', () => {
   it('restores a side queued text attachment to its own composer after a collapse, then resends the content', async () => {
     await mount()
     const queued = { id: 'side-queue-1', text: '待发正文', createdAt: '2026-10-15T10:02:00.000Z',
-      attachments: [{ name: 'note.txt', content: '只给侧聊的文字', path: 'C:\\workspace\\note.txt' }] }
+      attachments: [{ name: 'note.txt', content: '只给临时会话的文字', path: 'C:\\workspace\\note.txt' }] }
     await act(async () => { for (const listener of sideListeners) listener({ ...side(), pendingMessages: [queued] }) })
     let releaseRemove!: () => void
     removeSideQueuedMessage.mockImplementationOnce(() => new Promise<void>((resolve) => { releaseRemove = resolve }))
     await act(async () => click(host.querySelector('button[aria-label="修改待发送消息：待发正文"]')!))
-    await act(async () => click(host.querySelector('button[aria-label="收起侧聊，返回主线"]')!))
+    await act(async () => click(host.querySelector('button[aria-label="收起临时会话，返回主线"]')!))
     await act(async () => releaseRemove())
     expect((await editor()).value).toBe('')
     expect(host.querySelector('[aria-label="已添加附件"]')).toBeNull()
-    await act(async () => click(host.querySelector('button[aria-label^="展开临时侧聊"]')!))
+    await act(async () => click(host.querySelector('button[aria-label^="展开临时会话"]')!))
     const sideInput = await editor()
     expect(sideInput.value).toBe('待发正文')
     expect(host.querySelector('[aria-label="已添加附件"]')?.textContent).toContain('note')
@@ -431,10 +431,10 @@ describe('temporary side chat stays in the same panel', () => {
     const input = await editor()
     await act(async () => type(input, 'A 私有草稿'))
     await act(async () => { for (const listener of sideListeners) listener(side()) })
-    await act(async () => type(input, 'A 侧聊草稿'))
+    await act(async () => type(input, 'A 临时会话草稿'))
     if (order === 'side-first') {
       await act(async () => { for (const listener of sideListeners) listener(emptySide('main-b')) })
-      expect(input.value).toBe('A 侧聊草稿')
+      expect(input.value).toBe('A 临时会话草稿')
       await mount(switchedMain(action))
     } else {
       await mount(switchedMain(action))
@@ -444,15 +444,15 @@ describe('temporary side chat stays in the same panel', () => {
     expect(nextInput.value).toBe('B 保存的草稿')
     expect(host.textContent).toContain('B 主线里的内容')
     expect(host.querySelector('[data-entry-id="main-entry"]')).toBeNull()
-    expect(host.querySelector('[aria-label="临时侧聊"]')).toBeNull()
+    expect(host.querySelector('[aria-label="临时会话"]')).toBeNull()
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 850)) })
     expect(saveDraft.mock.calls.every(([id, value]) => id !== 'main-b' || value !== 'A 私有草稿')).toBe(true)
-    expect(saveDraft.mock.calls.every(([id, value]) => id !== 'main-b' || value !== 'A 侧聊草稿')).toBe(true)
+    expect(saveDraft.mock.calls.every(([id, value]) => id !== 'main-b' || value !== 'A 临时会话草稿')).toBe(true)
     if (action === 'archive') {
       await act(async () => { for (const listener of sideListeners) listener(side()) })
       await mount(mainSnapshot)
       expect((await editor()).value).toBe('A 私有草稿')
-      expect(host.querySelector('[aria-label="临时侧聊"]')).toBeNull()
+      expect(host.querySelector('[aria-label="临时会话"]')).toBeNull()
     }
   })
 })

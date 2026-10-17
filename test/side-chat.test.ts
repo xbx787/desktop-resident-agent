@@ -53,20 +53,20 @@ describe('temporary side chat', () => {
     const { side, runtimes, persistFlags, history } = harness({
       respond: async (lines) => {
         seen.push(structuredClone(lines))
-        return { text: '侧聊答案', sdkSessionId: 'child-sdk' }
+        return { text: '临时会话答案', sdkSessionId: 'child-sdk' }
       }
     })
     const id = side.open().sessionId!
     expect(persistFlags).toEqual([false])
     expect(side.getSnapshot().snapshot?.timeline).toEqual([])
-    await side.send(id, '侧聊问题')
+    await side.send(id, '临时会话问题')
     await vi.waitFor(() => expect(side.getSnapshot().snapshot?.taskStatus).toBe('done'))
-    expect(seen[0].map(({ content }) => content)).toEqual(['主线问题', '主线答案', '侧聊问题'])
+    expect(seen[0].map(({ content }) => content)).toEqual(['主线问题', '主线答案', '临时会话问题'])
     expect(history).toEqual([
       { role: 'user', content: '主线问题' }, { role: 'assistant', content: '主线答案' }
     ])
     expect(runtimes[0].exportConversationState().sdkSessionId).toBe('child-sdk')
-    expect(side.getSnapshot().snapshot?.timeline.map(({ text }) => text)).toEqual(['侧聊问题', '侧聊答案'])
+    expect(side.getSnapshot().snapshot?.timeline.map(({ text }) => text)).toEqual(['临时会话问题', '临时会话答案'])
     await side.discard(id)
     expect(side.getSnapshot().sessionId).toBeNull()
   })
@@ -76,7 +76,7 @@ describe('temporary side chat', () => {
     expect(() => validateSideChatMessage('/goal 继续', [], 'claude_code')).toThrow('仅适用于主会话')
     expect(() => validateSideChatMessage('/compact', [], 'claude_code')).toThrow('仅适用于主会话')
     expect(() => validateSideChatMessage('/new 标题', [], 'claude_code')).toThrow('仅适用于主会话')
-    expect(() => validateSideChatMessage('/side 问题', [], 'claude_code')).toThrow('已经在临时侧聊中')
+    expect(() => validateSideChatMessage('/side 问题', [], 'claude_code')).toThrow('已经在临时会话中')
     expect(() => validateSideChatMessage('', [{ name: 'file.docx', content: '', path: path.resolve('file.docx') }], 'live'))
       .toThrow('没有本地文件读取工具')
     expect(validateSideChatMessage('', [{ name: 'note.txt', content: '内容' }], 'live')).toBe('')
@@ -298,7 +298,7 @@ describe('temporary side chat', () => {
     const gate = deferred<ModelReply>()
     const { side } = harness({ respond: () => gate.promise })
     const id = side.open().sessionId!
-    await side.send(id, '仍在侧聊')
+    await side.send(id, '仍在临时会话')
     await vi.waitFor(() => expect(side.isBusyForParent('parent-a')).toBe(true))
     const summary: ConversationSummary = {
       id: 'parent-a', title: 'A', createdAt: '', updatedAt: '', lastActivityAt: '',

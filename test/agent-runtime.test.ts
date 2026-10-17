@@ -159,6 +159,16 @@ describe('task cancellation', () => {
     expect(runtime.exportConversationState().spentYuan).toBeUndefined()
   })
 
+  it('marks a user-interrupted reply as cancelled instead of failed', async () => {
+    const model: ModelClient = { respond: async () => ({ text: '', interrupted: true }) }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    await runtime.sendMessage('跑个长命令')
+    const snapshot = runtime.getSnapshot()
+    expect(snapshot.taskStatus).toBe('cancelled')
+    expect(snapshot.avatarState).toBe('idle')
+    expect(snapshot.timeline.some((entry) => entry.kind === 'system' && entry.text.includes('人工中止'))).toBe(true)
+  })
+
   it('settles failed and stopped turns once even when later events arrive', async () => {
     const usage = { total: 100_000, input: 50_000, output: 50_000 }
     const failing: ModelClient = { respond: async (_history, _signal, _progress, _session, _tool, onTaskUsage) => {

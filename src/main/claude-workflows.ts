@@ -31,8 +31,8 @@ const VALID_NAME = /^[a-zA-Z0-9][a-zA-Z0-9_-]*$/
 /** Commands implemented by the app itself; SDK commands are appended at runtime. */
 export const APP_SLASH_COMMANDS: readonly ClaudeWorkflowOption[] = [
   { name: 'new', description: '新建对话，保留原对话', kind: 'command', source: 'builtin' },
-  { name: 'side', description: '展开临时侧聊，不写入主会话', kind: 'command', source: 'builtin' },
-  { name: 'btw', description: '展开临时侧聊', kind: 'command', source: 'builtin' },
+  { name: 'side', description: '展开临时会话，不写入主会话', kind: 'command', source: 'builtin' },
+  { name: 'btw', description: '展开临时会话', kind: 'command', source: 'builtin' },
   { name: 'sessions', description: '打开会话库', kind: 'command', source: 'builtin' },
   { name: 'model', description: '打开模型与上下文面板', kind: 'command', source: 'builtin' },
   { name: 'help', description: '查看可用命令', kind: 'command', source: 'builtin' },

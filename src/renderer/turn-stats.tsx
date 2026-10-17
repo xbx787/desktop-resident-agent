@@ -76,10 +76,15 @@ export function TurnStats({ entries, metrics, running, showMissingUsage = false 
   // backend may not report output at all yet: zero means "not counted yet",
   // not "zero speed", so the reading simply stays absent until it has one.
   const elapsedSeconds = Number.isFinite(started) ? Math.max(0, (ended - started) / 1000) : 0;
+  // 通行口径：输出 token ÷ 生成耗时（连续流式增量的累计时长，不含工具执行与
+  // 等待）。旧记录没存生成时长，才回退到整轮墙钟。
   // 速度只在一轮结束后给出：思考中这个后端不报输出量，估算出来的速率不可信
   // （用户明确要求思考中途不显示）。
-  const outputRate = !running && effectiveUsage?.output !== undefined && effectiveUsage.output > 0 && elapsedSeconds >= 1
-    ? effectiveUsage.output / elapsedSeconds : null;
+  const generationSeconds = metrics?.generationMs !== undefined && metrics.generationMs >= 1000
+    ? metrics.generationMs / 1000 : null;
+  const rateSeconds = generationSeconds ?? (elapsedSeconds >= 1 ? elapsedSeconds : null);
+  const outputRate = !running && rateSeconds !== null && effectiveUsage?.output !== undefined && effectiveUsage.output > 0
+    ? effectiveUsage.output / rateSeconds : null;
   const rateLabel = outputRate === null ? null
     : `${outputRate >= 10 ? Math.round(outputRate) : Number(outputRate.toFixed(1))} token/s`;
   const formulaRows = effectiveUsage ? tokenBreakdownRows(effectiveUsage) : [];

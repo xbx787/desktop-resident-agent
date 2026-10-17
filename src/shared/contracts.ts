@@ -233,6 +233,9 @@ export interface TaskMetrics {
   /** 记账时（这一轮结束那一刻）所落的峰谷档，随记录一起持久化。账单的乘数
    *  展示按它走：峰时跑的轮永远按峰时看，不看「此刻几点」。 */
   priceTier?: 'peak' | 'off_peak'
+  /** 连续生成的累计时长（毫秒）——token/s 的分母，不含工具执行与等待。
+   *  旧记录没有这个字段，展示时回退到整轮墙钟。 */
+  generationMs?: number
 }
 
 /** One choice inside an ask-user question; the description shows under the label. */

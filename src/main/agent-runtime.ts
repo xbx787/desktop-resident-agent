@@ -685,6 +685,10 @@ export class AgentRuntime {
 
   private handleModelReply(reply: ModelReply, progressEntryId?: string): void {
     this.closeThinkingEntries()
+    // 生成时长随本轮记录落盘：账单的 token/s 按它算（不含工具执行与等待）。
+    if (reply.generationMs !== undefined && this.state.taskMetrics) {
+      this.state.taskMetrics.generationMs = reply.generationMs
+    }
     if (this.state.mode === 'claude_code' && reply.sdkSessionId) this.sdkSessionId = reply.sdkSessionId
     if (reply.compacted) this.add('system', '上下文已自动压缩，可继续当前会话。')
     if (reply.text) {
@@ -700,6 +704,12 @@ export class AgentRuntime {
     }
     if (reply.note) {
       this.offerNote(reply.note.title, reply.note.content)
+    } else if (reply.interrupted) {
+      // The panel's kill switch did this. Show a hand-back, not a failure:
+      // the SDK's own Esc would otherwise surface as "运行失败".
+      this.state.taskStatus = 'cancelled'
+      this.state.avatarState = 'idle'
+      this.add('system', '已由人工中止；会话和待发送消息都保留。')
     } else {
       this.state.taskStatus = 'done'
       // 'success', not 'idle': the portrait reads it as "the reply just

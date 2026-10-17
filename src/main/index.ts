@@ -229,16 +229,31 @@ controller = new ConversationController(
         model: DEFAULT_CLAUDE_MODEL, smallModel: 'deepseek-flash' }
     : undefined
 )
+/** Post-turn reflection — fact extraction and growth observation — is side
+ *  work: it reads the finished turn and writes memory, and nothing in the
+ *  next message waits on it. A serial chain keeps it ordered and off the
+ *  drain's critical path, so memory becomes visible one turn later instead
+ *  of holding a queued message behind a model request for up to 20 seconds. */
+let postTurnWork: Promise<void> = Promise.resolve()
+function schedulePostTurn(task: () => Promise<void>): void {
+  postTurnWork = postTurnWork.then(task).catch((error: unknown) => {
+    console.error('Conversation post-turn work failed:', error)
+  })
+}
+
 controller.setTurnHooks({
   memoryContext: () => memory.contextBlock(),
-  afterSuccessfulTurn: async (turn) => {
-    await memory.observeTurn({ ...turn, success: true, provider: await backgroundProvider() })
-    const before = new Set((await growth.list()).map((item) => item.id))
-    await growth.observeTurn(turn.conversationId, turn.timeline)
-    const added = (await growth.list()).filter((item) => !before.has(item.id))
-    if (added.length && Notification.isSupported()) {
-      new Notification({ title: '小鲸发现一个改进机会', body: '可在设置的“成长”页查看依据，再决定是否实验。' }).show()
-    }
+  afterSuccessfulTurn: (turn) => {
+    schedulePostTurn(async () => {
+      await memory.observeTurn({ ...turn, success: true, provider: await backgroundProvider() })
+      const before = new Set((await growth.list()).map((item) => item.id))
+      await growth.observeTurn(turn.conversationId, turn.timeline)
+      const added = (await growth.list()).filter((item) => !before.has(item.id))
+      if (added.length && Notification.isSupported()) {
+        new Notification({ title: '小鲸发现一个改进机会', body: '可在设置的“成长”页查看依据，再决定是否实验。' }).show()
+      }
+    })
+    return Promise.resolve()
   }
 })
 
@@ -686,7 +701,7 @@ function registerIpc(): void {
   })
   ipcMain.handle('pet:growth:adopt', async (event, id: unknown) => {
     if (!settingsTrusted(event) || typeof id !== 'string') throw new Error('采纳请求无效。')
-    if (!activeController().allConversationsIdle() || sideChat.isBusy()) throw new Error('请等其他会话和临时侧聊完成或停止后再采纳。')
+    if (!activeController().allConversationsIdle() || sideChat.isBusy()) throw new Error('请等其他会话和临时会话完成或停止后再采纳。')
     const adopted = await growth.adopt(id)
     if (adopted.version) restartWhenIdle(adopted.version)
     return adopted
@@ -728,26 +743,26 @@ function registerIpc(): void {
     return sideChat.open()
   })
   ipcMain.handle('pet:side:set-expanded', (event, sessionId: unknown, expanded: unknown) => {
-    if (!trusted(event) || typeof sessionId !== 'string' || typeof expanded !== 'boolean') throw new Error('临时侧聊状态无效。')
+    if (!trusted(event) || typeof sessionId !== 'string' || typeof expanded !== 'boolean') throw new Error('临时会话状态无效。')
     return sideChat.setExpanded(sessionId, expanded)
   })
   ipcMain.handle('pet:side:discard', (event, sessionId: unknown) => {
-    if (!trusted(event) || typeof sessionId !== 'string') throw new Error('临时侧聊编号无效。')
+    if (!trusted(event) || typeof sessionId !== 'string') throw new Error('临时会话编号无效。')
     return sideChat.discard(sessionId)
   })
   ipcMain.handle('pet:side:send', async (event, sessionId: unknown, text: unknown, attachments: unknown, strategy: unknown) => {
     if (!trusted(event) || typeof sessionId !== 'string' || typeof text !== 'string' ||
         !validAttachmentList(attachments ?? []) ||
-        (strategy !== undefined && strategy !== 'queue' && strategy !== 'steer')) throw new Error('临时侧聊消息无效。')
+        (strategy !== undefined && strategy !== 'queue' && strategy !== 'steer')) throw new Error('临时会话消息无效。')
     const resolved = await resolveAttachments((attachments ?? []) as UserAttachment[])
     await sideChat.send(sessionId, text, resolved, strategy as 'queue' | 'steer' | undefined)
   })
   ipcMain.handle('pet:side:stop', (event, sessionId: unknown) => {
-    if (!trusted(event) || typeof sessionId !== 'string') throw new Error('临时侧聊编号无效。')
+    if (!trusted(event) || typeof sessionId !== 'string') throw new Error('临时会话编号无效。')
     sideChat.stop(sessionId)
   })
   ipcMain.handle('pet:side:interrupt', (event, sessionId: unknown) => {
-    if (!trusted(event) || typeof sessionId !== 'string') throw new Error('临时侧聊编号无效。')
+    if (!trusted(event) || typeof sessionId !== 'string') throw new Error('临时会话编号无效。')
     return sideChat.interrupt(sessionId)
   })
   ipcMain.handle('pet:side:remove-queued', (event, sessionId: unknown, messageId: unknown) => {
@@ -775,11 +790,11 @@ function registerIpc(): void {
     return sideChat.answerPlan(sessionId, id, approved)
   })
   ipcMain.handle('pet:side:get-context-usage', (event, sessionId: unknown) => {
-    if (!trusted(event) || typeof sessionId !== 'string') throw new Error('临时侧聊编号无效。')
+    if (!trusted(event) || typeof sessionId !== 'string') throw new Error('临时会话编号无效。')
     return sideChat.getContextUsage(sessionId)
   })
   ipcMain.handle('pet:side:compact', (event, sessionId: unknown) => {
-    if (!trusted(event) || typeof sessionId !== 'string') throw new Error('临时侧聊编号无效。')
+    if (!trusted(event) || typeof sessionId !== 'string') throw new Error('临时会话编号无效。')
     return sideChat.compact(sessionId)
   })
   ipcMain.handle('pet:side:set-model-mode', (event, sessionId: unknown, mode: unknown) => {
