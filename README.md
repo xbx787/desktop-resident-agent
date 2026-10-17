@@ -1,6 +1,8 @@
 # 小鲸：桌面常驻智能体
 
-一个住在 Windows 桌面上的鲸鱼少女智能体：角色常驻通知区域与桌面角落，点开就是完整的对话气泡。底层是 Claude Agent SDK（可接入任意 Anthropic 兼容厂商），能自主使用本机文件与命令工具完成真实工作。
+这是一个住在 Windows 桌面上的鲸鱼少女~~大肥鱼~~智能体：角色常驻通知区域与桌面角落，点开就是完整的对话气泡。
+
+基于 Claude Agent SDK 开发，默认使用 Deepseek API（用户需自备 API Key，首次运行时会引导用户获取），能自主使用本机文件与命令工具完成真实工作。
 
 仓库地址：<https://github.com/xbx787/desktop-resident-agent>。逐版更新见 [CHANGELOG.md](./CHANGELOG.md)。
 
@@ -22,7 +24,7 @@
 
 ## 安装与运行（成品）
 
-发布包在 `release/whale-companion-v<版本>`。桌面与项目根各有一个 `小鲸.lnk`，双击即可；运行后驻留通知区域。
+发布包在 `release/whale-companion-v<版本>`。桌面与项目根各有一个 `小鲸.lnk`，双击即可；运行后驻留通知栏。
 
 首次使用需在**设置窗口 → 模型**里添加一个模型配置（填入厂商与 API Key）。运行时数据（会话、附件、设定、Claude 配置）保存在 `data/` 目录。
 
