@@ -19,19 +19,10 @@
 ### 下载
 
 1. 打开项目的 Releases 页面：<https://github.com/xbx787/desktop-resident-agent/releases/latest>
-2. 下载两个文件：
-   - `whale-companion-v<版本>-win-x64.zip`
-   - `whale-companion-v<版本>.sha256.txt`
+2. 下载 `whale-companion-v<版本>-win-x64.zip`。
 3. 仓库是公开的，直接下载即可；如果本机访问 GitHub 受限，需要自备可用的网络方式。
 
-下载后可以校验一下文件完整性（把文件名换成实际版本）：
-
-```powershell
-Get-FileHash .\whale-companion-v0.0.75-win-x64.zip -Algorithm SHA256
-Get-Content .\whale-companion-v0.0.75.sha256.txt
-```
-
-两条命令输出的 SHA-256 应该一致。
+文件完整性由发布流程负责校验，不需要手动核对。
 
 ### 解压与启动
 
