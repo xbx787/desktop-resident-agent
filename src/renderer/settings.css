@@ -28,7 +28,7 @@ button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55
 .settings-section { border: 1px solid rgba(184, 209, 255, .28); border-radius: 13px; background: rgba(9, 21, 53, .5); overflow: hidden; }
 .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 82px; padding: 12px 18px; }
 .settings-row + .settings-row { border-top: 1px solid rgba(194, 215, 255, .16); }
-.settings-copy { min-width: 0; }
+.settings-copy { flex: 1; min-width: 0; }
 .settings-copy label { font-size: var(--text-md); font-weight: 600; }
 .settings-copy p { margin: 5px 0 0; color: #a9bee4; font-size: var(--text-sm); line-height: 1.5; }
 .settings-row form { display: flex; align-items: center; gap: 7px; flex: none; }
@@ -36,7 +36,7 @@ button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55
 .settings-row input:focus-visible, .settings-row select:focus-visible, .settings-row button:focus-visible { outline: 2px solid #b4d1ff; outline-offset: 2px; }
 .settings-row input { width: 52px; padding: 0 7px; text-align: center; }
 .settings-row select { width: 80px; padding: 0 8px; }
-.settings-row button { height: 32px; padding: 0 12px; border: 0; border-radius: 8px; color: #172b56; background: #bbd2ff; font-weight: 600; }
+.settings-row button { flex: none; height: 32px; padding: 0 12px; border: 0; border-radius: 8px; color: #172b56; background: #bbd2ff; font-weight: 600; }
 .settings-row button:not(:disabled):hover { background: #d8e5ff; }
 /* Two classes on purpose: the generic `.settings-row button` rule (0,1,1)
    would otherwise stretch the switch into a padded block. */
@@ -65,7 +65,7 @@ button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55
 .settings-persona small { color: #8fa6cf; font-size: var(--text-2xs); line-height: 1.4; }
 /* 工作目录：路径单独一行并允许断行；迁移确认嵌在设置行下面。 */
 .settings-workspace-row { align-items: flex-start; }
-.settings-workspace-path { display: block; margin-top: 7px; padding: 4px 7px; border-radius: 6px; color: #cfe0ff; background: rgba(160, 191, 251, .08); font-family: var(--font-numeric); font-size: var(--text-2xs); line-height: 1.5; word-break: break-all; }
+.settings-workspace-path { display: block; margin-top: 7px; padding: 5px 8px; border-radius: 6px; color: #cfe0ff; background: rgba(160, 191, 251, .08); font-family: var(--font-numeric); font-size: var(--text-sm); line-height: 1.5; word-break: break-all; }
 .settings-workspace-confirm { display: grid; gap: 7px; margin: 0 18px 14px; padding: 11px 12px; border: 1px solid rgba(240, 196, 123, .42); border-radius: 10px; background: rgba(240, 196, 123, .07); }
 .settings-workspace-confirm p { margin: 0; color: #dce8ff; font-size: var(--text-sm); line-height: 1.55; }
 .settings-workspace-confirm code { color: #ffe0ac; word-break: break-all; }

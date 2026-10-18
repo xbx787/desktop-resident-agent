@@ -5,7 +5,8 @@
 //      cursor become rounded strokes on a calm palette and a soft blue halo.
 //   2. Click: the cursor now glides to the target (~8 steps x 8 ms) and a
 //      ripple expands from the click point on the control overlay.
-//   3. Notice copy: name Xiaojing in the takeover bar. The overlay itself is
+//   3. Notice copy: name Xiaojing in the takeover bar, show the lowercase
+//      `esc` key label, and say it exits control. The overlay itself is
 //      upstream 0.8.6+.
 //
 // Every hunk anchors on exact upstream text, is idempotent (a hunk whose
@@ -80,6 +81,10 @@ for _index in range(_RIPPLE_FRAMES):
         new: `_NOTICE_SHORTCUT = "ESC"`
       },
       {
+        old: `_NOTICE_SHORTCUT = "ESC"`,
+        new: `_NOTICE_SHORTCUT = "esc"`
+      },
+      {
         old: [
           `_NOTICE_TITLE = "AI is controlling this computer"`,
           `_NOTICE_TITLE = "AI 正在控制这台电脑"`
@@ -89,6 +94,10 @@ for _index in range(_RIPPLE_FRAMES):
       {
         old: `_NOTICE_HINT = f"Press {_NOTICE_SHORTCUT} to take over"`,
         new: `_NOTICE_HINT = f"按 {_NOTICE_SHORTCUT} 接管控制"`
+      },
+      {
+        old: `_NOTICE_HINT = f"按 {_NOTICE_SHORTCUT} 接管控制"`,
+        new: `_NOTICE_HINT = f"按 {_NOTICE_SHORTCUT} 退出控制"`
       },
       {
         old: `            title_font = ImageFont.truetype(str(font_dir / "seguisb.ttf"), hint_size + 8)
