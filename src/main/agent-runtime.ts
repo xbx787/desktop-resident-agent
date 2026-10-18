@@ -707,7 +707,7 @@ export class AgentRuntime {
     this.state.avatarState = 'idle'
     this.closeThinkingEntries()
     this.finishRunningTools('已停止')
-    this.add('system', reason ?? (this.state.mode === 'claude_code' ? '已请求停止 Claude Code；正在执行的外部动作可能仍会完成。' : '任务已停止，待批准的操作已取消。'))
+    this.add('system', reason ?? (this.state.mode === 'claude_code' ? '已停止思考；正在执行的外部动作可能仍会完成。' : '任务已停止，待批准的操作已取消。'))
   }
 
   /** Releases the SDK query as well as cancelling the current turn. Closing a

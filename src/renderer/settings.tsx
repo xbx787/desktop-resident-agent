@@ -33,7 +33,7 @@ interface ModelFormState {
   advanced: boolean
 }
 
-const SETTINGS_TABS = [
+const BASE_SETTINGS_TABS = [
   { id: 'conversation', label: '对话' },
   { id: 'appearance', label: '外观' },
   { id: 'models', label: '模型' },
@@ -41,7 +41,13 @@ const SETTINGS_TABS = [
   { id: 'identity', label: '称呼' },
   { id: 'avatar', label: '人设' }
 ] as const
-type SettingsTab = typeof SETTINGS_TABS[number]['id']
+type SettingsTab = typeof BASE_SETTINGS_TABS[number]['id'] | 'growth'
+/** Growth experiments stay a local development tool; the packaged build
+ *  ships the stable tab set only. */
+const SETTINGS_TABS: ReadonlyArray<{ id: SettingsTab; label: string }> = [
+  ...BASE_SETTINGS_TABS,
+  ...(import.meta.env.MODE === 'development' ? [{ id: 'growth' as const, label: '成长' }] : [])
+]
 
 /** 界面尺寸档：小是原来的样子，中、大各上调一档。 */
 const UI_SIZE_OPTIONS: ReadonlyArray<{ id: ConversationSettings['uiSize']; label: string }> = [
@@ -460,7 +466,7 @@ export function SettingsPage() {
         <div className="settings-row settings-workspace-row">
           <div className="settings-copy">
             <label>工作目录</label>
-            <p>小鲸读写和搜索文件都从这个目录开始。迁移不会移动旧目录里的文件，已有对话会在下一条消息时重新连接。</p>
+            <p>小鲸读写和搜索文件都从这个目录开始。迁移不会移动旧目录里的文件，已有对话不受影响，下一条消息会在新目录里处理。</p>
             <code className="settings-workspace-path">{workspace?.path ?? '读取中…'}</code>
           </div>
           <button type="button" disabled={!workspace || workspaceBusy} onClick={() => { void chooseWorkspace(); }}>
@@ -469,7 +475,7 @@ export function SettingsPage() {
         </div>
         {workspacePending && <div className="settings-workspace-confirm" role="alertdialog" aria-label="确认迁移工作目录">
           <p>将工作目录迁移到 <code>{workspacePending}</code>？</p>
-          <p>之后的消息在新目录中工作；正在运行的任务不能迁移；旧目录里的文件保持原样。</p>
+          <p>之后的消息在新目录中工作；请先等正在运行的任务完成再迁移；旧目录里的文件保持原样。</p>
           <div className="settings-workspace-confirm-actions">
             <button type="button" disabled={workspaceBusy} onClick={() => setWorkspacePending(null)}>取消</button>
             <button type="button" disabled={workspaceBusy} onClick={() => { void migrateWorkspace(); }}>确认迁移</button>
@@ -511,7 +517,7 @@ export function SettingsPage() {
       </section>}
       {tab === 'appearance' && <section className="settings-section" role="tabpanel" id="settings-panel-appearance" aria-labelledby="settings-tab-appearance">
         <div className="settings-row">
-          <div className="settings-copy"><label>界面尺寸</label><p>小是现在的样子；中、大逐级把整套字号放大。改完立刻生效，所有窗口一起变。</p></div>
+          <div className="settings-copy"><label>界面尺寸</label></div>
           <div className="settings-size-picker" role="radiogroup" aria-label="界面尺寸">
             {UI_SIZE_OPTIONS.map((option) => {
               const active = (settings?.uiSize ?? 'small') === option.id
@@ -522,7 +528,7 @@ export function SettingsPage() {
           </div>
         </div>
         <div className="settings-row">
-          <div className="settings-copy"><label>人物大小</label><p>小是现在的尺寸；中、大逐级放大桌面人物，命中区会跟着变。</p></div>
+          <div className="settings-copy"><label>人物大小</label></div>
           <div className="settings-size-picker" role="radiogroup" aria-label="人物大小">
             {AVATAR_SIZE_OPTIONS.map((option) => {
               const active = (settings?.avatarSize ?? 'small') === option.id
@@ -613,7 +619,7 @@ export function SettingsPage() {
           </>}
         </article>)}
       </section>}
-      {(tab as string) === 'growth' && <section className="settings-section settings-growth-section" role="tabpanel" id="settings-panel-growth" aria-labelledby="settings-tab-growth">
+      {tab === 'growth' && <section className="settings-section settings-growth-section" role="tabpanel" id="settings-panel-growth" aria-labelledby="settings-tab-growth">
         <div className="settings-growth-intro">
           <strong>先提出，再实验，最后由你采纳。</strong>
           <p>小鲸会根据重复失败留下改进建议。实验改动和检查结果在此审阅；GitHub 发布是独立操作。</p>

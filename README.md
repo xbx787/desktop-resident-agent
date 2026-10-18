@@ -38,6 +38,8 @@
 3. 进入 `win-unpacked`，双击 `Whale Companion Preview.exe`。
 4. 首次启动按向导填写 DeepSeek API Key，并选择工作目录。完成后左键点击角色即可对话。
 
+Key 会加密保存在本机，只用于向 DeepSeek 发请求，不会发到其他服务。
+
 **系统要求**：Windows 10/11 x64；能访问 DeepSeek API 的网络；一个 DeepSeek API Key。引擎已内置，不需要 Node.js 或 Claude Code。执行命令类工具建议安装 Git for Windows。
 
 > 程序没有代码签名，首次运行可能触发 SmartScreen：点“更多信息”→“仍要运行”。

@@ -96,7 +96,7 @@ describe('session context snapshots', () => {
         entry('system', '模型请求失败。'),
         entry('user', '已停止请求：运行很久的任务'),
         entry('tool', 'Bash 已停止'),
-        entry('system', '已请求停止 Claude Code。'),
+        entry('system', '已停止思考。'),
         entry('user', '新任务：总结结果'),
         entry('assistant', '新任务最终答复')
       ],

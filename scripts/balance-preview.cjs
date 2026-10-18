@@ -26,12 +26,13 @@ const card = (notice = '', vars = '') => `<aside class="balance-peek${notice ? '
   ${notice ? `<div class="balance-foot"><span>${notice}</span></div>` : ''}
 </aside>`
 
-const scene = (size, height, width, notice = '', vars = '') => `
+const CARD_WINDOW_HEIGHT = 134
+const scene = (size, height, width, notice = '') => `
 <div class="scene" style="height:${height}px">
-  <div class="window" style="width:248px;height:${height - 16}px">${card(notice, vars)}</div>
+  <div class="window" style="width:248px;height:${CARD_WINDOW_HEIGHT}px">${card(notice)}</div>
   <div class="role" style="width:${width}px;height:${height}px"><span>人物<br>可见区</span></div>
 </div>
-<p class="caption"><b>${size}</b> · 卡片窗口 248×${height - 16}，卡片 240 宽；右侧三角尖到人物左缘 4px，卡片上下各比人物短 8px。</p>`
+<p class="caption"><b>${size}</b> · 卡片窗口 248×${CARD_WINDOW_HEIGHT}（三档一致），卡片 240 宽；右侧三角尖到人物左缘 4px。</p>`
 
 const HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
 ${TOKENS}
@@ -48,10 +49,10 @@ body { margin: 0; background: #101d38; color: #cbd7ee; font-family: var(--font-u
 .wide-role { opacity: .65; }
 </style></head><body>
 <div class="harness">
-  ${scene('小 · 人物 128', 128, 107, '', '--text-balance-title:11px;--text-balance-amount:36px;--text-balance-detail:9px')}
-  ${scene('中 · 人物 140', 140, 116, '', '--text-balance-title:12.5px;--text-balance-amount:36px;--text-balance-detail:10px')}
-  ${scene('大 · 人物 152', 152, 127, '', '--text-balance-title:14px;--text-balance-amount:40px;--text-balance-detail:11px')}
-  ${scene('错误提示', 128, 107, '账户当前不可调用 API', '--text-balance-title:11px;--text-balance-amount:36px;--text-balance-detail:9px')}
+  ${scene('小 · 人物 128', 128, 107)}
+  ${scene('中 · 人物 140', 140, 116)}
+  ${scene('大 · 人物 152', 152, 127)}
+  ${scene('错误提示', 128, 107, '账户当前不可调用 API')}
 </div>
 </body></html>`
 

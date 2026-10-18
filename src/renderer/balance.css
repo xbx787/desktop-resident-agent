@@ -8,10 +8,10 @@
   left: 10px;
   bottom: 192px;
   display: grid;
-  grid-template-rows: 18px minmax(0, 1fr) 22px;
+  grid-template-rows: 24px minmax(0, 1fr) 22px;
   row-gap: 3px;
   width: 240px;
-  height: 112px;
+  height: 134px;
   padding: 8px 10px 7px;
   border: 1px solid rgba(160, 192, 248, .30);
   border-radius: 16px;
@@ -19,18 +19,20 @@
   background:
     radial-gradient(110% 90% at 0% 0%, rgba(104, 148, 232, .22), transparent 62%),
     linear-gradient(160deg, rgba(32, 57, 108, .97), rgba(15, 31, 68, .97) 70%, rgba(11, 25, 58, .97));
-  box-shadow: inset 0 1px rgba(232, 242, 255, .10), 0 8px 22px rgba(3, 10, 26, .35);
+  /* No outer shadow: it used to bleed above and below the right-hand pointer
+     and read as a second, unwanted edge. Keep only the top inner highlight. */
+  box-shadow: inset 0 1px rgba(232, 242, 255, .10);
   font-family: var(--font-ui);
   font-size: var(--text-sm);
-  /* 卡片高度随人物档位变（112/124/136），字号也跟着放大，免得大卡片里
-     中间空出一大块。用窗口高度算：余额窗口的视口高度就是卡片高度。 */
-  --text-balance-title: clamp(11px, calc(-3px + 12.5vh), 14px);
-  --text-balance-amount: clamp(32px, calc(-5.3px + 33.3vh), 40px);
-  --text-balance-detail: clamp(9px, calc(-0.33px + 8.33vh), 11px);
+  /* Every avatar size uses the same medium metrics; the window is 10px taller
+     than the medium card so the larger type and buttons have room. */
+  --text-balance-title: 12.5px;
+  --text-balance-amount: 36px;
+  --text-balance-detail: 10px;
 }
 
 /* 只在有提示时多一行；正常状态三行，金额区占据剩下的高度。 */
-.balance-peek.has-notice { grid-template-rows: 18px minmax(0, 1fr) 22px 11px; }
+.balance-peek.has-notice { grid-template-rows: 24px minmax(0, 1fr) 22px 11px; }
 
 /* 卡片右侧中部的小三角，指向人物。 */
 .balance-peek::after {
@@ -68,18 +70,18 @@
 .balance-heading small { color: #9fb6df; font-size: var(--text-balance-detail); }
 .balance-updated { margin-left: 2px; color: #8199c3; font-size: var(--text-balance-detail); }
 
-.balance-actions { gap: 1px; flex: none; }
+.balance-actions { gap: 2px; flex: none; }
 .balance-actions button {
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: 7px;
   color: #aebfe2;
   background: transparent;
-  font: var(--text-balance-detail)/1 var(--font-ui);
+  font: var(--glyph-sm)/1 var(--font-ui);
   cursor: pointer;
   transition: background .15s ease, color .15s ease;
 }

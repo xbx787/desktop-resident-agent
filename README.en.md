@@ -36,6 +36,8 @@ Whale Companion lives in the corner of your Windows desktop and in the notificat
 3. Open `win-unpacked` and run `Whale Companion Preview.exe`.
 4. Follow the first-run wizard: paste a DeepSeek API key and choose a workspace. Then click the character to chat.
 
+The key is encrypted on this machine and used only for requests to DeepSeek.
+
 **Requirements**: Windows 10/11 x64, network access to the DeepSeek API, and a DeepSeek API key. The engine is bundled; Node.js and Claude Code are not required. Git for Windows is recommended for command-line tools.
 
 > The executable is not code-signed. On first launch SmartScreen may appear: choose **More info → Run anyway**.

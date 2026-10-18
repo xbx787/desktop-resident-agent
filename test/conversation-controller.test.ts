@@ -753,7 +753,7 @@ describe('conversation controller', () => {
     await controller.stop()
     finish({ text: '迟到答复' })
     await until(() => !controller.displayedRuntime()!.isRunning(), 'stopped turn')
-    await until(() => controller.getSnapshot().timeline.some((item) => item.text.includes('已请求停止')), 'stop status')
+    await until(() => controller.getSnapshot().timeline.some((item) => item.text.includes('已停止思考')), 'stop status')
     const first = await store.getConversation(firstId)
     expect(first?.history.some((item) => item.content === '不要发送')).toBe(false)
 

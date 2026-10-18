@@ -162,7 +162,7 @@ function Onboarding() {
         </section>
       ) : step === 'welcome' ? (
         <section className="onboarding-card">
-          <h1>让小鲸学会说话</h1>
+          <h1>让小鲸即刻就能帮到你</h1>
           <ul className="onboarding-points">
             <li>小鲸通过 <strong>DeepSeek</strong> 提供的模型与你对话。</li>
             <li>需要你注册一个 DeepSeek 账号，并创建一个 API Key。</li>
@@ -230,7 +230,7 @@ function Onboarding() {
       ) : step === 'workspace' ? (
         <section className="onboarding-card">
           <h2>工作目录</h2>
-          <p className="onboarding-copy">小鲸读写文件、搜索文件都从这个目录开始。选一个你希望它工作的项目文件夹。</p>
+          <p className="onboarding-copy">小鲸读写文件、搜索文件都从这个目录开始。选一个你希望它工作的文件夹。</p>
           <div className="onboarding-key-row">
             <input
               type="text"
@@ -243,7 +243,7 @@ function Onboarding() {
               选择…
             </button>
           </div>
-          <p className="onboarding-hint">应用会把该路径作为环境变量 DESKTOP_PET_WORKSPACE 交给模型进程，不会修改 Windows 系统设置。</p>
+          <p className="onboarding-hint">小鲸会在这个文件夹里工作，不会修改 Windows 系统设置。</p>
           {notice && <p className="onboarding-notice">{notice}</p>}
           <div className="onboarding-actions">
             <button type="button" className="onboarding-secondary" onClick={() => go(-1)}>上一步</button>

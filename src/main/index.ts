@@ -90,6 +90,9 @@ const BALANCE_CARD_WIDTH = 240
 const BALANCE_POINTER = 8
 /** 卡片比人物可见高度再矮一截，上下各留 8px，避免看过去比人物长。 */
 const BALANCE_INSET_Y = 16
+/** Medium card (124) plus the requested 10px lower edge. All avatar sizes
+ *  share this height so the type and buttons stay identical. */
+const BALANCE_WINDOW_HEIGHT = 134
 /** 人物图片的视觉重心比几何中心偏上，卡片跟着上提一点才看着齐。 */
 const BALANCE_LIFT = 6
 /** 三角尖到角色左缘的呼吸间距。 */
@@ -162,30 +165,26 @@ function syncPanelBounds(): void {
   panel.setBounds(target, false)
 }
 
-/** 余额卡与人物可见区域对齐：高度随当前姿势和三档大小变化，顶部与人物
- *  顶部齐平，右侧三角尖离角色左缘 4px。优先用渲染器上报的真实命中框
+/** 余额卡与人物可见区域对齐：顶部与人物顶部齐平，右侧三角尖离角色左缘
+ *  4px，高度统一为中等卡片再向下延伸 10px。优先用渲染器上报的真实命中框
  *  （高 12px 是按压/呼吸缓冲，减掉才是可见高度）。 */
 function balanceBoundsFor(bounds: Electron.Rectangle): Electron.Rectangle {
   const width = BALANCE_CARD_WIDTH + BALANCE_POINTER
   let roleLeft: number
   let roleTop: number
-  let roleHeight: number
   if (avatarBox) {
     roleLeft = bounds.x + (bounds.width - avatarBox.right - avatarBox.width)
     roleTop = bounds.y + (bounds.height - avatarBox.bottom - avatarBox.height) + 6
-    roleHeight = Math.max(80, avatarBox.height - 12)
   } else {
     const visible = AVATAR_VISIBLE_BOX[currentAvatarSize] ?? AVATAR_VISIBLE_BOX.small
     roleLeft = bounds.x + bounds.width - 88 - visible.width / 2
     roleTop = bounds.y + visible.top
-    roleHeight = visible.height
   }
-  const height = Math.max(96, Math.round(roleHeight) - BALANCE_INSET_Y)
   return {
     x: Math.round(roleLeft - BALANCE_GAP - width),
     y: Math.round(roleTop + BALANCE_INSET_Y / 2 - BALANCE_LIFT),
     width,
-    height
+    height: BALANCE_WINDOW_HEIGHT
   }
 }
 
@@ -920,6 +919,9 @@ function registerIpc(): void {
   const modelTrusted = (event: Electron.IpcMainInvokeEvent): boolean => trusted(event) || settingsTrusted(event)
   const balanceTrusted = (event: Electron.IpcMainInvokeEvent): boolean => event.sender.id === balanceWindow?.webContents.id
   const settingsTrusted = (event: Electron.IpcMainInvokeEvent): boolean => event.sender.id === settingsWindow?.webContents.id
+  // Growth experiments are a local development tool. The packaged build has
+  // no tab for them and rejects their channels too.
+  const growthTrusted = (event: Electron.IpcMainInvokeEvent): boolean => !app.isPackaged && settingsTrusted(event)
   const onboardingTrusted = (event: Electron.IpcMainInvokeEvent): boolean => event.sender.id === onboardingWindow?.webContents.id
   ipcMain.handle('pet:settings:get', async (event) => {
     if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
@@ -979,34 +981,34 @@ function registerIpc(): void {
     return memory.delete(id)
   })
   ipcMain.handle('pet:growth:status', async (event) => {
-    if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
+    if (!growthTrusted(event)) throw new Error('成长模式仅在开发版可用。')
     return { ...await growth.availability(), proposals: await growth.list() }
   })
   ipcMain.handle('pet:growth:propose', (event, title: unknown, objective: unknown, evidence: unknown) => {
-    if (!settingsTrusted(event) || typeof title !== 'string' || typeof objective !== 'string' || typeof evidence !== 'string') throw new Error('改进提案无效。')
+    if (!growthTrusted(event) || typeof title !== 'string' || typeof objective !== 'string' || typeof evidence !== 'string') throw new Error('改进提案无效。')
     return growth.propose(title, objective, evidence)
   })
   ipcMain.handle('pet:growth:experiment', (event, id: unknown) => {
-    if (!settingsTrusted(event) || typeof id !== 'string') throw new Error('实验编号无效。')
+    if (!growthTrusted(event) || typeof id !== 'string') throw new Error('实验编号无效。')
     return growth.experiment(id)
   })
   ipcMain.handle('pet:growth:update-notes', (event, id: unknown, notes: unknown) => {
-    if (!settingsTrusted(event) || typeof id !== 'string' || typeof notes !== 'string') throw new Error('版本说明无效。')
+    if (!growthTrusted(event) || typeof id !== 'string' || typeof notes !== 'string') throw new Error('版本说明无效。')
     return growth.updateReleaseNotes(id, notes)
   })
   ipcMain.handle('pet:growth:adopt', async (event, id: unknown) => {
-    if (!settingsTrusted(event) || typeof id !== 'string') throw new Error('采纳请求无效。')
+    if (!growthTrusted(event) || typeof id !== 'string') throw new Error('采纳请求无效。')
     if (!activeController().allConversationsIdle() || sideChat.isBusy()) throw new Error('请等其他会话和临时会话完成或停止后再采纳。')
     const adopted = await growth.adopt(id)
     if (adopted.version) restartWhenIdle(adopted.version)
     return adopted
   })
   ipcMain.handle('pet:growth:publish', (event, id: unknown) => {
-    if (!settingsTrusted(event) || typeof id !== 'string') throw new Error('发布请求无效。')
+    if (!growthTrusted(event) || typeof id !== 'string') throw new Error('发布请求无效。')
     return growth.publish(id)
   })
   ipcMain.handle('pet:growth:discard', (event, id: unknown) => {
-    if (!settingsTrusted(event) || typeof id !== 'string') throw new Error('丢弃请求无效。')
+    if (!growthTrusted(event) || typeof id !== 'string') throw new Error('丢弃请求无效。')
     return growth.discard(id)
   })
   ipcMain.handle('pet:prepare-dropped-file', async (event, filePath: unknown) => {

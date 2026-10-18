@@ -77,11 +77,11 @@ for _index in range(_RIPPLE_FRAMES):
     _ripple_frame_bgra(_index, (255, 170, 55))`
       },
       {
-        old: `_NOTICE_SHORTCUT = "Ctrl + Alt + Shift + Backspace"`,
-        new: `_NOTICE_SHORTCUT = "ESC"`
-      },
-      {
-        old: `_NOTICE_SHORTCUT = "ESC"`,
+        old: [
+          `_NOTICE_SHORTCUT = "Ctrl + Alt + Shift + Backspace"`,
+          `_NOTICE_SHORTCUT = "ESC"`,
+          `_NOTICE_SHORTCUT = "esc"`
+        ],
         new: `_NOTICE_SHORTCUT = "esc"`
       },
       {
@@ -92,18 +92,70 @@ for _index in range(_RIPPLE_FRAMES):
         new: `_NOTICE_TITLE = "小鲸正在控制这台电脑"`
       },
       {
-        old: `_NOTICE_HINT = f"Press {_NOTICE_SHORTCUT} to take over"`,
-        new: `_NOTICE_HINT = f"按 {_NOTICE_SHORTCUT} 接管控制"`
-      },
-      {
-        old: `_NOTICE_HINT = f"按 {_NOTICE_SHORTCUT} 接管控制"`,
-        new: `_NOTICE_HINT = f"按 {_NOTICE_SHORTCUT} 退出控制"`
+        old: [
+          `_NOTICE_HINT = f"Press {_NOTICE_SHORTCUT} to take over"`,
+          `_NOTICE_HINT = f"按 {_NOTICE_SHORTCUT} 接管控制"`,
+          `_NOTICE_HINT = f"按 {_NOTICE_SHORTCUT} 退出控制"`
+        ],
+        new: `_NOTICE_HINT = f"按 {_NOTICE_SHORTCUT} 暂停控制"
+_NOTICE_SUB_HINT = "对话不会中断，下次对话可以重新控制"`
       },
       {
         old: `            title_font = ImageFont.truetype(str(font_dir / "seguisb.ttf"), hint_size + 8)
             hint_font = ImageFont.truetype(str(font_dir / "segoeui.ttf"), hint_size)`,
         new: `            title_font = ImageFont.truetype(str(font_dir / "msyhbd.ttc"), hint_size + 8)
             hint_font = ImageFont.truetype(str(font_dir / "msyh.ttc"), hint_size)`
+      },
+      {
+        old: `            title_font = ImageFont.truetype(str(font_dir / "msyhbd.ttc"), hint_size + 8)
+            hint_font = ImageFont.truetype(str(font_dir / "msyh.ttc"), hint_size)`,
+        new: `            title_font = ImageFont.truetype(str(font_dir / "msyhbd.ttc"), hint_size + 8)
+            hint_font = ImageFont.truetype(str(font_dir / "msyh.ttc"), hint_size)
+            sub_font = ImageFont.truetype(str(font_dir / "msyh.ttc"), max(10, hint_size - 3))`
+      },
+      {
+        old: `        hint_box = measure.textbbox((0, 0), _NOTICE_HINT, font=hint_font)`,
+        new: `        hint_box = measure.textbbox((0, 0), _NOTICE_HINT, font=hint_font)
+        sub_box = measure.textbbox((0, 0), _NOTICE_SUB_HINT, font=sub_font)`
+      },
+      {
+        old: `        hint_width, hint_height = (
+            prefix_width + shortcut_width + suffix_width + 16,
+            hint_box[3] - hint_box[1],
+        )
+        width = max(title_width, hint_width) + 2 * horizontal_padding`,
+        new: `        hint_width, hint_height = (
+            prefix_width + shortcut_width + suffix_width + 16,
+            hint_box[3] - hint_box[1],
+        )
+        sub_width, sub_height = sub_box[2] - sub_box[0], sub_box[3] - sub_box[1]
+        width = max(title_width, hint_width, sub_width) + 2 * horizontal_padding`
+      },
+      {
+        old: `    height = title_height + hint_height + 46`,
+        new: `    height = title_height + hint_height + sub_height + 54`
+      },
+      {
+        old: `    draw.text(
+        (badge_left + shortcut_width + 16, hint_y),
+        hint_suffix,
+        font=hint_font,
+        fill=(225, 240, 255, 255),
+    )
+    return width, height, premultiplied_bgra(image, 1.0)`,
+        new: `    draw.text(
+        (badge_left + shortcut_width + 16, hint_y),
+        hint_suffix,
+        font=hint_font,
+        fill=(225, 240, 255, 255),
+    )
+    draw.text(
+        ((width - sub_width) // 2 - sub_box[0], hint_y + hint_height + 5),
+        _NOTICE_SUB_HINT,
+        font=sub_font,
+        fill=(198, 218, 245, 230),
+    )
+    return width, height, premultiplied_bgra(image, 1.0)`
       }
     ]
   },
@@ -659,6 +711,14 @@ def _note_pointer_activity(owner: Any, dx: float, dy: float) -> None:
       {
         old: `            and vk == 0x08`,
         new: `            and vk in _CHORD`
+      },
+      {
+        old: `            and not owner._fast_takeover
+            and owner._suppress
+            and _CHORD.issubset({_key(held) for held in owner._pressed})`,
+        new: `            and not owner._fast_takeover
+            and (owner._suppress or owner._visual_armed)
+            and _CHORD.issubset({_key(held) for held in owner._pressed})`
       }
     ]
   },
