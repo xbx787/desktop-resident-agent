@@ -410,17 +410,34 @@ function ApprovalCard({ proposal, busy, onApprove, onReject }: {
   );
 }
 
-/** One line at 13px × 1.45 plus the 4px of padding — the floor the editor may
- *  never go under, so the placeholder is always whole. */
+/** Fallback one-line height for the smallest type scale (13px × 1.45 plus the
+ *  4px of padding). The live bounds are measured from the editor's computed
+ *  style so a larger UI scale cannot squeeze the placeholder out. */
 export const EDITOR_ONE_LINE = 23;
-/** Eight lines, then the editor scrolls. */
+/** Fallback eight-line cap for the smallest type scale. */
 export const EDITOR_MAX_HEIGHT = 155;
+
+export interface EditorHeightBounds {
+  min: number;
+  max: number;
+}
+
+/** One and eight lines at the editor's actual line height, padding included.
+ *  Falls back to the 13px metrics when a computed value is unavailable. */
+export function editorHeightBounds(style: Pick<CSSStyleDeclaration, 'lineHeight' | 'paddingTop' | 'paddingBottom'>): EditorHeightBounds {
+  const lineHeight = Number.parseFloat(style.lineHeight);
+  const line = Number.isFinite(lineHeight) && lineHeight > 0 ? lineHeight : 18.85;
+  const padding = (Number.parseFloat(style.paddingTop) || 0) + (Number.parseFloat(style.paddingBottom) || 0);
+  const min = Math.ceil(line + padding);
+  const max = Math.max(min, Math.ceil(line * 8 + padding));
+  return { min, max };
+}
 
 /** Keeps a measured height sane: never a sliver (a zero-height pass squeezed
  *  the placeholder out and the box then stayed collapsed), never past eight
- *  lines. */
-export function clampEditorHeight(measured: number): number {
-  return Math.min(EDITOR_MAX_HEIGHT, Math.max(EDITOR_ONE_LINE, measured));
+ *  lines at the current type scale. */
+export function clampEditorHeight(measured: number, bounds: EditorHeightBounds = { min: EDITOR_ONE_LINE, max: EDITOR_MAX_HEIGHT }): number {
+  return Math.min(bounds.max, Math.max(bounds.min, measured));
 }
 
 /** The editor's content height, or null when the measurement means nothing —
@@ -428,8 +445,9 @@ export function clampEditorHeight(measured: number): number {
  *  the composer at a sliver until something else happened to re-measure it. */
 function fitEditorHeight(editor: HTMLTextAreaElement): number | null {
   if (editor.clientWidth === 0) return null;
+  const bounds = editorHeightBounds(getComputedStyle(editor));
   editor.style.height = 'auto';
-  const nextHeight = clampEditorHeight(editor.scrollHeight);
+  const nextHeight = clampEditorHeight(editor.scrollHeight, bounds);
   editor.style.height = `${nextHeight}px`;
   return nextHeight;
 }
@@ -2058,15 +2076,26 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
     const editor = editorRef.current;
     if (!composerOpen || !editor) return;
     let width = editor.clientWidth;
-    const observer = new ResizeObserver(() => {
-      if (editor.clientWidth === width) return;
-      width = editor.clientWidth;
+    const remeasure = (): void => {
       const nextHeight = fitEditorHeight(editor);
       if (nextHeight === null) return;
       setComposerHeight((current) => current === nextHeight ? current : nextHeight);
+    };
+    const observer = new ResizeObserver(() => {
+      if (editor.clientWidth === width) return;
+      width = editor.clientWidth;
+      remeasure();
     });
     observer.observe(editor);
-    return () => observer.disconnect();
+    // UI scale is written straight to <html data-ui-size> by the preload; the
+    // React tree does not re-render, so watch the attribute to re-measure the
+    // one-line floor when the type scale changes.
+    const sizeObserver = new MutationObserver(remeasure);
+    sizeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-ui-size'] });
+    return () => {
+      observer.disconnect();
+      sizeObserver.disconnect();
+    };
   }, [composerOpen]);
 
   // Selecting text inside a message floats a 引用／复制 bar over the feed; the
