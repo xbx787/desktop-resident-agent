@@ -2347,7 +2347,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
       setComposerOpen(true);
       void addFiles(Array.from(event.dataTransfer.files));
     }}>
-      {expanded && <div className={`panel-resize-grip${resizingPanel ? ' is-resizing' : ''}`} role="separator" aria-label="调整面板大小" title="向左上拖动调整大小" onPointerDown={beginPanelResize} onPointerMove={movePanelResize} onPointerUp={endPanelResize} onPointerCancel={endPanelResize} />}
+      {expanded && <div className={`panel-resize-grip${resizingPanel ? ' is-resizing' : ''}`} role="separator" aria-label="调整面板大小" onPointerDown={beginPanelResize} onPointerMove={movePanelResize} onPointerUp={endPanelResize} onPointerCancel={endPanelResize} />}
       {(!compactEmpty || composerOpen) && <button type="button" className="panel-expand-toggle panel-window-action" aria-label={expanded ? '还原对话气泡' : '放大对话气泡'} title={expanded ? '还原对话' : '放大对话'} onClick={() => { void toggleExpanded().catch(() => undefined); }}>
         {expanded ? <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 8h4V4M12 4v4h4M16 12h-4v4M8 16v-4H4" /></svg> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8 4H4v4M12 4h4v4M16 12v4h-4M4 12v4h4" /></svg>}
       </button>}
@@ -2479,7 +2479,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
         )}
 
         <div className="panel-feed-wrap" ref={feedWrapRef}>
-          <TimelineNav marks={navMarkList} onJump={jumpToEntry} windowSize={expanded ? NAV_WINDOW_WIDE : NAV_WINDOW_COMPACT} />
+          <TimelineNav marks={navMarkList} onJump={jumpToEntry} windowSize={expanded ? NAV_WINDOW_WIDE : NAV_WINDOW_COMPACT} baseWidth={expanded ? 12 : 8.8} />
           <div className="panel-feed" ref={feedRef} aria-label="对话与任务时间线" onScroll={(event) => {
             const feed = event.currentTarget;
             const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 48;
@@ -2749,6 +2749,16 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                     </div>
                   </div>
                 </div>
+                {!sideExpanded && <div className="panel-effort-wrap" ref={effortMenuRef}>
+                  <button type="button" className={`panel-tool-button panel-effort-button${snapshot?.effort && snapshot.effort !== 'max' ? ' is-on' : ''}`} aria-label={`思考强度：${EFFORT_LABELS[snapshot?.effort ?? 'max']}`} aria-haspopup="dialog" aria-expanded={effortMenuOpen} title={`思考强度：${EFFORT_LABELS[snapshot?.effort ?? 'max']}`} disabled={!snapshot} onClick={() => setEffortMenuOpen((open) => !open)}>
+                    <EffortIcon level={snapshot?.effort ?? 'max'} />
+                  </button>
+                  <div className={`panel-effort-menu${effortMenuOpen ? ' is-open' : ''}`} role="dialog" aria-label="思考强度" aria-hidden={!effortMenuOpen} inert={!effortMenuOpen}
+                    onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); setEffortMenuOpen(false); } }}>
+                    <div className="panel-popover-heading">思考强度</div>
+                    <EffortSlider value={snapshot?.effort ?? 'max'} disabled={!snapshot} onCommit={chooseEffort} />
+                  </div>
+                </div>}
                 {snapshot?.mode === 'claude_code' && <div className="panel-approval-wrap" ref={approvalMenuRef}>
                   <button type="button" className={`panel-tool-button panel-approval-button is-${approvalMode === 'acceptEdits' ? 'edits' : approvalMode === 'bypassPermissions' ? 'bypass' : 'default'}`}
                     aria-label={`审批模式：${APPROVAL_MODE_LABELS[approvalMode]}`}
@@ -2771,16 +2781,6 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                       </span>
                       {approvalMode === mode && <span className="panel-model-check" aria-hidden="true">✓</span>}
                     </button>)}
-                  </div>
-                </div>}
-                {!sideExpanded && <div className="panel-effort-wrap" ref={effortMenuRef}>
-                  <button type="button" className={`panel-tool-button panel-effort-button${snapshot?.effort && snapshot.effort !== 'max' ? ' is-on' : ''}`} aria-label={`思考强度：${EFFORT_LABELS[snapshot?.effort ?? 'max']}`} aria-haspopup="dialog" aria-expanded={effortMenuOpen} title={`思考强度：${EFFORT_LABELS[snapshot?.effort ?? 'max']}`} disabled={!snapshot} onClick={() => setEffortMenuOpen((open) => !open)}>
-                    <EffortIcon level={snapshot?.effort ?? 'max'} />
-                  </button>
-                  <div className={`panel-effort-menu${effortMenuOpen ? ' is-open' : ''}`} role="dialog" aria-label="思考强度" aria-hidden={!effortMenuOpen} inert={!effortMenuOpen}
-                    onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); setEffortMenuOpen(false); } }}>
-                    <div className="panel-popover-heading">思考强度</div>
-                    <EffortSlider value={snapshot?.effort ?? 'max'} disabled={!snapshot} onCommit={chooseEffort} />
                   </div>
                 </div>}
                 <div className="panel-context-wrap" ref={contextMenuRef}>

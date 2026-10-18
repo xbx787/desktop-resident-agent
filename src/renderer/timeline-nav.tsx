@@ -113,7 +113,7 @@ export function navRowAt(clientY: number, trackTop: number, count: number): numb
  * the whole conversation, and clicking a mark jumps to that message. The wheel
  * is captured while hovering so the feed behind never scrolls instead.
  */
-export function TimelineNav({ marks, onJump, windowSize = NAV_WINDOW_WIDE }: { marks: NavMark[]; onJump: (id: string) => void; windowSize?: number }) {
+export function TimelineNav({ marks, onJump, windowSize = NAV_WINDOW_WIDE, baseWidth = 8.8 }: { marks: NavMark[]; onJump: (id: string) => void; windowSize?: number; baseWidth?: number }) {
   const [expanded, setExpanded] = useState(false);
   const [active, setActive] = useState<number | null>(null);
   const [start, setStart] = useState(() => Math.max(0, marks.length - windowSize));
@@ -131,6 +131,8 @@ export function TimelineNav({ marks, onJump, windowSize = NAV_WINDOW_WIDE }: { m
   }, [windowSize]);
   const trackRef = useRef<HTMLDivElement>(null);
   const rollRef = useRef<Animation | null>(null);
+  const frameRef = useRef<number | null>(null);
+  const pendingRef = useRef<{ start: number; clientY: number; moved: boolean; direction: number } | null>(null);
 
   useEffect(() => {
     const node = trackRef.current;
@@ -140,44 +142,48 @@ export function TimelineNav({ marks, onJump, windowSize = NAV_WINDOW_WIDE }: { m
       // hover state rides along: as React swaps the window's marks, the mark
       // that lands under the still pointer fires its own mouseenter, so the
       // arc and the card keep reading whatever mark is under the cursor while
-      // the rail rolls. Clearing the hover here used to fight that handoff
-      // and the card vanished exactly while it was being asked to steer.
+      // the rail rolls.
       event.preventDefault();
       const direction = event.deltaY > 0 ? 1 : -1;
       const step = navWheelStep(event.deltaY);
-      // The rail's ends are hard stops: once the window already sits at the
-      // oldest (or newest) mark, a wheel pushing further neither moves the
-      // window nor plays the push-in. The silence is the signal — "nothing
-      // rolled" reads as "that was the top (bottom)", whereas the old
-      // roll-at-the-end kept suggesting there was somewhere left to go.
       const next = navNextStart(marks.length, windowSize, startRef.current, direction * step);
       const moved = next !== startRef.current;
-      if (moved) {
-        // Update the ref in the same turn as the state: a fast wheel fires
-        // back to back and the next event must not compute from a stale start.
-        startRef.current = next;
-        setStart(next);
-      }
-      // Re-anchor the hover to the row under the pointer: the browser does not
-      // reliably re-run its own hit-testing when React swaps the window's
-      // marks, so the card used to vanish mid-scroll exactly when it was being
-      // asked to read out the mark being scrolled past.
-      const row = navRowAt(event.clientY, node.getBoundingClientRect().top, Math.min(windowSize, marks.length));
-      if (row !== null) setActive(row);
-      // A short push-in so the wheel visibly rolls the rail. Compositor-only —
-      // one transform pass, no layout or paint — and skipped entirely when the
-      // system asks for reduced motion. A fast wheel fires back to back, so
-      // each roll cancels the one before it instead of stacking.
-      if (moved && typeof node.animate === 'function' && !window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
-        rollRef.current?.cancel();
-        rollRef.current = node.animate(
-          [{ transform: `translateY(calc(-50% + ${direction * NAV_STEP}px))` }, { transform: 'translateY(-50%)' }],
-          { duration: 150, easing: 'ease-out' }
-        );
-      }
+      if (moved) startRef.current = next;
+      // A fast wheel fires several events per frame. Accumulate them and commit
+      // once per animation frame: one React render, one measurement, and one
+      // roll animation, instead of a render per wheel tick.
+      const pending = pendingRef.current;
+      pendingRef.current = { start: startRef.current, clientY: event.clientY, moved: moved || Boolean(pending?.moved), direction };
+      if (frameRef.current !== null) return;
+      frameRef.current = window.requestAnimationFrame(() => {
+        frameRef.current = null;
+        const batch = pendingRef.current;
+        pendingRef.current = null;
+        if (!batch) return;
+        setStart(batch.start);
+        // Re-anchor the hover to the row under the pointer once per frame: the
+        // browser does not reliably re-run its own hit-testing when React
+        // swaps the window's marks.
+        const row = navRowAt(batch.clientY, node.getBoundingClientRect().top, Math.min(windowSize, marks.length));
+        if (row !== null) setActive(row);
+        if (batch.moved && typeof node.animate === 'function' && !window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) {
+          rollRef.current?.cancel();
+          rollRef.current = node.animate(
+            [{ transform: `translateY(calc(-50% + ${batch.direction * NAV_STEP}px))` }, { transform: 'translateY(-50%)' }],
+            { duration: 150, easing: 'ease-out' }
+          );
+        }
+      });
     };
     node.addEventListener('wheel', onWheel, { passive: false });
-    return () => node.removeEventListener('wheel', onWheel);
+    return () => {
+      node.removeEventListener('wheel', onWheel);
+      if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
+      pendingRef.current = null;
+      rollRef.current?.cancel();
+      rollRef.current = null;
+    };
   }, [expanded, marks.length, windowSize]);
 
   if (marks.length < 5) return null;
@@ -198,12 +204,13 @@ export function TimelineNav({ marks, onJump, windowSize = NAV_WINDOW_WIDE }: { m
     >
       {shown.map((mark, index) => {
         const boost = expanded && active !== null ? navBoost(Math.abs(index - active)) : 0;
+        const scale = boost ? (baseWidth + boost) / baseWidth : 1;
         const ordinal = ordinalBase + index + 1;
         return <span key={mark.id} className="panel-nav-row">
           <i
             aria-hidden="true"
             className={navMarkClass(expanded, index === active)}
-            style={boost ? ({ '--nav-boost': `${boost}px` } as CSSProperties) : undefined}
+            style={scale !== 1 ? ({ '--nav-scale': String(scale) } as CSSProperties) : undefined}
             onMouseEnter={expanded ? () => setActive(index) : undefined}
           />
           {/* 每十根横杠标一次序号：10、20、30……数字在横杠右边，绝对定位，

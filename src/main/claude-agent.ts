@@ -1,6 +1,6 @@
 import { query, type McpServerConfig, type PermissionResult, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { randomUUID } from 'node:crypto'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { AgentMessageChannel } from './agent-message-channel'
 import { AgentTurnError, classifyAgentFailure } from './agent-errors'
@@ -225,6 +225,7 @@ export class ClaudeAgentClient implements ModelClient {
    *  may still ignore control requests until its first streamed input. */
   private queryWarm = false
   private readonly toolNames = new Map<string, string>()
+  private readonly toolInputs = new Map<string, unknown>()
   private commands: string[] = []
   private skills: string[] = []
   private terminalCommands = new Set<string>()
@@ -1023,6 +1024,7 @@ export class ClaudeAgentClient implements ModelClient {
         turn.thinkingPartial = ''
         turn.onProgress?.('', turn.segment)
         this.toolNames.set(block.id, block.name)
+        this.toolInputs.set(block.id, block.input)
         turn.activeToolIds.add(block.id)
         turn.onToolEvent?.({
           toolUseId: block.id, toolName: block.name, phase: 'start',
@@ -1033,21 +1035,43 @@ export class ClaudeAgentClient implements ModelClient {
     if (message.type === 'user' && Array.isArray(message.message.content)) {
       for (const block of message.message.content) {
         if (block.type !== 'tool_result' || message.parent_tool_use_id != null) continue
-        const images = this.toolImages(block.content)
+        const images = this.toolImages(block.content, this.toolInputs.get(block.tool_use_id))
         turn.onToolEvent?.({
           toolUseId: block.tool_use_id, toolName: this.toolNames.get(block.tool_use_id) ?? '未知工具', phase: 'result',
           output: this.summary(block.content), ...(images.length ? { images } : {}), isError: block.is_error === true
         })
         turn.activeToolIds.delete(block.tool_use_id)
         this.toolNames.delete(block.tool_use_id)
+        this.toolInputs.delete(block.tool_use_id)
       }
     }
   }
 
-  /** Image blocks in a tool result are copied out of the event stream so the
-   *  panel can open them with the system viewer instead of embedding a large
-   *  data URL in every timeline snapshot. */
-  private toolImages(value: unknown): Array<{ name: string; path: string }> {
+  /** The local file a tool read, when its input names one. Reusing it avoids
+   *  writing a second copy of an image that is already on disk. */
+  private originalImagePath(input: unknown): { name: string; path: string } | null {
+    if (!input || typeof input !== 'object') return null
+    for (const key of ['file_path', 'path', 'file'] as const) {
+      const value = (input as Record<string, unknown>)[key]
+      if (typeof value !== 'string' || !value.trim()) continue
+      const target = path.isAbsolute(value) ? path.normalize(value) : path.resolve(this.cwd, value)
+      if (!/\.(png|jpe?g|gif|webp)$/i.test(target)) continue
+      try {
+        if (existsSync(target) && statSync(target).isFile()) return { name: path.basename(target), path: target }
+      } catch {
+        // Fall through to the extracted image below.
+      }
+    }
+    return null
+  }
+
+  /** Image blocks in a tool result are exposed to the panel so it can open
+   *  them with the system viewer. A tool that read an existing file reuses
+   *  that path; only images with no local original (screenshots, MCP results)
+   *  are written under `data/tool-images`. */
+  private toolImages(value: unknown, input?: unknown): Array<{ name: string; path: string }> {
+    const original = this.originalImagePath(input)
+    if (original) return [original]
     if (!this.configDir) return []
     const blocks = Array.isArray(value) ? value : [value]
     const images: Array<{ name: string; path: string }> = []
@@ -1102,6 +1126,7 @@ export class ClaudeAgentClient implements ModelClient {
         phase: 'result', output: error ? this.redact(error.message)
           : turn.interruptedByUser ? '已由人工中止。' : '工具未返回结果。', isError: true })
       this.toolNames.delete(id)
+      this.toolInputs.delete(id)
     }
     turn.activeToolIds.clear()
     this.activeTurn = undefined
@@ -1160,6 +1185,7 @@ export class ClaudeAgentClient implements ModelClient {
     this.messageChannel = undefined
     this.latestUsage = unavailable()
     this.toolNames.clear()
+    this.toolInputs.clear()
   }
 
   private closeQuery(): Promise<void> {
@@ -1180,6 +1206,7 @@ export class ClaudeAgentClient implements ModelClient {
     this.consumer = undefined
     this.latestUsage = unavailable()
     this.toolNames.clear()
+    this.toolInputs.clear()
     this.closing = (consumer ?? Promise.resolve()).catch(() => undefined).then(() => { this.closing = undefined })
     return this.closing
   }

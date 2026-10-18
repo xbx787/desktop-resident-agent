@@ -211,7 +211,7 @@ body.panel-window .panel-bubble.is-expanded {
    marks sit in one quiet column. The wheel's sliding still reads through the
    growing marks around the pointer (nav-boost). */
 .panel-nav-row { position: relative; display: flex; align-items: center; height: 3.2px; }
-.panel-nav-mark { display: block; width: calc(var(--nav-base, 8.8px) + var(--nav-boost, 0px)); height: 3.2px; margin-left: 4px; border-radius: 1.6px; background: rgba(152, 180, 228, .42); transition: width .12s ease, background-color .12s ease; }
+.panel-nav-mark { display: block; width: var(--nav-base, 8.8px); height: 3.2px; margin-left: 4px; border-radius: 1.6px; background: rgba(152, 180, 228, .42); transform: scaleX(var(--nav-scale, 1)); transform-origin: left center; transition: transform .12s ease, background-color .12s ease; }
 /* 第 10、20、30……根横杠的序号，紧挨横杠右边。绝对定位：行高仍是 3.2px，
    滚轮按 NAV_STEP 计算行位置时不会被数字撑开。 */
 .panel-nav-count { position: absolute; left: 30px; top: 50%; transform: translateY(-50%); color: rgba(150, 170, 205, .5); font-family: var(--font-numeric); font-size: var(--text-2xs); font-variant-numeric: tabular-nums; line-height: 1; }

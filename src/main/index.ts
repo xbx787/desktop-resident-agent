@@ -1435,8 +1435,9 @@ function registerIpc(): void {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     if (typeof value !== 'string' || value.length > 2_000 || !path.isAbsolute(value)) throw new Error('文件路径无效。')
     const target = path.resolve(value)
-    const root = path.resolve(dataRoot)
-    if (!target.startsWith(root + path.sep)) throw new Error('只能打开应用数据目录里的文件。')
+    // Image results may point at the original file the tool read, wherever it
+    // lives. Restrict the hand-off to image extensions rather than a folder.
+    if (!/\.(png|jpe?g|gif|webp)$/i.test(target)) throw new Error('只能打开图片文件。')
     if (!existsSync(target)) throw new Error('文件已经不存在。')
     const failure = await shell.openPath(target)
     if (failure) throw new Error(`无法打开原图：${failure}`)
