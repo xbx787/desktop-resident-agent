@@ -1705,6 +1705,12 @@ else app.on('second-instance', (_event, commandLine) => {
 })
 
 if (ownsSingleInstance) void app.whenReady().then(async () => {
+  // Scripts can ask a fresh copy to close right away; without this the flag
+  // would only work when another instance already holds the single-instance lock.
+  if (process.argv.includes('--quit')) {
+    app.quit()
+    return
+  }
   await linkClaudeUserResources(path.join(dataRoot, 'claude'), userHome).catch((error: unknown) => {
     console.warn('Claude user resource links unavailable:', error instanceof Error ? error.message : String(error))
   })
