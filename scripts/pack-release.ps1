@@ -17,6 +17,8 @@ if (Test-Path -LiteralPath $releaseDir) { throw "Release directory already exist
 if ($LASTEXITCODE -ne 0) { throw 'Type check failed.' }
 & npm test
 if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
+& node scripts/audit-active-avatar-assets.cjs
+if ($LASTEXITCODE -ne 0) { throw 'Active avatar assets failed quality audit.' }
 & npm run pack:dir -- "-c.directories.output=release/$releaseName"
 if ($LASTEXITCODE -ne 0) { throw 'Packaging failed.' }
 & npm run verify:asar
