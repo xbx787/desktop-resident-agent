@@ -633,6 +633,11 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
   const tabDragRef = useRef<{ id: string; startX: number; moved: boolean } | null>(null);
   const tabClickSuppressRef = useRef(false);
   const followFeedRef = useRef(true);
+  // The first content of a conversation is not there yet when the panel
+  // mounts. Until the feed actually becomes scrollable once, keep forcing the
+  // bottom so a delayed store load cannot leave the view at the top.
+  const startupScrollRef = useRef(true);
+  const startupConversationRef = useRef<string | null>(null);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const feedWrapRef = useRef<HTMLDivElement>(null);
   const openImageViewer = useCallback((name: string, url: string) => setImageViewer({ name, url }), []);
@@ -1180,15 +1185,26 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
     return () => cancelAnimationFrame(frame);
   }, [visible, composerOpen, snapshot?.timeline.length, newestText, snapshot?.proposal?.id]);
 
-  // 启动就停在最新一条，等于先替用户按一次「回到底部」。面板重载后默认在
-  // 顶部；content-visibility 的占位高度会在首屏之后才展开，所以补两拍，
-  // 让滚动到底之后的最终高度也跟得上。只在挂载时执行一次。
+  // 启动就停在最新一条，等于先替用户按一次「回到底部」。面板重载时时间线
+  // 往往还没到；等第一批内容到达、并且真正能滚动一次之后才结束这段启动
+  // 跟随，避免 onScroll 在空列表上先把 followFeed 关掉。
+  useEffect(() => {
+    const id = snapshot?.conversationId ?? null;
+    if (startupConversationRef.current !== id) {
+      startupConversationRef.current = id;
+      startupScrollRef.current = true;
+    }
+  }, [snapshot?.conversationId]);
   useEffect(() => {
     const feed = feedRef.current;
-    if (!feed) return;
+    if (!feed || !visible || !startupScrollRef.current) return;
     followFeedRef.current = true;
     setFeedAtBottom(true);
-    const jump = () => { feed.scrollTop = feed.scrollHeight; };
+    const jump = () => {
+      if (!startupScrollRef.current) return;
+      feed.scrollTop = feed.scrollHeight;
+      if (feed.scrollHeight > feed.clientHeight + 1) startupScrollRef.current = false;
+    };
     jump();
     const frame = requestAnimationFrame(jump);
     const soon = window.setTimeout(jump, 120);
@@ -1198,7 +1214,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
       window.clearTimeout(soon);
       window.clearTimeout(settle);
     };
-  }, []);
+  }, [visible, snapshot?.conversationId, snapshot?.timeline.length]);
 
   function restoreRejectedSubmission(originId: string | null, sentDraft: string,
     sentAttachments: DroppedAttachment[], goal = false): void {
@@ -2279,24 +2295,32 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
   // 尺寸每帧最多发一次；主进程按窗口布局重算并节流落盘。
   // 拖动缩放用屏幕坐标而不是视口坐标：窗口左/上缘会跟着鼠标移动，视口坐标
   // 会随窗口一起变，形成反馈回路——之前的高频抖动和「差一截」都来自这里。
-  const resizeSession = useRef<{ startScreenX: number; startScreenY: number; startW: number; startH: number; lastSent: number; lastWidth: number; lastHeight: number } | null>(null);
+  const resizeSession = useRef<{
+    pointerId: number; grip: HTMLDivElement
+    startScreenX: number; startScreenY: number; startW: number; startH: number
+    lastSent: number; lastWidth: number; lastHeight: number
+  } | null>(null);
   const [resizingPanel, setResizingPanel] = useState(false);
   function beginPanelResize(event: ReactPointerEvent<HTMLDivElement>): void {
     if (!expanded || event.button !== 0) return;
     const rect = event.currentTarget.closest('.panel-bubble')?.getBoundingClientRect();
     if (!rect) return;
     event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
+    if (resizeSession.current) endPanelResize();
+    const grip = event.currentTarget;
+    grip.setPointerCapture(event.pointerId);
     resizeSession.current = {
+      pointerId: event.pointerId, grip,
       startScreenX: event.screenX, startScreenY: event.screenY,
       startW: rect.width, startH: rect.height, lastSent: 0,
       lastWidth: Math.round(rect.width), lastHeight: Math.round(rect.height)
     };
+    document.body.classList.add('is-resizing-panel');
     setResizingPanel(true);
   }
   function movePanelResize(event: ReactPointerEvent<HTMLDivElement>): void {
     const session = resizeSession.current;
-    if (!session) return;
+    if (!session || event.pointerId !== session.pointerId) return;
     // pointerup 偶尔会在窗口移动时丢掉；没有按键还留着会话的话，鼠标
     // 再移回手柄就会继续改尺寸（表现为“自己往左上缩”）。
     if ((event.buttons & 1) === 0) {
@@ -2317,12 +2341,31 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
     session.lastSent = now;
     void petBridge().setPanelSize(width, height);
   }
-  function endPanelResize(event: ReactPointerEvent<HTMLDivElement>): void {
-    if (!resizeSession.current) return;
+  function endPanelResize(event?: ReactPointerEvent<HTMLDivElement>): void {
+    const session = resizeSession.current;
+    if (!session) return;
     resizeSession.current = null;
     setResizingPanel(false);
-    try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* 已释放 */ }
+    document.body.classList.remove('is-resizing-panel');
+    try { (event?.currentTarget ?? session.grip).releasePointerCapture(session.pointerId); } catch { /* 已释放 */ }
   }
+  // Pointer capture can be lost when the window itself moves under the cursor.
+  // End the session from the window as well, so no ghost resize survives a
+  // missing pointerup and the resize cursor cannot stick after release.
+  useEffect(() => {
+    if (!resizingPanel) return;
+    const finish = (): void => endPanelResize();
+    window.addEventListener('pointerup', finish);
+    window.addEventListener('pointercancel', finish);
+    window.addEventListener('blur', finish);
+    return () => {
+      window.removeEventListener('pointerup', finish);
+      window.removeEventListener('pointercancel', finish);
+      window.removeEventListener('blur', finish);
+      document.body.classList.remove('is-resizing-panel');
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resizingPanel]);
 
   useEffect(() => {
     try {
@@ -2347,7 +2390,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
       setComposerOpen(true);
       void addFiles(Array.from(event.dataTransfer.files));
     }}>
-      {expanded && <div className={`panel-resize-grip${resizingPanel ? ' is-resizing' : ''}`} role="separator" aria-label="调整面板大小" onPointerDown={beginPanelResize} onPointerMove={movePanelResize} onPointerUp={endPanelResize} onPointerCancel={endPanelResize} />}
+      {expanded && <div className={`panel-resize-grip${resizingPanel ? ' is-resizing' : ''}`} role="separator" aria-label="调整面板大小" onPointerDown={beginPanelResize} onPointerMove={movePanelResize} onPointerUp={endPanelResize} onPointerCancel={endPanelResize} onLostPointerCapture={() => endPanelResize()} />}
       {(!compactEmpty || composerOpen) && <button type="button" className="panel-expand-toggle panel-window-action" aria-label={expanded ? '还原对话气泡' : '放大对话气泡'} title={expanded ? '还原对话' : '放大对话'} onClick={() => { void toggleExpanded().catch(() => undefined); }}>
         {expanded ? <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 8h4V4M12 4v4h4M16 12h-4v4M8 16v-4H4" /></svg> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8 4H4v4M12 4h4v4M16 12v4h-4M4 12v4h4" /></svg>}
       </button>}
