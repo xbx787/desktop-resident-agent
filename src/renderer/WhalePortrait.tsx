@@ -3,8 +3,10 @@ import type { AvatarBox, AvatarSize } from '../shared/contracts';
 import { avatarArtFor } from './avatar-art';
 import { avatarDisplaySize } from './avatar-geometry';
 
-export function WhalePortrait({ containerRef, ahogeRef, artworkUrl, size, personaId, onBoxChange }: {
-  containerRef?: Ref<HTMLDivElement>;
+export function WhalePortrait({ gestureRef, idleRef, swapRef, ahogeRef, artworkUrl, size, personaId, onBoxChange }: {
+  gestureRef?: Ref<HTMLDivElement>;
+  idleRef?: Ref<HTMLDivElement>;
+  swapRef?: Ref<HTMLDivElement>;
   ahogeRef?: Ref<HTMLImageElement>;
   artworkUrl?: string | null;
   size?: AvatarSize;
@@ -12,17 +14,16 @@ export function WhalePortrait({ containerRef, ahogeRef, artworkUrl, size, person
   onBoxChange?: (box: AvatarBox) => void;
 }) {
   const art = avatarArtFor(personaId);
-  const src = artworkUrl ?? art.body;
-  const imageRef = useRef<HTMLImageElement | null>(null);
+  const baseRef = useRef<HTMLImageElement | null>(null);
   const lastBox = useRef<AvatarBox | null>(null);
   const changeRef = useRef(onBoxChange);
   changeRef.current = onBoxChange;
 
-  /** 量出裁剪后图片的可见尺寸，写进 CSS 变量，并把命中矩形报给主进程。
-   *  长边不超过原可见尺寸：横躺的 doze 也不会被拉大。 */
+  /** The base asset alone defines the hit box. Swapping an expression must
+   * never move the button, resize the BrowserWindow shape or shift a drag. */
   const sync = (): void => {
-    const image = imageRef.current;
-    if (!image || !image.naturalWidth || !image.naturalHeight) return;
+    const image = baseRef.current;
+    if (!image?.naturalWidth || !image.naturalHeight) return;
     const box = avatarDisplaySize(image.naturalWidth, image.naturalHeight, size);
     document.documentElement.style.setProperty('--avatar-w', `${box.width.toFixed(2)}px`);
     document.documentElement.style.setProperty('--avatar-h', `${box.height.toFixed(2)}px`);
@@ -44,23 +45,26 @@ export function WhalePortrait({ containerRef, ahogeRef, artworkUrl, size, person
   useEffect(() => {
     window.addEventListener('resize', schedule);
     return () => window.removeEventListener('resize', schedule);
-  }, []);
-
-  // 缓存命中时 onLoad 可能在挂载前就结束了；图片或大小档变化后再补量一次。
-  useEffect(() => {
-    if (imageRef.current?.complete) schedule();
-  }, [src, size]);
+  }, [art.body, size]);
+  // A cached base image may have loaded before mount. Size and persona
+  // changes still need a fresh measurement; expression changes do not.
+  useEffect(() => { if (baseRef.current?.complete) schedule(); }, [art.body, size]);
 
   return (
-    <div className="avatar-portrait" ref={containerRef}>
-      {src && (
-        <img ref={imageRef} className="avatar-artwork" src={src} alt="" draggable={false} onLoad={schedule} />
-      )}
-      {/* The swingable ahoge rides only over the base artwork; pose sprites
-          bring their own ahoge and hide this layer. */}
-      {!artworkUrl && art.ahoge && (
-        <img className="avatar-ahoge" ref={ahogeRef} src={art.ahoge} alt="" draggable={false} />
-      )}
+    <div className="avatar-gesture" ref={gestureRef}>
+      <div className="avatar-idle-motion" ref={idleRef}>
+        <div className="avatar-breath">
+          <div className="avatar-swap" ref={swapRef}>
+            <div className="avatar-portrait">
+              {art.body && <img ref={baseRef} className="avatar-artwork" src={art.body} alt=""
+                draggable={false} onLoad={schedule} style={{ opacity: artworkUrl ? 0 : 1 }} />}
+              {artworkUrl && <img className="avatar-artwork avatar-artwork-variant" src={artworkUrl} alt="" draggable={false} />}
+              {art.ahoge && !artworkUrl && <img className="avatar-ahoge" ref={ahogeRef} src={art.ahoge}
+                alt="" draggable={false} />}
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

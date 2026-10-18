@@ -1,11 +1,8 @@
-import { describe, expect, it } from 'vitest'
-import { clickBounceFrames, clickBounceTiming, playClickBounce } from '../src/renderer/avatar-motion'
+import { describe, expect, it, vi } from 'vitest'
+import { cancelClickBounce, clickBounceFrames, clickBounceTiming, playClickBounce, watchReducedMotion } from '../src/renderer/avatar-motion'
 
-/** Geometry the frames must respect: the trimmed artwork is 128 px tall and
- *  sits in a hit box with 6 px of animation room above and below (height
- *  140). The window shape is that box, so a frame may poke past it by at
- *  most the 2 px safety margin below. If the box constants change, revisit
- *  this file's numbers with the code. */
+/** At the smallest size the art has six pixels of vertical slack on either
+ * side. Feedback must stay inside that unchanged hit rectangle. */
 const TOP = 6
 const BOTTOM = 134
 const HALF = 64
@@ -36,9 +33,9 @@ describe('click bounce frames', () => {
     }
   })
 
-  it('starts at rest and ends at rest so the button returns exactly to layout', () => {
+  it('starts at rest and ends at rest so a click never begins with a jump', () => {
     const frames = clickBounceFrames()
-    expect(parseFrame(String(frames[0].transform))).toEqual({ ty: 4.5, sy: 0.96 })
+    expect(parseFrame(String(frames[0].transform))).toEqual({ ty: 0, sy: 1 })
     const last = parseFrame(String(frames[frames.length - 1].transform))
     expect(last).toEqual({ ty: 0, sy: 1 })
   })
@@ -75,5 +72,23 @@ describe('playClickBounce guards', () => {
     // A second poke cancels the previous pass before starting over.
     playClickBounce(fake, false)
     expect(cancelled).toBe(1)
+    cancelClickBounce(fake)
+    expect(cancelled).toBe(2)
+  })
+
+  it('observes live OS reduced-motion changes and unsubscribes cleanly', () => {
+    let callback: (() => void) | undefined
+    const query = { matches: false,
+      addEventListener: vi.fn((_name: string, listener: () => void) => { callback = listener }),
+      removeEventListener: vi.fn() }
+    vi.stubGlobal('window', { matchMedia: vi.fn(() => query) })
+    const states: boolean[] = []
+    const stop = watchReducedMotion((value) => states.push(value))
+    query.matches = true
+    callback?.()
+    expect(states).toEqual([true])
+    stop()
+    expect(query.removeEventListener).toHaveBeenCalledWith('change', callback)
+    vi.unstubAllGlobals()
   })
 })

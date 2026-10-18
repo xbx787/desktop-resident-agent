@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { AHOGE_ROOT, ahogeFlickFrames, ahogeOrigin } from '../src/renderer/avatar-ahoge'
+import { AHOGE_CANVAS, AHOGE_ROOT, ahogeFlickFrames, ahogeOrigin } from '../src/renderer/avatar-ahoge'
 
 describe('ahoge flick frames', () => {
   it('starts and ends at rest so the layer lands back on the body', () => {
@@ -15,15 +15,18 @@ describe('ahoge flick frames', () => {
 })
 
 describe('ahogeOrigin', () => {
-  it('maps the traced root through a square box', () => {
-    const origin = ahogeOrigin({ width: 400, height: 400 })
-    expect(origin.x).toBeCloseTo(AHOGE_ROOT.x * 400, 5)
-    expect(origin.y).toBeCloseTo(AHOGE_ROOT.y * 400, 5)
+  it('uses the root on the actual 1016×1218 cropped canvas', () => {
+    expect(AHOGE_CANVAS).toEqual({ width: 1016, height: 1218 })
+    expect(AHOGE_ROOT).toEqual({ x: 502 / 1016, y: 88 / 1218 })
+    const origin = ahogeOrigin(AHOGE_CANVAS)
+    expect(origin.x).toBeCloseTo(502, 5)
+    expect(origin.y).toBeCloseTo(88, 5)
   })
 
-  it('accounts for the contain letterbox in a wide box', () => {
+  it('accounts for contain letterboxing without treating the art as square', () => {
     const origin = ahogeOrigin({ width: 600, height: 400 })
-    expect(origin.x).toBeCloseTo(100 + AHOGE_ROOT.x * 400, 5)
-    expect(origin.y).toBeCloseTo(AHOGE_ROOT.y * 400, 5)
+    const scale = 400 / AHOGE_CANVAS.height
+    expect(origin.x).toBeCloseTo((600 - AHOGE_CANVAS.width * scale) / 2 + 502 * scale, 5)
+    expect(origin.y).toBeCloseTo(88 * scale, 5)
   })
 })

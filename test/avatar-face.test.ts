@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FACE_HOLD_MS, lastUserEntryId, SEND_FACE_HOLD_MS, stateFace, taskDot } from '../src/renderer/avatar-face'
+import { FACE_HOLD_MS, lastUserEntryId, resolveAvatarPresentation, SEND_FACE_HOLD_MS, stateFace, taskDot } from '../src/renderer/avatar-face'
 
 describe('stateFace', () => {
   it('maps a busy turn to focus and a delivered reply to smile', () => {
@@ -12,6 +12,30 @@ describe('stateFace', () => {
     for (const state of ['idle', 'listening', 'speaking', 'error', undefined, '']) {
       expect(stateFace(state)).toBeNull()
     }
+  })
+})
+
+describe('resolved avatar presentation', () => {
+  it('keeps the task, voice and approval states in a stable priority order', () => {
+    expect(resolveAvatarPresentation({ taskStatus: 'planning', avatarState: 'thinking' }))
+      .toEqual({ activity: 'working', face: 'focus', idleAllowed: false })
+    expect(resolveAvatarPresentation({ taskStatus: 'awaiting_approval', avatarState: 'thinking' }))
+      .toEqual({ activity: 'waiting', face: 'surprise', idleAllowed: false })
+    expect(resolveAvatarPresentation({ taskStatus: 'executing', avatarState: 'speaking' }))
+      .toEqual({ activity: 'speaking', face: 'smile', idleAllowed: false })
+    expect(resolveAvatarPresentation({ taskStatus: 'executing', acknowledging: true }))
+      .toEqual({ activity: 'working', face: 'smile', idleAllowed: false })
+  })
+
+  it('freezes idle during drag and active tasks, then returns to idle cleanly', () => {
+    expect(resolveAvatarPresentation({ dragging: true, taskStatus: 'executing' }))
+      .toEqual({ activity: 'dragging', face: 'focus', idleAllowed: false })
+    expect(resolveAvatarPresentation({ taskStatus: 'done', settled: 'done' }))
+      .toEqual({ activity: 'completed', face: 'smile', idleAllowed: false })
+    expect(resolveAvatarPresentation({ taskStatus: 'failed', settled: 'failed' }))
+      .toEqual({ activity: 'failed', face: 'shy', idleAllowed: false })
+    expect(resolveAvatarPresentation({ taskStatus: 'done' }))
+      .toEqual({ activity: 'idle', face: null, idleAllowed: true })
   })
 })
 

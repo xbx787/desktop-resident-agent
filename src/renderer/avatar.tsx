@@ -7,11 +7,11 @@ import { BalanceCard } from './balance';
 import { balanceErrorMessage } from './balance-error';
 import { PanelBubble } from './panel';
 import { petBridge, usePetState } from './pet-state';
-import { playClickBounce } from './avatar-motion';
+import { cancelClickBounce, playClickBounce, prefersReducedMotion, watchReducedMotion } from './avatar-motion';
 import { startIdleFidgets } from './avatar-idle';
-import { playPoseSwap, poseSrc, preloadPoses, startPoseClock } from './avatar-poses';
-import { FACE_HOLD_MS, lastUserEntryId, SEND_FACE_HOLD_MS, stateFace, TASK_DOT_HOLD_MS, taskDot, type TaskDot } from './avatar-face';
-import { playAhogeFlick } from './avatar-ahoge';
+import { cancelPoseSwap, playPoseSwap, poseSrc, preloadPoses, startPoseClock } from './avatar-poses';
+import { FACE_HOLD_MS, FAILED_FACE_HOLD_MS, lastUserEntryId, resolveAvatarPresentation, SEND_FACE_HOLD_MS, TASK_DOT_HOLD_MS, taskDot, type TaskDot } from './avatar-face';
+import { cancelAhogeFlick, playAhogeFlick } from './avatar-ahoge';
 import './avatar.css';
 
 interface PointerSession {
@@ -43,24 +43,34 @@ function Avatar() {
   const moveFrame = useRef<number | null>(null);
   const moveQueued = useRef(false);
   const moveDirty = useRef(false);
-  const portraitRef = useRef<HTMLDivElement | null>(null);
+  const gestureRef = useRef<HTMLDivElement | null>(null);
+  const idleRef = useRef<HTMLDivElement | null>(null);
+  const swapRef = useRef<HTMLDivElement | null>(null);
+  const idleStop = useRef<(() => void) | null>(null);
   const ahogeRef = useRef<HTMLImageElement | null>(null);
   const [poseId, setPoseId] = useState<string | null>(null);
-  const [faceId, setFaceId] = useState<string | null>(null);
-  const faceIdRef = useRef<string | null>(null);
-  faceIdRef.current = faceId;
-  // A state face outranks the idle rotation; the clock below sits out.
-  const faceActive = useRef(false);
-  const faceHold = useRef<number | null>(null);
-  // A send's smile owns the face for a beat: the state effect stands clear
-  // until that window closes (it then re-reads the state and settles into
-  // whatever the turn wants — usually the focus).
-  const sendHold = useRef(false);
-  // The shoulder dot: busy tones ride the status as long as it lasts; settled
-  // ones show for a beat and fade, so "done" reads as a moment, not a state.
+  const [visibleArt, setVisibleArt] = useState<string | null>(null);
+  const requestedArt = useRef<string | null>(null);
+  const [reducedMotion, setReducedMotion] = useState(prefersReducedMotion);
+  const [dragging, setDragging] = useState(false);
+  const [interactionEpoch, setInteractionEpoch] = useState(0);
+  const [acknowledging, setAcknowledging] = useState(false);
+  const [settled, setSettled] = useState<'done' | 'failed' | null>(null);
+  const sendTimer = useRef<number | null>(null);
+  const outcomeTimer = useRef<number | null>(null);
+  const avatarState = snapshot?.avatarState;
+  const taskStatus = snapshot?.taskStatus;
+  const presentation = resolveAvatarPresentation({ avatarState, taskStatus, acknowledging, settled, dragging });
+  const desiredArt = personaArt.poses
+    ? presentation.face ?? ((presentation.idleAllowed || dragging) ? poseId : null)
+    : null;
+
+  useEffect(() => watchReducedMotion(setReducedMotion), []);
+
+  // The dot belongs to this avatar window. Settled outcomes fade, ongoing
+  // ones stay visible; their pulse is a local CSS keyframe.
   const [dot, setDot] = useState<TaskDot | null>(null);
   const dotHold = useRef<number | null>(null);
-  const taskStatus = snapshot?.taskStatus;
   useEffect(() => {
     const next = taskDot(taskStatus);
     if (dotHold.current !== null) { window.clearTimeout(dotHold.current); dotHold.current = null; }
@@ -70,10 +80,64 @@ function Avatar() {
   }, [taskStatus]);
   useEffect(() => () => { if (dotHold.current !== null) window.clearTimeout(dotHold.current); }, []);
 
-  // 静止（一分钟没有交互）就停下呼吸与一切偶发动效：窗口不再产生新帧，
-  // dwm 也就不再为它反复合成——这是静止基线的最大一笔。任何交互立刻唤醒。
+  // A sent message gets a brief acknowledgement. Repeated snapshots of the
+  // same message do not restart the timer; changing tabs cancels it.
+  const newestUserEntryId = snapshot ? lastUserEntryId(snapshot.timeline) : null;
+  const lastUserRef = useRef<{ conversationId: string | undefined; entryId: string | null } | null>(null);
+  useEffect(() => {
+    const conversationId = snapshot?.conversationId;
+    const previous = lastUserRef.current;
+    lastUserRef.current = { conversationId, entryId: newestUserEntryId };
+    if (!previous || previous.conversationId !== conversationId) {
+      if (sendTimer.current !== null) window.clearTimeout(sendTimer.current);
+      sendTimer.current = null;
+      setAcknowledging(false);
+      return;
+    }
+    if (newestUserEntryId === null || newestUserEntryId === previous.entryId) return;
+    if (sendTimer.current !== null) window.clearTimeout(sendTimer.current);
+    setAcknowledging(true);
+    sendTimer.current = window.setTimeout(() => {
+      sendTimer.current = null;
+      setAcknowledging(false);
+    }, SEND_FACE_HOLD_MS);
+  }, [snapshot?.conversationId, newestUserEntryId]);
+
+  // Show a finished/failed expression only on a transition in the current
+  // conversation. An old completed tab must not smile again when selected.
+  const outcomeRef = useRef<{ conversationId: string | undefined; kind: 'done' | 'failed' | null } | null>(null);
+  useEffect(() => {
+    const conversationId = snapshot?.conversationId;
+    const kind = taskStatus === 'failed' || avatarState === 'error' ? 'failed'
+      : taskStatus === 'done' || avatarState === 'success' ? 'done' : null;
+    const previous = outcomeRef.current;
+    outcomeRef.current = { conversationId, kind };
+    if (previous && previous.conversationId === conversationId && previous.kind === kind) return;
+    if (outcomeTimer.current !== null) window.clearTimeout(outcomeTimer.current);
+    outcomeTimer.current = null;
+    if (!previous || previous.conversationId !== conversationId || kind === null) {
+      setSettled(null);
+      return;
+    }
+    setSettled(kind);
+    outcomeTimer.current = window.setTimeout(() => {
+      outcomeTimer.current = null;
+      setSettled(null);
+    }, kind === 'done' ? FACE_HOLD_MS : FAILED_FACE_HOLD_MS);
+  }, [snapshot?.conversationId, taskStatus, avatarState]);
+  useEffect(() => () => {
+    if (sendTimer.current !== null) window.clearTimeout(sendTimer.current);
+    if (outcomeTimer.current !== null) window.clearTimeout(outcomeTimer.current);
+    cancelPoseSwap(swapRef.current);
+    cancelClickBounce(gestureRef.current);
+    cancelAhogeFlick(ahogeRef.current);
+  }, []);
+
+  // Inactivity sleeps only the idle breath; task and voice state wake it.
   useEffect(() => {
     const REST_MS = 60_000;
+    document.body.classList.remove('is-resting');
+    if (!presentation.idleAllowed) return;
     let timer = window.setTimeout(() => document.body.classList.add('is-resting'), REST_MS);
     const wake = (): void => {
       document.body.classList.remove('is-resting');
@@ -86,7 +150,7 @@ function Avatar() {
       window.clearTimeout(timer);
       for (const name of events) window.removeEventListener(name, wake);
     };
-  }, []);
+  }, [presentation.idleAllowed]);
 
   // 元素上的 pointerup 偶尔收不到（指针被别的窗口或系统手势抢走）：窗口级
   // 的抬起与取消兜底收尾，别让会话留在引用里把后续的拖动和单击一起挡掉。
@@ -94,6 +158,7 @@ function Avatar() {
     const settle = (): void => {
       if (!pointer.current) return;
       pointer.current = null;
+      setDragging(false);
       queueDrag((bridge) => bridge.endDrag());
     };
     window.addEventListener('pointerup', settle);
@@ -104,86 +169,47 @@ function Avatar() {
     };
   }, []);
 
-  useEffect(() => startIdleFidgets(portraitRef.current), []);
   useEffect(() => {
-    if (!personaArt.poses) return;
-    preloadPoses();
-    return startPoseClock((pose) => {
-      if (faceActive.current) return;
-      playPoseSwap(portraitRef.current, () => setPoseId(pose ? pose.id : null));
-    });
-  }, [personaArt.poses]);
-
-  // State faces: focus while a reply is being produced, a smile for a beat
-  // once it lands. The smile window shields itself from the states that
-  // follow it (a voice broadcast flips avatarState again right after), while
-  // a new turn cancels any lingering smile immediately.
-  const avatarState = snapshot?.avatarState;
-  const avatarStateRef = useRef(avatarState);
-  avatarStateRef.current = avatarState;
+    if (!presentation.idleAllowed || reducedMotion) return;
+    const stop = startIdleFidgets(idleRef.current, false);
+    idleStop.current = stop;
+    return () => {
+      stop();
+      if (idleStop.current === stop) idleStop.current = null;
+    };
+  }, [presentation.idleAllowed, reducedMotion, personaId, interactionEpoch]);
+  useEffect(() => { if (personaArt.poses) preloadPoses(); }, [personaArt.poses]);
   useEffect(() => {
-    if (sendHold.current) return;
-    const face = stateFace(avatarState);
-    if (face === 'focus') {
-      if (faceHold.current !== null) {
-        window.clearTimeout(faceHold.current);
-        faceHold.current = null;
-      }
-      if (!faceActive.current || faceIdRef.current !== 'focus') {
-        faceActive.current = true;
-        playPoseSwap(portraitRef.current, () => setFaceId('focus'));
-      }
+    if (dragging) return;
+    if (!personaArt.poses || !presentation.idleAllowed || reducedMotion) {
+      setPoseId(null);
       return;
     }
-    if (face === 'smile') {
-      if (faceHold.current !== null) return;
-      faceActive.current = true;
-      playPoseSwap(portraitRef.current, () => setFaceId('smile'));
-      faceHold.current = window.setTimeout(() => {
-        faceHold.current = null;
-        faceActive.current = false;
-        playPoseSwap(portraitRef.current, () => setFaceId(null));
-      }, FACE_HOLD_MS);
+    setPoseId(null);
+    return startPoseClock((pose) => setPoseId(pose?.id ?? null));
+  }, [personaArt.poses, presentation.idleAllowed, reducedMotion, personaId, dragging]);
+
+  // Expression changes use a small opacity dip, while dragging and reduced
+  // motion update immediately. The swap controller cancels stale
+  // onfinish callbacks, including fast task/voice/tab changes.
+  useEffect(() => {
+    if (reducedMotion || dragging) {
+      cancelPoseSwap(swapRef.current);
+      requestedArt.current = desiredArt;
+      setVisibleArt(desiredArt);
       return;
     }
-    if (faceHold.current !== null) return;
-    if (faceActive.current) {
-      faceActive.current = false;
-      playPoseSwap(portraitRef.current, () => setFaceId(null));
-    }
-  }, [avatarState]);
+    if (requestedArt.current === desiredArt) return;
+    requestedArt.current = desiredArt;
+    playPoseSwap(swapRef.current, () => setVisibleArt(desiredArt), false);
+  }, [desiredArt, reducedMotion, dragging]);
 
-  // A message the user just sent gets a beat of its own — the "heard you"
-  // smile — before the turn's focus takes over. A first snapshot, an
-  // unchanged newest message, or a different conversation is not a send.
-  const lastUserRef = useRef<{ conversationId: string | undefined; entryId: string | null } | null>(null);
   useEffect(() => {
-    const conversationId = snapshot?.conversationId;
-    const entryId = snapshot ? lastUserEntryId(snapshot.timeline) : null;
-    const previous = lastUserRef.current;
-    lastUserRef.current = { conversationId, entryId };
-    if (!previous || previous.conversationId !== conversationId || entryId === null || entryId === previous.entryId) return;
-    sendHold.current = true;
-    if (faceHold.current !== null) window.clearTimeout(faceHold.current);
-    faceActive.current = true;
-    playPoseSwap(portraitRef.current, () => setFaceId('smile'));
-    faceHold.current = window.setTimeout(() => {
-      faceHold.current = null;
-      sendHold.current = false;
-      const next = stateFace(avatarStateRef.current);
-      if (next === 'smile') {
-        // The reply landed inside the window — let that smile run its usual beat.
-        faceHold.current = window.setTimeout(() => {
-          faceHold.current = null;
-          faceActive.current = false;
-          playPoseSwap(portraitRef.current, () => setFaceId(null));
-        }, FACE_HOLD_MS);
-        return;
-      }
-      playPoseSwap(portraitRef.current, () => setFaceId(next));
-      if (next === null) faceActive.current = false;
-    }, SEND_FACE_HOLD_MS);
-  }, [snapshot?.conversationId, snapshot?.timeline]);
+    if (reducedMotion || dragging) {
+      cancelClickBounce(gestureRef.current);
+      cancelAhogeFlick(ahogeRef.current);
+    }
+  }, [reducedMotion, dragging]);
 
   useEffect(() => {
     let active = true;
@@ -250,6 +276,12 @@ function Avatar() {
     queueMove();
   }
 
+  function pauseIdleForInteraction() {
+    idleStop.current?.();
+    idleStop.current = null;
+    setInteractionEpoch((epoch) => epoch + 1);
+  }
+
   function handlePointerDown(event: React.PointerEvent<HTMLButtonElement>) {
     if (event.button !== 0) return;
     // 一次丢失的 pointerup（别的窗口抢走指针、系统手势插进来）会把会话留在
@@ -261,6 +293,8 @@ function Avatar() {
       queueDrag((bridge) => bridge.endDrag());
     }
     event.preventDefault();
+    pauseIdleForInteraction();
+    setDragging(true);
     event.currentTarget.setPointerCapture(event.pointerId);
     const position = { x: event.screenX, y: event.screenY };
     lastPointerPosition.current = position;
@@ -297,6 +331,7 @@ function Avatar() {
     const session = pointer.current;
     if (!session || session.id !== event.pointerId) return;
     pointer.current = null;
+    setDragging(false);
     if (!cancelled) lastPointerPosition.current = { x: event.screenX, y: event.screenY };
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
@@ -311,14 +346,14 @@ function Avatar() {
     if (!moved && !cancelled) {
       // The poke plays straight from the pointer turn — queued IPC would make
       // the feedback wait behind the drag chain.
-      playClickBounce(event.currentTarget);
-      playAhogeFlick(ahogeRef.current);
+      playClickBounce(gestureRef.current, reducedMotion);
+      playAhogeFlick(ahogeRef.current, reducedMotion);
       queueDrag((bridge) => panelOpen ? bridge.hidePanel() : bridge.showPanel());
     }
   }
 
   return (
-    <main className={`avatar-stage${panelOpen ? ' is-panel-open' : ''}${snapshot?.avatarState === 'speaking' ? ' is-speaking' : snapshot?.avatarState === 'listening' ? ' is-listening' : ''}`} onContextMenu={(event) => { void openContextMenu(event); }}>
+    <main className={`avatar-stage is-${presentation.activity}${panelOpen ? ' is-panel-open' : ''}`} onContextMenu={(event) => { void openContextMenu(event); }}>
       <button
         className="avatar-hit-target"
         type="button"
@@ -341,14 +376,15 @@ function Avatar() {
         onKeyDown={(event) => {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
-            playClickBounce(event.currentTarget);
-            playAhogeFlick(ahogeRef.current);
+            pauseIdleForInteraction();
+            playClickBounce(gestureRef.current, reducedMotion);
+            playAhogeFlick(ahogeRef.current, reducedMotion);
             void run((bridge) => panelOpen ? bridge.hidePanel() : bridge.showPanel());
           }
         }}
       >
-        <WhalePortrait containerRef={portraitRef} ahogeRef={ahogeRef}
-          artworkUrl={personaArt.poses ? (faceId ? poseSrc(faceId) : poseId ? poseSrc(poseId) : null) : null}
+        <WhalePortrait gestureRef={gestureRef} idleRef={idleRef} swapRef={swapRef} ahogeRef={ahogeRef}
+          artworkUrl={personaArt.poses && visibleArt ? poseSrc(visibleArt) : null}
           personaId={personaId}
           size={snapshot?.conversationLibrary?.settings.avatarSize ?? 'small'}
           onBoxChange={(box: AvatarBox) => { void petBridge().setAvatarBox(box).catch(() => undefined); }} />

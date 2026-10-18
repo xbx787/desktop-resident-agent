@@ -1,5 +1,5 @@
-/** The ahoge flick. The base portrait is split into a static body and an
- *  ahoge layer (scripts/ahoge-cut.cjs), both on the same 1254² canvas, so at
+/** The ahoge flick. The base portrait and ahoge layer share a 1016×1218
+ *  cropped canvas, so at
  *  rest the two stack back into the original artwork pixel-perfectly. A poke
  *  swings only the layer around its root — one hand-drawn part moves while
  *  everything else stays exactly still, which is what the four-frame smear
@@ -8,8 +8,10 @@
 
 import { prefersReducedMotion } from './avatar-motion'
 
-/** Root of the ahoge on the 1254² canvas — stays in sync with scripts/ahoge-cut.cjs. */
-export const AHOGE_ROOT = { x: 636 / 1254, y: 118 / 1254 }
+/** Original root (636,118) minus the active asset's crop origin (134,30).
+ * The current layer image needs repairing before this motion becomes visible. */
+export const AHOGE_CANVAS = { width: 1016, height: 1218 }
+export const AHOGE_ROOT = { x: 502 / AHOGE_CANVAS.width, y: 88 / AHOGE_CANVAS.height }
 
 /** Knock the ahoge down, let it spring past level, settle. */
 export function ahogeFlickFrames(): Keyframe[] {
@@ -26,22 +28,34 @@ export function ahogeFlickTiming(): KeyframeAnimationOptions {
   return { duration: 700 }
 }
 
-/** The layer is object-fit: contain inside its box, so the square artwork
- *  sits centred with letterbox bars; the root's pixel origin must be mapped
- *  through that geometry or the swing axis drifts when the window is not
- *  square. */
+/** Map the cropped, non-square canvas through object-fit: contain. */
 export function ahogeOrigin(rect: { width: number; height: number }): { x: number; y: number } {
-  const size = Math.min(rect.width, rect.height)
+  const scale = Math.min(rect.width / AHOGE_CANVAS.width, rect.height / AHOGE_CANVAS.height)
+  const width = AHOGE_CANVAS.width * scale
+  const height = AHOGE_CANVAS.height * scale
   return {
-    x: (rect.width - size) / 2 + AHOGE_ROOT.x * size,
-    y: (rect.height - size) / 2 + AHOGE_ROOT.y * size
+    x: (rect.width - width) / 2 + AHOGE_ROOT.x * width,
+    y: (rect.height - height) / 2 + AHOGE_ROOT.y * height
   }
+}
+
+const lastPlayed = new WeakMap<Element, Animation>()
+
+export function cancelAhogeFlick(el: Element | null): void {
+  if (!el) return
+  const previous = lastPlayed.get(el)
+  lastPlayed.delete(el)
+  previous?.cancel()
 }
 
 export function playAhogeFlick(el: Element | null, reduced = prefersReducedMotion()): void {
   const target = el as (Element & { animate?: HTMLElement['animate'] }) | null
-  if (!target || reduced || typeof target.animate !== 'function') return
-  const origin = ahogeOrigin(target.getBoundingClientRect())
+  if (!target) return
+  cancelAhogeFlick(target)
+  if (reduced || typeof target.animate !== 'function') return
+  const origin = ahogeOrigin({ width: (target as HTMLElement).clientWidth, height: (target as HTMLElement).clientHeight })
   ;(target as HTMLElement).style.transformOrigin = `${origin.x}px ${origin.y}px`
-  target.animate(ahogeFlickFrames(), ahogeFlickTiming())
+  const animation = target.animate(ahogeFlickFrames(), ahogeFlickTiming())
+  lastPlayed.set(target, animation)
+  animation.onfinish = () => { if (lastPlayed.get(target) === animation) lastPlayed.delete(target) }
 }

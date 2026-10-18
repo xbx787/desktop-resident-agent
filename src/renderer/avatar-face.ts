@@ -13,6 +13,45 @@ export const FACE_HOLD_MS = 4200
  *  longer story. */
 export const SEND_FACE_HOLD_MS = 1400
 
+/** Failed tasks keep their expression briefly, then return to neutral. */
+export const FAILED_FACE_HOLD_MS = 3000
+
+export type AvatarActivity = 'idle' | 'working' | 'waiting' | 'listening' | 'speaking' | 'completed' | 'failed' | 'dragging'
+
+export interface AvatarPresentation {
+  activity: AvatarActivity
+  face: string | null
+  idleAllowed: boolean
+}
+
+/** One priority order for all portrait channels. The status dot is separate
+ * and remains visible during drag/voice, while the face and idle clocks obey
+ * this single resolved state. */
+export function resolveAvatarPresentation(input: {
+  taskStatus?: string
+  avatarState?: string
+  acknowledging?: boolean
+  settled?: 'done' | 'failed' | null
+  dragging?: boolean
+}): AvatarPresentation {
+  const { taskStatus, avatarState, acknowledging, settled, dragging } = input
+  if (dragging) {
+    const previous = resolveAvatarPresentation({ taskStatus, avatarState, acknowledging, settled })
+    return { activity: 'dragging', face: previous.face, idleAllowed: false }
+  }
+  if (avatarState === 'speaking') return { activity: 'speaking', face: 'smile', idleAllowed: false }
+  if (avatarState === 'listening') return { activity: 'listening', face: 'focus', idleAllowed: false }
+  if (acknowledging) return { activity: 'working', face: 'smile', idleAllowed: false }
+  if (taskStatus === 'awaiting_approval') return { activity: 'waiting', face: 'surprise', idleAllowed: false }
+  if (['planning', 'executing', 'verifying'].includes(taskStatus ?? '') ||
+      avatarState === 'thinking' || avatarState === 'acting') {
+    return { activity: 'working', face: 'focus', idleAllowed: false }
+  }
+  if (settled === 'done') return { activity: 'completed', face: 'smile', idleAllowed: false }
+  if (settled === 'failed') return { activity: 'failed', face: 'shy', idleAllowed: false }
+  return { activity: 'idle', face: null, idleAllowed: true }
+}
+
 /** The face for an avatar state, or null when no face is due. */
 export function stateFace(state: string | undefined): string | null {
   if (state === 'thinking' || state === 'acting') return 'focus'

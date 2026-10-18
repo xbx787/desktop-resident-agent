@@ -17,10 +17,8 @@ body.avatar-window { -webkit-user-select: none; user-select: none; }
 
 .avatar-hit-target {
   position: absolute;
-  /* 图片已经裁掉透明边。中心固定在距右边 88px（原 160×180 命中区的中心），
-     宽度随姿势的可见内容变化；内容顶部落在距窗口底 188px，气泡底边在
-     200px（小三角尖端 193px），中间留 5px。框上下各 6px 是点击下沉/
-     呼吸动画的缓冲。 */
+  /* 以当前人设基础立绘计算一次几何：表情切换不改按钮宽高。
+     中心固定在距右边 88px；上下各 6px 留给视觉层的轻微运动。 */
   right: calc(88px - var(--avatar-w, 116.5px) / 2);
   bottom: calc(182px - var(--avatar-h, 139.5px));
   display: block;
@@ -36,10 +34,8 @@ body.avatar-window { -webkit-user-select: none; user-select: none; }
 
 .avatar-hit-target:active { cursor: grabbing; }
 .avatar-hit-target:focus-visible { outline: 2px solid #9fe5d9; outline-offset: -3px; }
-/* The shoulder dot: the panel's own task-dot palette (panel.css
-   .panel-task-dot-*), so a folded panel never hides whether she is still
-   busy. Busy and waiting breathe; settled tones hold still and the component
-   fades them out. */
+/* The avatar lives in its own BrowserWindow. Its status pulse must be local;
+   the panel's --panel-pulse-p variable never reaches this document. */
 .avatar-task-dot { position: absolute; z-index: 2; top: 9px; right: 12px; width: 8px; height: 8px; border-radius: 50%; pointer-events: none; }
 .avatar-task-dot.is-busy { background: #f3c36f; }
 .avatar-task-dot.is-waiting { background: #7bbaff; }
@@ -47,49 +43,43 @@ body.avatar-window { -webkit-user-select: none; user-select: none; }
 .avatar-task-dot.is-failed { background: #f48790; }
 @keyframes avatar-task-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: .55; transform: scale(.85); }
+  50% { opacity: .58; transform: scale(.88); }
 }
 @media (prefers-reduced-motion: no-preference) {
-  .avatar-task-dot.is-pulsing { opacity: calc(1 - .45 * var(--panel-pulse-p, 0)); transform: scale(calc(1 - .15 * var(--panel-pulse-p, 0))); }
+  .avatar-task-dot.is-pulsing { animation: avatar-task-pulse 2s ease-in-out infinite; }
 }
-/* The character renders 10% smaller than her hit region (5% inset per side)
-   while the click/drag area stays full size. */
-/* 裁剪后的图片直接铺满可见宽度，上下各留 6px 给动画；没有额外空白。 */
-.avatar-portrait { position: absolute; top: 6px; left: 0; width: var(--avatar-w, 116.5px); height: var(--avatar-h, 139.5px); display: grid; place-items: center; pointer-events: none; }
-.avatar-artwork { grid-area: 1 / 1; width: 100%; height: 100%; object-fit: contain; transition: filter .18s ease, transform .18s ease; }
-/* The swingable ahoge layer: same grid cell and contain geometry as the
-   artwork, so it stacks back onto the body pixel-perfectly at rest. */
-.avatar-ahoge { grid-area: 1 / 1; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
-.avatar-stage.is-speaking .avatar-artwork { filter: drop-shadow(0 0 10px rgba(120, 200, 255, .55)); transform: scale(1.02); }
-.avatar-stage.is-listening .avatar-artwork { filter: drop-shadow(0 0 10px rgba(255, 120, 140, .55)); transform: scale(1.02); }
+/* All visual layers sit inside the immutable hit target. Gesture, idle,
+   breath, pose fade and ahoge own separate animation properties. */
+.avatar-gesture { position: absolute; top: 6px; left: 0; width: var(--avatar-w, 116.5px); height: var(--avatar-h, 139.5px); pointer-events: none; }
+.avatar-idle-motion, .avatar-breath, .avatar-swap, .avatar-portrait { position: relative; width: 100%; height: 100%; pointer-events: none; }
+.avatar-idle-motion { z-index: 1; }
+.avatar-portrait { display: grid; place-items: center; }
+.avatar-artwork, .avatar-ahoge { grid-area: 1 / 1; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+/* Base and ahoge use the exact same cropped canvas and transform together.
+   Voice cues live behind them instead of filtering/scaling only the body. */
+.avatar-gesture::before { content: ''; position: absolute; z-index: 0; left: 20%; top: 14%; width: 60%; height: 48%; border-radius: 50%; border: 1px solid transparent; opacity: 0; pointer-events: none; }
+.avatar-stage.is-working .avatar-gesture::before { border-color: rgba(243, 195, 111, .30); opacity: .36; }
+.avatar-stage.is-listening .avatar-gesture::before { border-color: rgba(129, 194, 249, .46); opacity: .55; }
+.avatar-stage.is-speaking .avatar-gesture::before { border-color: rgba(129, 194, 249, .58); opacity: .7; }
+.avatar-stage.is-waiting .avatar-gesture::before { border-color: rgba(128, 187, 255, .38); opacity: .45; }
+.avatar-stage.is-completed .avatar-gesture::before { border-color: rgba(128, 214, 161, .34); opacity: .42; }
+.avatar-stage.is-failed .avatar-gesture::before { border-color: rgba(244, 135, 144, .32); opacity: .4; }
 
-/* Press feedback: while held, the button sinks a couple of pixels and springs
-   back on release (the click bounce in avatar-motion.ts picks it up there).
-   Transform only — the window shape clips anything wider — and skipped
-   entirely when the system asks for reduced motion. */
-@media (prefers-reduced-motion: no-preference) {
-  .avatar-hit-target { transition: transform .1s ease-out; }
-  .avatar-hit-target:active { transform: translateY(2px) scale(1, .985); }
-}
-
-/* Idle life: a slow breath on the portrait layer, and the occasional fidget
-   from avatar-idle.ts. The layers keep independent transforms — the hit
-   target plays the click bounce, the portrait breathes, the artwork keeps
-   its own transform for speaking/listening — so nothing fights over one
-   property. Amplitudes stay well inside the window's 10 px vertical slack,
-   even when two layers move the same way at once (2 + 3.5 + growth ≈ 7 px
-   of the 8 px budget). */
+/* Quiet breathing only while idle. Working, voice and dragging stop it. */
 @keyframes whale-breath {
   0%, 100% { transform: translateY(0) scaleY(1); }
-  50% { transform: translateY(-2px) scaleY(1.008); }
+  50% { transform: translateY(-1.3px) scaleY(1.004); }
+}
+@keyframes avatar-voice-halo {
+  0%, 100% { opacity: .38; transform: scale(.96); }
+  50% { opacity: .72; transform: scale(1.03); }
 }
 @media (prefers-reduced-motion: no-preference) {
-  .avatar-portrait { transform-origin: 50% 100%; animation: whale-breath 3.6s ease-in-out infinite; }
+  .avatar-stage.is-idle .avatar-breath { transform-origin: 50% 100%; animation: whale-breath 4.4s ease-in-out infinite; }
+  .avatar-stage.is-listening .avatar-gesture::before,
+  .avatar-stage.is-speaking .avatar-gesture::before { animation: avatar-voice-halo 2.2s ease-in-out infinite; }
 }
-/* 静止（一分钟没有交互）：呼吸停下、窗口不再产生新帧——dwm 也就不再为它
-   反复合成。透明窗口的成本只发生在「有新帧要合成」的时刻，所以静止的窗口
-   本来就是零成本，无需（也无法）在运行时关掉窗口的透明。 */
-body.is-resting .avatar-portrait { animation-play-state: paused; }
+body.is-resting .avatar-breath { animation-play-state: paused; }
 
 /* 余额窗口就是卡片本身：右侧留 8px 给小三角，高度由主进程按人物档位设置。 */
 body.balance-window .balance-peek { top: 0; left: 0; right: 8px; bottom: auto; width: auto; height: 100%; }

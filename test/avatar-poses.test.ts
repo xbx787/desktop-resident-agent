@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { nextPose, playPoseSwap, POSES, poseGapMs, poseHoldMs, poseSrc } from '../src/renderer/avatar-poses'
+import { cancelPoseSwap, nextPose, playPoseSwap, POSES, poseGapMs, poseHoldMs, poseSrc } from '../src/renderer/avatar-poses'
 
 describe('pose library', () => {
-  it('keeps seven sprites in the idle rotation pool, each with a static source', () => {
+  it('rotates only upright expressions and never randomly jumps into a whole-body pose', () => {
     const ids = POSES.map((pose) => pose.id)
     expect(new Set(ids).size).toBe(ids.length)
-    expect(POSES.length).toBe(7)
+    expect(ids).toEqual(['surprise', 'sleepy', 'shy'])
+    expect(POSES.every((pose) => pose.kind === 'expression')).toBe(true)
+    expect(ids).not.toContain('doze')
+    expect(poseSrc('doze')).toBeNull()
     for (const pose of POSES) expect(poseSrc(pose.id)).toBeTruthy()
     expect(poseSrc('nope')).toBeNull()
   })
@@ -18,11 +21,11 @@ describe('pose library', () => {
 })
 
 describe('pose clock pacing', () => {
-  it('keeps swaps 22–60 s apart and holds each pose 3.2–8 s', () => {
-    expect(poseGapMs(() => 0)).toBe(22000)
+  it('keeps occasional idle expressions brief and well spaced', () => {
+    expect(poseGapMs(() => 0)).toBe(30000)
     expect(poseGapMs(() => 1)).toBe(60000)
-    expect(poseHoldMs(() => 0)).toBe(3200)
-    expect(poseHoldMs(() => 1)).toBe(8000)
+    expect(poseHoldMs(() => 0)).toBe(2200)
+    expect(poseHoldMs(() => 1)).toBe(4000)
   })
 
   it('never picks the pose that was just showing', () => {
@@ -44,10 +47,11 @@ describe('playPoseSwap', () => {
     expect(applied).toBe(2)
   })
 
-  it('changes the artwork only after the squash finishes, then springs back', () => {
+  it('changes the artwork only after an opacity dip, without moving the silhouette', () => {
     const animations: Array<{ onfinish: (() => void) | null; cancel(): void }> = []
     const fake = {
-      animate: () => {
+      animate: (frames: Keyframe[]) => {
+        expect(frames.every((frame) => 'opacity' in frame && !('transform' in frame))).toBe(true)
         const animation = { onfinish: null as (() => void) | null, cancel() {} }
         animations.push(animation)
         return animation as unknown as Animation
@@ -61,5 +65,27 @@ describe('playPoseSwap', () => {
     expect(appliedAt).toBe(1) // applied while only the squash exists — the rebound starts after
     expect(animations.length).toBe(2)
     animations[1].onfinish?.()
+  })
+
+  it('cannot apply a stale expression after a rapid state switch or cancellation', () => {
+    const animations: Array<{ onfinish: (() => void) | null; cancel(): void; cancelled: boolean }> = []
+    const fake = { animate: () => {
+      const animation = { onfinish: null as (() => void) | null, cancelled: false,
+        cancel() { this.cancelled = true } }
+      animations.push(animation)
+      return animation as unknown as Animation
+    } } as unknown as Element
+    const applied: string[] = []
+    playPoseSwap(fake, () => applied.push('idle'), false)
+    const staleFinish = animations[0].onfinish
+    playPoseSwap(fake, () => applied.push('working'), false)
+    expect(animations[0].cancelled).toBe(true)
+    staleFinish?.()
+    expect(applied).toEqual([])
+    animations[1].onfinish?.()
+    expect(applied).toEqual(['working'])
+    cancelPoseSwap(fake)
+    animations[2].onfinish?.()
+    expect(applied).toEqual(['working'])
   })
 })

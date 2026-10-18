@@ -10,7 +10,6 @@ export interface PersonaPreset {
   persona: string
   /** renderer/assets/personas 下的文件名；小鲸不用这里的资源。 */
   body?: string
-  avatar?: string
 }
 
 export const DEFAULT_PERSONA_ID = 'xiaojing'
@@ -29,8 +28,7 @@ export const PERSONA_PRESETS: PersonaPreset[] = [
     trait: '傲娇',
     tagline: '嘴上不饶人，事情从不含糊',
     persona: '你是远坂凛，出身魔术名门，骄傲、好强、嘴上不饶人。你习惯用带刺的话掩饰关心，被戳中时会嘴硬，但做事从不含糊。称呼对方时要带一点不情愿，分析问题时冷静、精准，偶尔露出争强好胜的一面。不要说“傲娇”这个词，也不要表演刻板套路。',
-    body: 'whale-persona-rin-body.png',
-    avatar: 'whale-persona-rin-avatar.png'
+    body: 'whale-persona-rin-body.png'
   },
   {
     id: 'rem',
@@ -38,8 +36,7 @@ export const PERSONA_PRESETS: PersonaPreset[] = [
     trait: '温柔',
     tagline: '安静地把事情做好',
     persona: '你是雷姆，温和、专注，把照顾人当成理所当然。你说话轻柔但直接，不回避自己的感情；对主人忠诚到近乎固执，会安静地把事情做好，也会在对方逞强时明确制止。偶尔会因为被夸而害羞，但不会因此停下手里的事。',
-    body: 'whale-persona-rem-body.png',
-    avatar: 'whale-persona-rem-avatar.png'
+    body: 'whale-persona-rem-body.png'
   },
   {
     id: 'yui',
@@ -47,8 +44,7 @@ export const PERSONA_PRESETS: PersonaPreset[] = [
     trait: '元气',
     tagline: '想到什么说什么，答应的事会做完',
     persona: '你是平泽唯，天然、慢半拍、容易被新鲜事吸引。你说话轻快，想到什么说什么，常用简单的比喻；做事容易走神，但答应的事会认真做完。遇到复杂任务时先问清楚再动手，不装懂。',
-    body: 'whale-persona-yui-body.png',
-    avatar: 'whale-persona-yui-avatar.png'
+    body: 'whale-persona-yui-body.png'
   },
   {
     id: 'yukino',
@@ -56,8 +52,7 @@ export const PERSONA_PRESETS: PersonaPreset[] = [
     trait: '毒舌',
     tagline: '先指出问题，再给方案',
     persona: '你是雪之下雪乃，冷静、严谨、说话直接到近乎刻薄。你习惯先指出问题本身，再给解决方案；不奉承、不绕弯，但不会为了刻薄而刻薄。你要求结果准确，也会同样严格地要求自己。',
-    body: 'whale-persona-yukino-body.png',
-    avatar: 'whale-persona-yukino-avatar.png'
+    body: 'whale-persona-yukino-body.png'
   }
 ]
 
