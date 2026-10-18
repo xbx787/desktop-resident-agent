@@ -347,10 +347,10 @@ interface RowDisplay {
 }
 
 /** Thinking entries get their own expandable row; everything else keeps the message layout. */
-function EntryItem({ entry, running, onOpenImage, display }: { entry: TimelineEntry; running: boolean; onOpenImage?: (name: string, url: string) => void; display: RowDisplay }) {
+export function EntryItem({ entry, running, onOpenImage, onKill, display }: { entry: TimelineEntry; running: boolean; onOpenImage?: (name: string, url: string) => void; onKill?: () => void; display: RowDisplay }) {
   return entry.kind === 'thinking'
     ? <ThinkingItem entry={entry} running={running} />
-    : <TimelineItem entry={entry} running={running} onOpenImage={onOpenImage} display={display} />;
+    : <TimelineItem entry={entry} running={running} onOpenImage={onOpenImage} onKill={onKill} display={display} />;
 }
 
 /** Data URLs per avatar file name — a new upload gets a new name, so entries
@@ -795,15 +795,20 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
     avatars: { user: library?.settings.userAvatar ?? null, assistant: library?.settings.assistantAvatar ?? null },
     personaAvatar: personaAvatarUrl(library?.settings.personaId)
   };
+  // The stop action is defined lower in the component, but rows rendered
+  // through renderEntry still need a stable callback. The ref carries the
+  // latest stop closure without forcing every memoized row to re-render.
+  const killTurnRef = useRef<() => void>(() => undefined);
+  const killTurn = useCallback(() => killTurnRef.current(), []);
   // Stable while the display settings are unchanged — that is what keeps the
   // memoized clusters from re-rendering on every stream tick. The image
   // viewer callback rides a ref for the same reason.
   const renderEntry = useCallback(
     (entry: TimelineEntry, running: boolean) => (
-      <EntryItem entry={entry} running={running} onOpenImage={openImageViewerRef.current} display={rowDisplay} />
+      <EntryItem entry={entry} running={running} onOpenImage={openImageViewerRef.current} onKill={killTurn} display={rowDisplay} />
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rowDisplay.showTimestamps, rowDisplay.avatars.user, rowDisplay.avatars.assistant]
+    [rowDisplay.showTimestamps, rowDisplay.avatars.user, rowDisplay.avatars.assistant, killTurn]
   );
   // The progress sentences inside a folded turn render the same way they do
   // outside one — the same RunParagraph rows, from a ref-stable callback.
@@ -1550,11 +1555,8 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
   }
 
   // The tool row's kill switch stops the whole turn (the same action as the
-  // composer's stop button), not just the running command. Keep the callback
-  // stable so the memoized timeline rows do not all repaint.
-  const stopRef = useRef<() => void>(() => undefined);
-  stopRef.current = () => { void stop(); };
-  const killTurn = useCallback(() => stopRef.current(), []);
+  // composer's stop button), not just the running command.
+  killTurnRef.current = () => { void stop(); };
 
   async function setSideExpanded(expanded: boolean): Promise<void> {
     const sessionId = sideChatRef.current?.sessionId;
@@ -2077,7 +2079,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
     const nextHeight = fitEditorHeight(editor);
     if (nextHeight === null) return;
     setComposerHeight((current) => current === nextHeight ? current : nextHeight);
-  }, [draft, composerOpen, expanded, compactEmpty]);
+  }, [draft, composerOpen, expanded, compactEmpty, visible]);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -2482,7 +2484,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
           }}>
             {sideExpanded && <p className="panel-side-intro">临时会话，记录不进入会话库</p>}
             {visibleGroups.map((group, index) => {
-              if (group.kind === 'single') return <EntryItem key={group.entry.id} entry={group.entry} running={false} onOpenImage={openImageViewer} display={rowDisplay} />;
+              if (group.kind === 'single') return <EntryItem key={group.entry.id} entry={group.entry} running={false} onOpenImage={openImageViewer} onKill={killTurn} display={rowDisplay} />;
               const segments = segmentTurn(group.items);
               const isLiveTurn = index === latestTurnIndex && active;
               // 思考中：插话按顺序留在过程流里——那就是当时的现场，不提前

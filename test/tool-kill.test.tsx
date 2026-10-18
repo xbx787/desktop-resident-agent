@@ -2,7 +2,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { TimelineItem } from '../src/renderer/panel'
+import { EntryItem, TimelineItem } from '../src/renderer/panel'
 import type { TimelineEntry } from '../src/shared/contracts'
 
 /** The kill switch on a running tool row: it must appear from the clock
@@ -83,6 +83,19 @@ describe('the tool-kill switch', () => {
     const onKill = vi.fn()
     await act(async () => {
       root.render(<TimelineItem entry={runningTool()} running display={display} onKill={onKill} />)
+    })
+    const button = container.querySelector<HTMLButtonElement>('.panel-tool-kill')!
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    expect(onKill).toHaveBeenCalledTimes(1)
+  })
+
+  it('passes the handler through the standard entry wrapper used by the feed', async () => {
+    now = START + 70_000
+    const onKill = vi.fn()
+    await act(async () => {
+      root.render(<EntryItem entry={runningTool()} running display={display} onKill={onKill} />)
     })
     const button = container.querySelector<HTMLButtonElement>('.panel-tool-kill')!
     await act(async () => {

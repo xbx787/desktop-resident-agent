@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { findSourceProjectRoot, isUsableWorkspace, readSavedWorkspace, resolveAgentWorkspace, writeSavedWorkspace } from '../src/main/workspace-root'
+import { findSourceProjectRoot, isUsableWorkspace, isWritableWorkspace, readSavedWorkspace, resolveAgentWorkspace, writeSavedWorkspace } from '../src/main/workspace-root'
 
 const testRoot = path.join(process.cwd(), '.cache', 'tests', `workspace-${randomUUID()}`)
 
@@ -57,6 +57,8 @@ describe('packaged Agent working directory', () => {
     expect(isUsableWorkspace(chosen)).toBe(true)
     expect(isUsableWorkspace('relative/path')).toBe(false)
     expect(isUsableWorkspace(path.join(testRoot, 'missing'))).toBe(false)
+    expect(isWritableWorkspace(chosen)).toBe(true)
+    expect(isWritableWorkspace(path.join(testRoot, 'missing'))).toBe(false)
     expect(() => writeSavedWorkspace(dataRoot, path.join(testRoot, 'missing'))).toThrow('工作目录')
   })
 })

@@ -28,7 +28,7 @@ import { loadWindowsMcpConfig } from './mcp-config'
 import { generateConversationTitle } from './title-generation'
 import { APP_SLASH_COMMANDS, listClaudeWorkflows, parseAppSlashCommand } from './claude-workflows'
 import { attachmentPreviewPath, prepareDroppedFile, readImagePreview, searchWorkspaceFiles, stagePastedAttachment, validAttachmentList, verifyDroppedFilePath } from './local-context'
-import { findSourceProjectRoot, isUsableWorkspace, readSavedWorkspace, resolveAgentWorkspace, writeSavedWorkspace } from './workspace-root'
+import { findSourceProjectRoot, isUsableWorkspace, isWritableWorkspace, readSavedWorkspace, resolveAgentWorkspace, writeSavedWorkspace } from './workspace-root'
 import { isEffortLevel } from '../shared/effort'
 import type { AvatarSize, BubbleLayout, ClaudeWorkflowOption, ConversationSettings, UiSize, UserAttachment } from '../shared/contracts'
 import { isApprovalMode, isAutoCompactPercent, PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH } from '../shared/contracts'
@@ -432,6 +432,7 @@ async function pickWorkspaceDirectory(parent: BrowserWindow | undefined, current
  *  environment variable is touched. */
 async function migrateAgentWorkspace(next: string): Promise<string> {
   if (!isUsableWorkspace(next)) throw new Error('工作目录必须是存在的绝对路径。')
+  if (!isWritableWorkspace(next)) throw new Error('工作目录不可写，请选择有写权限的文件夹。')
   const normalized = path.normalize(next.trim())
   // Confirming the auto-detected directory still records the choice, but does
   // not need to tear down any live connection.

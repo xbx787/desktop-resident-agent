@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { accessSync, constants, existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 function isDirectory(candidate: string): boolean {
@@ -13,6 +13,18 @@ function isDirectory(candidate: string): boolean {
 export function isUsableWorkspace(candidate: unknown): candidate is string {
   return typeof candidate === 'string' && candidate.trim() !== '' &&
     path.isAbsolute(candidate.trim()) && isDirectory(candidate.trim())
+}
+
+/** A migration target must also be writable; a read-only folder would only
+ *  look chosen until the first file tool failed. */
+export function isWritableWorkspace(candidate: unknown): candidate is string {
+  if (!isUsableWorkspace(candidate)) return false
+  try {
+    accessSync(candidate.trim(), constants.W_OK)
+    return true
+  } catch {
+    return false
+  }
 }
 
 export function workspaceSettingsPath(dataRoot: string): string {
