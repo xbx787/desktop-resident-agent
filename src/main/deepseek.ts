@@ -56,6 +56,8 @@ export interface ModelClient {
   setWebSearchEnabled?(on: boolean): void
   /** Clients that can change the auto-compaction threshold implement this. */
   setAutoCompactPercent?(percent: number): void
+  /** Clients that can load installed MCP servers and local plugins implement this. */
+  setLibraries?(mcpServers: Record<string, unknown>, plugins: string[]): void
   /** Clients that switch the persona preset implement this. */
   setPersonaId?(id: string): void
   setApprovalModeListener?(listener: (mode: ApprovalMode) => void): void

@@ -2,6 +2,7 @@ import { Fragment, memo, useEffect, useRef, useState, type ReactNode } from 'rea
 import type { TimelineEntry } from '../shared/contracts'
 import { toolLabel } from '../shared/tool-labels'
 import { thinkingDurationText, thinkingElapsedSeconds } from './thinking-item'
+import { toolArgumentPreview } from './tool-arguments'
 import { sameTimelineEntry, type TurnSegment } from './timeline-groups'
 
 export interface WorkFacts {
@@ -11,6 +12,28 @@ export interface WorkFacts {
   toolSummary: string
   thinkingSeconds: number
   elapsedSeconds: number | null
+  /** The latest call, for the one-line "what is it doing" header. */
+  lastTool?: { name: string; detail: string }
+}
+
+/** Past-tense, one sentence. Unknown tools fall back to their Chinese label so
+ *  a future tool still reads as an action instead of a raw identifier. */
+export function workAction(tool: { name: string; detail: string }): string {
+  const name = tool.name.trim().toLowerCase()
+  const phrase = name === 'read' || name === 'notebookread' ? '读取了文件'
+    : name === 'write' ? '写入了文件'
+      : name === 'edit' || name === 'multiedit' || name === 'notebookedit' ? '编辑了文件'
+        : name === 'bash' ? '执行了命令'
+          : name === 'glob' || name === 'grep' || name === 'search' ? '搜索了文件'
+            : name === 'websearch' || name === 'mcp__deepseek__search' ? '搜索了网页'
+              : name === 'webfetch' || name === 'mcp__deepseek__fetch' ? '抓取了网页'
+                : name === 'task' || name === 'agent' ? '启动了子任务'
+                  : name === 'askuserquestion' ? '询问了你'
+                    : name === 'exitplanmode' ? '提交了计划'
+                      : name === 'skill' ? '调用了技能'
+                        : `执行了${toolLabel(tool.name)}`
+  const detail = tool.detail.replace(/\s+/gu, ' ').trim()
+  return detail ? `${phrase} · ${detail.length > 72 ? `${detail.slice(0, 72)}…` : detail}` : phrase
 }
 
 function toolSummaryOf(names: string[]): string {
@@ -34,14 +57,19 @@ export function workFacts(items: TimelineEntry[], nowMs: number, running: boolea
   const last = items[items.length - 1]
   const ended = running ? nowMs : last?.endedAt ? Date.parse(last.endedAt) : Date.parse(last?.time ?? '')
   const elapsedSeconds = Number.isFinite(started) && Number.isFinite(ended) ? Math.max(0, Math.floor((ended - started) / 1000)) : null
-  return { steps: items.length, toolCount: tools.length, toolSummary: toolSummaryOf(tools), thinkingSeconds, elapsedSeconds }
+  const lastEntry = [...items].reverse().find((entry) => entry.kind === 'tool')
+  const lastTool = lastEntry?.tool
+    ? { name: lastEntry.tool.name, detail: toolArgumentPreview(lastEntry.tool.input) }
+    : undefined
+  return { steps: items.length, toolCount: tools.length, toolSummary: toolSummaryOf(tools), thinkingSeconds, elapsedSeconds, lastTool }
 }
 
-/** The header's extra fact: how many operations ran. No clock — a per-second
- *  number forced the live row to repaint every second and kept restarting its
- *  sheen animation. The hover title carries the rest. */
+/** The header's extra fact: what the assistant is doing right now (or last
+ *  did). One sentence, with the file/command as its tail — a count said
+ *  nothing about the work itself. The hover title still carries the full
+ *  breakdown. */
 export function workFactsParts(facts: WorkFacts): string[] {
-  return facts.toolCount > 0 ? [`${facts.toolCount} 项操作`] : []
+  return facts.lastTool ? [workAction(facts.lastTool)] : []
 }
 
 /** Everything the header knows, tool breakdown included — the hover title and

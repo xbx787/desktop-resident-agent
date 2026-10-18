@@ -63,7 +63,7 @@ describe('WorkCluster', () => {
     expect(html).toContain('已工作')
     // The tool breakdown moved off the row: it is the hover title now.
     expect(html).toContain('title="思考 00:12，1 项操作，执行命令 ×1"')
-    expect(html).toContain('<span>1 项操作</span>')
+    expect(html).toContain('<span>执行了命令</span>')
     expect(html).not.toContain('panel-cluster-purpose')
     expect(html).not.toMatch(/<details[^>]*\sopen/)
   })
@@ -114,7 +114,7 @@ describe('TurnProcess', () => {
     // The row states the whole stretch: the settled state word plus the
     // operation count; no clock on the bar.
     expect(html).toContain('已工作')
-    expect(html).toContain('<span>1 项操作</span>')
+    expect(html).toContain('<span>执行了命令</span>')
     expect(html).not.toContain('<span>00:52</span>')
     expect(html).toContain('title="思考 00:24，1 项操作，执行命令 ×1"')
     // Opening it lays the same pieces back out: the work cluster and the note.

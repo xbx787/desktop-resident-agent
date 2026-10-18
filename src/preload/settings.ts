@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { ConversationSettings, GrowthProposal, ModelProfile } from '../shared/contracts'
+import type { LibraryItem, LibraryKind, LibrarySnapshot } from '../shared/libraries'
 import type { MemoryItem } from '../main/memory-service'
 
 export interface GrowthOverview {
@@ -29,6 +30,13 @@ export interface SettingsAPI {
   deleteModelProfile(id: string): Promise<void>
   /** Sends one tiny request to the endpoint and reports what came back. */
   testModelProfile(profile: ModelProfile): Promise<{ ok: boolean; message: string }>
+  /** Installed entries across the MCP, skill, and plugin libraries. */
+  libraries(): Promise<LibrarySnapshot>
+  /** Searches the market that matches the library kind. */
+  searchLibraryMarket(kind: LibraryKind, query: string): Promise<LibraryItem[]>
+  /** Installs one market entry, then returns the refreshed libraries. */
+  installLibrary(item: LibraryItem): Promise<LibrarySnapshot>
+  removeLibrary(id: string): Promise<LibrarySnapshot>
   memoryList(): Promise<MemoryItem[]>
   memorySetEnabled(enabled: boolean): Promise<boolean>
   memoryUpdate(id: string, text: string): Promise<MemoryItem>
@@ -54,6 +62,10 @@ const api: SettingsAPI = {
   saveModelProfile: (profile) => ipcRenderer.invoke('pet:save-model-profile', profile),
   deleteModelProfile: (id) => ipcRenderer.invoke('pet:delete-model-profile', id),
   testModelProfile: (profile) => ipcRenderer.invoke('pet:test-model-profile', profile),
+  libraries: () => ipcRenderer.invoke('pet:libraries:list'),
+  searchLibraryMarket: (kind, query) => ipcRenderer.invoke('pet:libraries:search', kind, query),
+  installLibrary: (item) => ipcRenderer.invoke('pet:libraries:install', item),
+  removeLibrary: (id) => ipcRenderer.invoke('pet:libraries:remove', id),
   memoryList: () => ipcRenderer.invoke('pet:memory:list'),
   memorySetEnabled: (enabled) => ipcRenderer.invoke('pet:memory:set-enabled', enabled),
   memoryUpdate: (id, text) => ipcRenderer.invoke('pet:memory:update', id, text),

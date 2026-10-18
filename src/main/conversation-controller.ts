@@ -6,6 +6,7 @@ import type { DialogueLine } from './deepseek'
 import { containsSensitiveData } from './memory-service'
 import { attachmentContext, validAttachmentList } from './local-context'
 import { snapshotSessionMentions } from './session-context'
+import { parseLibraryMentions } from '../shared/libraries'
 import {
   ConversationStore,
   ConversationStoreError,
@@ -30,6 +31,14 @@ export interface CompletedTurn {
   mode: ModelMode
   timeline: TimelineEntry[]
 }
+
+/** Resolves installed library keys (`kind:id`) into what the engine accepts.
+ *  Unknown or uninstalled keys are dropped from `resolved`. */
+export type LibraryLaunchResolver = (keys: string[]) => Promise<{
+  resolved: string[]
+  mcp: Record<string, unknown>
+  plugins: string[]
+}>
 
 export interface ConversationTurnHooks {
   memoryContext?: () => Promise<string>
@@ -101,7 +110,9 @@ export class ConversationController {
     private readonly generateTitle?: (source: string) => Promise<string | null>,
     /** Materialized on first load when no profile exists yet — the launch
      *  environment's own setup, so the model menu never starts empty. */
-    private readonly seedProfile?: ModelProfile
+    private readonly seedProfile?: ModelProfile,
+    /** Installed-library lookups for @ references. */
+    private readonly resolveLibraries?: LibraryLaunchResolver
   ) {}
 
   setTurnHooks(hooks: ConversationTurnHooks): void {
@@ -272,6 +283,16 @@ export class ConversationController {
       runtime.setPersona(this.library.settings.personaId ?? 'xiaojing')
       runtime.setAutoCompactPercent(this.library.settings.autoCompactPercent ?? AUTO_COMPACT_DEFAULT_PERCENT)
       runtime.setGoalBudget(this.library.settings.goalMaxIterations, this.library.settings.goalMaxMinutes)
+    }
+    // A conversation keeps the entries added with @ across restarts.
+    if (this.resolveLibraries && rec.activeLibraries?.length) {
+      try {
+        const launch = await this.resolveLibraries(rec.activeLibraries)
+        runtime.setLibraries(launch.mcp, launch.plugins)
+      } catch {
+        // A broken library index must not block the conversation; the next
+        // send resolves it again.
+      }
     }
     this.runtimes.set(id, runtime)
     if (!this.pending.has(id)) this.pending.set(id, structuredClone(rec.pendingMessages))
@@ -529,6 +550,18 @@ export class ConversationController {
       if (!target) throw new ConversationStoreError('NOT_FOUND', '找不到这个会话。')
       if (target.archivedAt !== null) throw new ConversationStoreError('ARCHIVED_CONVERSATION', '请先恢复归档会话。')
       const runtime = await this.ensureRuntime(id, target)
+      // @ references add library entries to this conversation. Installed keys
+      // persist; unknown ones are ignored rather than failing the send.
+      const mentioned = parseLibraryMentions(clean).map((ref) => `${ref.kind}:${ref.id}`)
+      if (this.resolveLibraries && (mentioned.length || target.activeLibraries?.length)) {
+        const launch = await this.resolveLibraries([...new Set([...(target.activeLibraries ?? []), ...mentioned])])
+        const previous = target.activeLibraries ?? []
+        if (launch.resolved.length !== previous.length || launch.resolved.some((key) => !previous.includes(key))) {
+          target.activeLibraries = launch.resolved
+          await this.store.updateConversation(id, { activeLibraries: launch.resolved })
+        }
+        runtime.setLibraries(launch.mcp, launch.plugins)
+      }
       if (runtime.getSnapshot().mode !== 'claude_code' && attachments.some((item) => item.path && !item.content)) {
         throw new ConversationStoreError('INVALID_INPUT', '当前模型没有本地文件读取工具。请切换到小鲸引擎模式后再发送此文件。')
       }

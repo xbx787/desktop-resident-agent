@@ -59,6 +59,8 @@ export interface ConversationRecord {
    *  Absent on older records — readers fall back to updatedAt. */
   lastActivityAt?: string
   compactionSummary?: string
+  /** Entries added to this conversation with @, as `kind:id`. */
+  activeLibraries?: string[]
 }
 
 export interface ConversationPatch {
@@ -75,6 +77,7 @@ export interface ConversationPatch {
   draft?: string
   compactionSummary?: string | null
   spentYuan?: number
+  activeLibraries?: string[]
 }
 
 export interface ConversationSearchOptions {
@@ -743,6 +746,11 @@ export class ConversationStore {
     if (changes.compactionSummary !== undefined && changes.compactionSummary !== null && typeof changes.compactionSummary !== 'string') {
       throw new ConversationStoreError('INVALID_INPUT', '上下文摘要格式无效。')
     }
+    if (changes.activeLibraries !== undefined &&
+        (!Array.isArray(changes.activeLibraries) || changes.activeLibraries.length > 64 ||
+          changes.activeLibraries.some((id) => typeof id !== 'string' || !/^(mcp|skill|plugin):[^\s]+$/u.test(id)))) {
+      throw new ConversationStoreError('INVALID_INPUT', '会话库引用格式无效。')
+    }
     return this.mutate((draft) => {
       const record = findRecord(draft, id)
       if (changes.title !== undefined) record.title = changes.title
@@ -761,6 +769,7 @@ export class ConversationStore {
       if (changes.compactionSummary === null) delete record.compactionSummary
       else if (changes.compactionSummary !== undefined) record.compactionSummary = changes.compactionSummary
       if (changes.spentYuan !== undefined) record.spentYuan = changes.spentYuan
+      if (changes.activeLibraries !== undefined) record.activeLibraries = changes.activeLibraries
       record.updatedAt = new Date().toISOString()
       return record
     })

@@ -248,6 +248,9 @@ export class ClaudeAgentClient implements ModelClient {
   /** 上下文用到这个百分比时压缩；CLI 的自动压缩阈值与项目发送前的主动
    *  压缩共用这一个值。 */
   private autoCompactPercent = AUTO_COMPACT_DEFAULT_PERCENT
+  /** Installed MCP servers and local plugin directories added with @. */
+  private libraryMcpServers: Record<string, McpServerConfig> = {}
+  private libraryPlugins: string[] = []
   private queryDirty = false
   private personaId = 'xiaojing'
   private approvalModeListener?: (mode: ApprovalMode) => void
@@ -532,6 +535,15 @@ export class ClaudeAgentClient implements ModelClient {
     if (!this.activeTurn) void this.closeQuery()
   }
 
+  /** Installed libraries for this conversation. Kept separate from the launch
+   *  MCP map so removing an entry never touches the user's own setup. */
+  setLibraries(mcpServers: Record<string, unknown>, plugins: string[]): void {
+    this.libraryMcpServers = mcpServers as Record<string, McpServerConfig>
+    this.libraryPlugins = [...plugins]
+    this.queryDirty = true
+    if (!this.activeTurn) void this.closeQuery()
+  }
+
   setAutoCompactPercent(percent: number): void {
     const next = normalizeAutoCompactPercent(percent)
     if (this.autoCompactPercent === next) return
@@ -797,7 +809,14 @@ export class ClaudeAgentClient implements ModelClient {
         settingSources: ['user', 'project', 'local'],
         skills: 'all',
         strictMcpConfig: true,
-        mcpServers: deepseekTools ? { ...this.mcpServers, deepseek: deepseekTools } : this.mcpServers,
+        mcpServers: {
+          ...this.mcpServers,
+          ...this.libraryMcpServers,
+          ...(deepseekTools ? { deepseek: deepseekTools } : {})
+        },
+        ...(this.libraryPlugins.length
+          ? { plugins: this.libraryPlugins.map((pluginPath) => ({ type: 'local' as const, path: pluginPath })) }
+          : {}),
         disallowedTools: this.webSearchEnabled
           ? (deepseekTools ? ['WebSearch', 'WebFetch'] : undefined)
           : ['WebSearch', 'WebFetch', 'mcp__deepseek__search', 'mcp__deepseek__fetch'],

@@ -1,6 +1,7 @@
 import { useEffect, useRef, type MouseEvent } from 'react';
 import type { ClaudeWorkflowOption, ConversationSummary } from '../shared/contracts';
 import { sessionMentionToken } from '../shared/session-mentions';
+import { LIBRARY_LABELS, libraryMentionToken, type LibraryItem } from '../shared/libraries';
 
 export interface ComposerTrigger {
   kind: 'file' | 'workflow' | 'skill';
@@ -56,6 +57,21 @@ export function workflowSuggestionItems(options: readonly ClaudeWorkflowOption[]
         insertText: `${prefix}${name}`,
       };
     });
+}
+
+/** Entries installed in the three libraries join the same @ picker. Selecting
+ *  one inserts `@kind:id`; the controller adds it to this conversation. */
+export function librarySuggestionItems(items: readonly LibraryItem[], query: string, limit = 6): ComposerSuggestion[] {
+  const term = query.toLocaleLowerCase();
+  return items
+    .filter((item) => !term || `${item.name} ${item.id} ${item.kind}`.toLocaleLowerCase().includes(term))
+    .slice(0, Math.max(0, limit))
+    .map((item) => ({
+      id: `library:${item.kind}:${item.id}`,
+      label: libraryMentionToken(item),
+      detail: `${LIBRARY_LABELS[item.kind]}库，添加到本对话`,
+      insertText: libraryMentionToken(item),
+    }));
 }
 
 /** Session references use an ID-backed token, so later renames cannot change

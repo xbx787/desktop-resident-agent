@@ -5,7 +5,7 @@ import path from 'node:path'
 import { AgentRuntime } from './agent-runtime'
 import { SideChatController, activeSideChatParentId } from './side-chat'
 import { isAskAnswers } from './ask-questions'
-import { ConversationController } from './conversation-controller'
+import { ConversationController, type LibraryLaunchResolver } from './conversation-controller'
 import { MemoryService, type MemoryProvider } from './memory-service'
 import { GrowthExperiments } from './growth-experiments'
 import { ConversationStore, isModelProfile, MAX_BATCH_CONVERSATIONS } from './conversation-store'
@@ -25,6 +25,9 @@ import { NoteStore } from './note-store'
 import { createSnapshotScheduler } from './snapshot-scheduler'
 import { getDeepSeekBalanceKey, getEnabledDeepSeekKey } from './model-config'
 import { loadWindowsMcpConfig } from './mcp-config'
+import { LibraryStore } from './library-store'
+import { searchMarket } from './marketplace'
+import { isLibraryItem, isLibraryKind } from '../shared/libraries'
 import { generateConversationTitle } from './title-generation'
 import { APP_SLASH_COMMANDS, listClaudeWorkflows, parseAppSlashCommand } from './claude-workflows'
 import { attachmentPreviewPath, prepareDroppedFile, readImagePreview, searchWorkspaceFiles, stagePastedAttachment, validAttachmentList, verifyDroppedFilePath } from './local-context'
@@ -242,6 +245,38 @@ const apiKey = getEnabledDeepSeekKey(process.env)
 const claudeKey = process.env.DEEPSEEK_API_KEY?.trim()
 const claudeExecutable = findClaudeExecutable(process.env)
 const windowsMcpServers = loadWindowsMcpConfig(path.join(userHome, '.claude.json'))
+const libraryStore = new LibraryStore(dataRoot)
+
+function libraryServerName(id: string): string {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < id.length; index += 1) hash = Math.imul(hash ^ id.charCodeAt(index), 0x01000193)
+  const slug = id.replace(/[^a-zA-Z0-9_-]+/gu, '_').replace(/^_+|_+$/gu, '').slice(0, 40)
+  return `lib_${slug || 'entry'}_${(hash >>> 0).toString(36)}`
+}
+
+/** Turns `kind:id` keys into the engine's MCP map and plugin directories.
+ *  Only installed entries survive, so a removed library simply disappears. */
+const resolveLibraries: LibraryLaunchResolver = async (keys) => {
+  const { mcp, plugins } = await libraryStore.launches(keys)
+  const resolved: string[] = []
+  const servers: Record<string, unknown> = {}
+  for (const item of mcp) {
+    const launch = item.launch
+    if (!launch) continue
+    if (!launch.url && !launch.command) continue
+    resolved.push(`mcp:${item.id}`)
+    servers[libraryServerName(item.id)] = launch.url
+      ? { type: 'http', url: launch.url }
+      : { type: 'stdio', command: launch.command, args: launch.args ?? [], env: {} }
+  }
+  const pluginPaths: string[] = []
+  for (const item of plugins) {
+    if (!item.path) continue
+    resolved.push(`${item.kind}:${item.id}`)
+    pluginPaths.push(item.path)
+  }
+  return { resolved, mcp: servers, plugins: pluginPaths }
+}
 let controller: ConversationController | undefined
 const memory = new MemoryService(dataRoot, { onError: (error) => console.warn(error.message) })
 
@@ -342,7 +377,8 @@ controller = new ConversationController(
   claudeKey
     ? { id: 'default', name: 'DeepSeek', baseUrl: CLAUDE_BASE_URL, apiKey: claudeKey,
         model: DEFAULT_CLAUDE_MODEL, smallModel: 'deepseek-flash' }
-    : undefined
+    : undefined,
+  resolveLibraries
 )
 /** Post-turn reflection — fact extraction and growth observation — is side
  *  work: it reads the finished turn and writes memory, and nothing in the
@@ -961,6 +997,29 @@ function registerIpc(): void {
   ipcMain.handle('pet:settings:close', (event) => {
     if (!settingsTrusted(event)) return
     settingsWindow?.close()
+  })
+  ipcMain.handle('pet:libraries:list', async (event) => {
+    if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
+    return libraryStore.snapshot()
+  })
+  ipcMain.handle('pet:libraries:installed', async (event) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    return libraryStore.list()
+  })
+  ipcMain.handle('pet:libraries:search', async (event, kind: unknown, query: unknown) => {
+    if (!settingsTrusted(event) || !isLibraryKind(kind)) throw new Error('市场请求无效。')
+    if (typeof query !== 'string') throw new Error('搜索词无效。')
+    return searchMarket(kind, query)
+  })
+  ipcMain.handle('pet:libraries:install', async (event, raw: unknown) => {
+    if (!settingsTrusted(event) || !isLibraryItem(raw)) throw new Error('库条目无效。')
+    await libraryStore.install(raw)
+    return libraryStore.snapshot()
+  })
+  ipcMain.handle('pet:libraries:remove', async (event, id: unknown) => {
+    if (!settingsTrusted(event) || typeof id !== 'string') throw new Error('库条目无效。')
+    await libraryStore.remove(id)
+    return libraryStore.snapshot()
   })
   ipcMain.handle('pet:memory:list', (event) => {
     if (!settingsTrusted(event)) throw new Error('无效的界面请求。')

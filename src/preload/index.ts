@@ -50,6 +50,7 @@ const api: PetAPI = {
   },
   searchWorkspaceFiles: (query) => ipcRenderer.invoke('pet:search-workspace-files', query),
   searchConversations: (query, archived) => ipcRenderer.invoke('pet:search-conversations', query, archived),
+  listLibraries: () => ipcRenderer.invoke('pet:libraries:installed'),
   removeQueuedMessage: (id) => ipcRenderer.invoke('pet:remove-queued-message', id),
   steerQueuedMessage: (id) => ipcRenderer.invoke('pet:steer-queued-message', id),
   approveAction: (id, conversationId) => ipcRenderer.invoke('pet:approve-action', id, conversationId),

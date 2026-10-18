@@ -10,7 +10,8 @@ import { toolLabel } from '../shared/tool-labels';
 import { AttachmentPreview, previewPlacement, type PreviewPlacement } from './attachment-preview';
 import { agentTasks } from './agent-tasks';
 import { fileBadge, splitAttachmentNote } from './attachment-note';
-import { ComposerSuggestions, detectComposerTrigger, fileMention, sessionSuggestionItems, workflowSuggestionItems, type ComposerSuggestion } from './composer-suggestions';
+import { ComposerSuggestions, detectComposerTrigger, fileMention, librarySuggestionItems, sessionSuggestionItems, workflowSuggestionItems, type ComposerSuggestion } from './composer-suggestions';
+import type { LibraryItem } from '../shared/libraries';
 import { pastedFileName, pastedFiles, restoreComposerState, stashComposerState, type StashedComposer } from './composer-drafts';
 import { GoalBanner } from './goal-banner';
 import { MessageMarkdown, writeClipboard } from './message-markdown';
@@ -569,6 +570,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
   const [turnMenu, setTurnMenu] = useState<{ turnUserId: string; title: string; running: boolean; container: HTMLElement; x: number; y: number } | null>(null);
   const [draft, setDraft] = useState('');
   const [caretIndex, setCaretIndex] = useState(0);
+  const [installedLibraries, setInstalledLibraries] = useState<LibraryItem[]>([]);
   const [suggestionItems, setSuggestionItems] = useState<ComposerSuggestion[]>([]);
   const [suggestionSelected, setSuggestionSelected] = useState(0);
   const [suggestionLoading, setSuggestionLoading] = useState(false);
@@ -850,6 +852,18 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
   const suggestionTrigger = detectComposerTrigger(draft, caretIndex);
   const suggestionKey = suggestionTrigger ? `${suggestionTrigger.kind}:${suggestionTrigger.start}:${suggestionTrigger.query}` : null;
   const suggestionOpen = Boolean(suggestionKey && suggestionKey !== dismissedSuggestion && composerOpen);
+  useEffect(() => {
+    if (!visible) return;
+    let active = true;
+    try {
+      void petBridge().listLibraries().then((items) => {
+        if (active && Array.isArray(items)) setInstalledLibraries(items);
+      }).catch(() => undefined);
+    } catch {
+      // The static HTML preview has no desktop bridge.
+    }
+    return () => { active = false; };
+  }, [visible, composerOpen]);
   function refreshContextUsage(): void {
     try {
       const bridge = petBridge();
@@ -930,8 +944,9 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
             : option), suggestionTrigger));
       }).catch(() => { if (!cancelled) { setSuggestionItems([]); setSuggestionFailed(true); } }).finally(() => { if (!cancelled) setSuggestionLoading(false); });
     } else {
+      const libraryItems = librarySuggestionItems(installedLibraries, suggestionTrigger.query);
       const sessions = sessionSuggestionItems(library?.conversations ?? [], suggestionTrigger.query, library?.activeConversationId ?? null);
-      setSuggestionItems(sessions);
+      setSuggestionItems([...libraryItems, ...sessions]);
       timer = window.setTimeout(() => {
         void bridge.searchWorkspaceFiles(suggestionTrigger.query).then((files) => {
           if (cancelled) return;
@@ -941,12 +956,12 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
             detail: `${file.kind === 'directory' ? '目录' : '文件'}，${file.relativePath}`,
             insertText: fileMention(file.relativePath)
           }));
-          setSuggestionItems([...sessions, ...fileItems].slice(0, 8));
-        }).catch(() => { if (!cancelled) { setSuggestionItems(sessions); setSuggestionFailed(true); } }).finally(() => { if (!cancelled) setSuggestionLoading(false); });
+          setSuggestionItems([...libraryItems, ...sessions, ...fileItems].slice(0, 10));
+        }).catch(() => { if (!cancelled) { setSuggestionItems([...libraryItems, ...sessions]); setSuggestionFailed(true); } }).finally(() => { if (!cancelled) setSuggestionLoading(false); });
       }, 120);
     }
     return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer); };
-  }, [suggestionKey, suggestionOpen, libraryRevision, sideExpanded]);
+  }, [suggestionKey, suggestionOpen, libraryRevision, sideExpanded, installedLibraries]);
 
   useEffect(() => {
     if (!sessionMenuOpen) return;

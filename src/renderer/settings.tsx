@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import type { ConversationSettings, GrowthProposal, ModelProfile } from '../shared/contracts'
+import { LIBRARY_KINDS, LIBRARY_LABELS, LIBRARY_MARKET_LABELS, type LibraryItem, type LibraryKind, type LibrarySnapshot } from '../shared/libraries'
 import { PERSONA_PRESETS } from '../shared/personas'
 import { personaAvatarUrl } from './avatar-art'
 import { PROVIDER_CATALOG } from '../shared/provider-catalog'
@@ -37,6 +38,7 @@ interface ModelFormState {
 const BASE_SETTINGS_TABS = [
   { id: 'conversation', label: '对话' },
   { id: 'appearance', label: '外观' },
+  { id: 'libraries', label: '库' },
   { id: 'models', label: '模型' },
   { id: 'memory', label: '记忆' },
   { id: 'identity', label: '称呼' },
@@ -106,6 +108,14 @@ export function SettingsPage() {
   const [workspace, setWorkspace] = useState<{ path: string; saved: boolean } | null>(null)
   const [workspacePending, setWorkspacePending] = useState<string | null>(null)
   const [workspaceBusy, setWorkspaceBusy] = useState(false)
+  const [libraries, setLibraries] = useState<LibrarySnapshot>({ items: [], busy: false })
+  const [libraryKind, setLibraryKind] = useState<LibraryKind>('mcp')
+  const [marketQuery, setMarketQuery] = useState('')
+  const [marketItems, setMarketItems] = useState<LibraryItem[]>([])
+  const [marketBusy, setMarketBusy] = useState(false)
+  const [marketError, setMarketError] = useState('')
+  const [marketLoadedFor, setMarketLoadedFor] = useState<LibraryKind | null>(null)
+  const [libraryBusyId, setLibraryBusyId] = useState<string | null>(null)
 
   useEffect(() => {
     let active = true
@@ -150,6 +160,35 @@ export function SettingsPage() {
   }, [tab])
 
   useEffect(() => {
+    if (tab !== 'libraries') return
+    let active = true
+    void window.whaleSettings.libraries().then((current) => {
+      if (active) setLibraries(current)
+    }).catch((cause: unknown) => {
+      if (active) setNotice({ text: errorMessage(cause), error: true })
+    })
+    return () => { active = false }
+  }, [tab])
+
+  useEffect(() => {
+    if (tab !== 'libraries') return
+    let active = true
+    setMarketBusy(true)
+    setMarketError('')
+    setMarketItems([])
+    void window.whaleSettings.searchLibraryMarket(libraryKind, '').then((items) => {
+      if (!active) return
+      setMarketItems(items)
+      setMarketLoadedFor(libraryKind)
+    }).catch((cause: unknown) => {
+      if (active) setMarketError(errorMessage(cause))
+    }).finally(() => {
+      if (active) setMarketBusy(false)
+    })
+    return () => { active = false }
+  }, [tab, libraryKind])
+
+  useEffect(() => {
     // 成长实验不在设置里暴露：面板入口已移除，这段轮询永远不会启动。
     // 数据仍由主进程写进本地 data/growth/（见 GrowthStore 的 proposals.md）。
     if ((tab as string) !== 'growth') return
@@ -166,10 +205,52 @@ export function SettingsPage() {
     return () => { active = false; window.clearInterval(timer) }
   }, [tab])
 
+  const installedLibraries = libraries.items.filter((item) => item.kind === libraryKind)
   const selectedGrowth = growth?.proposals.find((item) => item.id === growthSelectedId && item.status !== 'discarded') ?? growth?.proposals.find((item) => item.status !== 'discarded') ?? null
   useEffect(() => {
     setGrowthNotesDraft(selectedGrowth?.releaseNotes ?? '')
   }, [selectedGrowth?.id, selectedGrowth?.releaseNotes])
+
+  async function searchLibraryMarket(): Promise<void> {
+    if (marketBusy) return
+    setMarketBusy(true)
+    setMarketError('')
+    try {
+      setMarketItems(await window.whaleSettings.searchLibraryMarket(libraryKind, marketQuery))
+      setMarketLoadedFor(libraryKind)
+    } catch (cause) {
+      setMarketError(errorMessage(cause))
+    } finally {
+      setMarketBusy(false)
+    }
+  }
+
+  async function installLibraryItem(item: LibraryItem): Promise<void> {
+    if (libraryBusyId) return
+    setLibraryBusyId(item.id)
+    setMarketError('')
+    try {
+      setLibraries(await window.whaleSettings.installLibrary(item))
+      setNotice({ text: `已添加 ${item.name}，可在对话里用 @ 使用。`, error: false })
+    } catch (cause) {
+      setMarketError(errorMessage(cause))
+    } finally {
+      setLibraryBusyId(null)
+    }
+  }
+
+  async function removeLibraryItem(item: LibraryItem): Promise<void> {
+    if (libraryBusyId) return
+    setLibraryBusyId(item.id)
+    try {
+      setLibraries(await window.whaleSettings.removeLibrary(item.id))
+      setNotice({ text: `已移除 ${item.name}。`, error: false })
+    } catch (cause) {
+      setNotice({ text: errorMessage(cause), error: true })
+    } finally {
+      setLibraryBusyId(null)
+    }
+  }
 
   async function chooseWorkspace(): Promise<void> {
     if (workspaceBusy) return
@@ -537,6 +618,71 @@ export function SettingsPage() {
                 className={`settings-size-option${active ? ' is-active' : ''}`} disabled={!settings || busy}
                 onClick={() => { void update({ avatarSize: option.id }) }}>{option.label}</button>
             })}
+          </div>
+        </div>
+      </section>}
+      {tab === 'libraries' && <section className="settings-section settings-library-section" role="tabpanel" id="settings-panel-libraries" aria-labelledby="settings-tab-libraries">
+        <div className="settings-library-kinds" role="tablist" aria-label="库">
+          {LIBRARY_KINDS.map((kind) => {
+            const count = libraries.items.filter((item) => item.kind === kind).length
+            return <button key={kind} type="button" role="tab" aria-selected={libraryKind === kind}
+              aria-label={LIBRARY_LABELS[kind]}
+              className={`settings-library-kind${libraryKind === kind ? ' is-active' : ''}`}
+              onClick={() => { setLibraryKind(kind); setMarketQuery(''); setMarketError('') }}>
+              <span>{LIBRARY_LABELS[kind]}</span><small>{count}</small>
+            </button>
+          })}
+        </div>
+        <div className="settings-library-pane">
+          <div className="settings-library-heading">
+            <h2>{LIBRARY_LABELS[libraryKind]}库</h2>
+            <p>在对话里输入 @ 添加，添加后这个对话就会用它。</p>
+          </div>
+          {installedLibraries.length === 0
+            ? <p className="settings-library-empty">还没有添加{LIBRARY_LABELS[libraryKind]}。到下面的{LIBRARY_MARKET_LABELS[libraryKind]}找一个。</p>
+            : <div className="settings-library-list">
+                {installedLibraries.map((item) => (
+                  <div className="settings-library-item" key={item.id}>
+                    <div className="settings-library-copy">
+                      <label>{item.name}{item.version && <span className="settings-library-version">v{item.version}</span>}</label>
+                      {item.description && <p>{item.description}</p>}
+                      {item.license && <small>许可证：{item.license}</small>}
+                    </div>
+                    <button type="button" disabled={libraryBusyId !== null} onClick={() => { void removeLibraryItem(item) }}>
+                      {libraryBusyId === item.id ? '移除中…' : '移除'}
+                    </button>
+                  </div>
+                ))}
+              </div>}
+          <div className="settings-library-market">
+            <div className="settings-library-market-head">
+              <h2>{LIBRARY_MARKET_LABELS[libraryKind]}</h2>
+              <form onSubmit={(event) => { event.preventDefault(); void searchLibraryMarket() }}>
+                <input type="text" value={marketQuery} placeholder={`搜索${LIBRARY_LABELS[libraryKind]}`}
+                  aria-label={`搜索${LIBRARY_MARKET_LABELS[libraryKind]}`} disabled={marketBusy}
+                  onChange={(event) => setMarketQuery(event.target.value)} />
+                <button type="submit" disabled={marketBusy}>{marketBusy ? '查询中…' : '搜索'}</button>
+              </form>
+            </div>
+            {marketError && <p className="settings-library-error" role="alert">{marketError}</p>}
+            {marketBusy && marketItems.length === 0 && <p className="settings-library-empty">正在连接{LIBRARY_MARKET_LABELS[libraryKind]}…</p>}
+            {!marketBusy && !marketError && marketItems.length === 0 && marketLoadedFor === libraryKind &&
+              <p className="settings-library-empty">没有匹配的条目。</p>}
+            <div className="settings-library-list">
+              {marketItems.map((item) => {
+                const installed = libraries.items.some((entry) => entry.id === item.id)
+                return <div className="settings-library-item" key={item.id}>
+                  <div className="settings-library-copy">
+                    <label>{item.name}{item.version && <span className="settings-library-version">v{item.version}</span>}</label>
+                    {item.description && <p>{item.description}</p>}
+                    <small>许可证：{item.license || '以来源仓库为准'}</small>
+                  </div>
+                  <button type="button" disabled={installed || libraryBusyId !== null} onClick={() => { void installLibraryItem(item) }}>
+                    {installed ? '已添加' : libraryBusyId === item.id ? '添加中…' : '添加'}
+                  </button>
+                </div>
+              })}
+            </div>
           </div>
         </div>
       </section>}

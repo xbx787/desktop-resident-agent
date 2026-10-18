@@ -669,6 +669,11 @@ export class AgentRuntime {
     this.claudeCodeModel?.setAutoCompactPercent?.(percent)
   }
 
+  /** 本对话用 @ 添加的库；下一次 query 生效。 */
+  setLibraries(mcpServers: Record<string, unknown>, plugins: string[]): void {
+    this.claudeCodeModel?.setLibraries?.(mcpServers, plugins)
+  }
+
   /** 切换人设预设：人设文字随下一次 query 生效。 */
   setPersona(id: string): void {
     this.claudeCodeModel?.setPersonaId?.(id)

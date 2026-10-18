@@ -1,3 +1,5 @@
+import type { LibraryItem } from './libraries'
+
 export type AvatarState = 'idle' | 'thinking' | 'listening' | 'speaking' | 'acting' | 'success' | 'error'
 export type ModelMode = 'demo' | 'live' | 'claude_code'
 export type BubbleLayout = 'empty' | 'composer' | 'composer_attachments' | 'composer_models' | 'full'
@@ -467,6 +469,8 @@ export interface PetAPI {
   onSlashUiAction(callback: (action: SlashUiAction) => void): () => void
   searchWorkspaceFiles(query: string): Promise<WorkspaceFileOption[]>
   searchConversations(query: string, archived?: boolean): Promise<ConversationSummary[]>
+  /** Installed MCP, skill, and plugin entries for the composer's @ picker. */
+  listLibraries(): Promise<LibraryItem[]>
   removeQueuedMessage(id: string): Promise<void>
   /** Delivers a queued message into the running turn right now (native steer);
    *  when steering is unavailable it jumps to the front of the queue instead. */

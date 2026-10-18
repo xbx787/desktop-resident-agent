@@ -163,3 +163,33 @@ button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55
 .settings-size-picker .settings-size-option { min-width: 46px; height: 30px; padding: 0 12px; border: 1px solid rgba(190, 213, 253, .28); border-radius: 8px; color: #b9cdf0; background: transparent; font-weight: 600; }
 .settings-size-picker .settings-size-option:not(:disabled):hover { color: #dbe8ff; background: rgba(181, 205, 255, .12); }
 .settings-size-picker .settings-size-option.is-active { color: #172b56; background: #bbd2ff; border-color: transparent; }
+
+/* 三个库：MCP / 技能 / 插件。顶部分档，下面是已安装和同名市场。 */
+.settings-library-section { max-height: calc(100vh - 171px); overflow-y: auto; scrollbar-color: rgba(177, 207, 255, .5) transparent; scrollbar-width: thin; }
+.settings-library-kinds { position: sticky; top: 0; z-index: 1; display: flex; gap: 6px; padding: 12px 16px; border-bottom: 1px solid rgba(194, 215, 255, .16); background: rgba(12, 27, 62, .96); }
+.settings-library-kind { display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 13px; border: 1px solid transparent; border-radius: 999px; color: #a9bee4; background: transparent; font-size: var(--text-sm); font-weight: 600; }
+.settings-library-kind:hover { color: #dbe8ff; background: rgba(181, 205, 255, .12); }
+.settings-library-kind.is-active { color: #dbe8ff; background: rgba(111, 211, 255, .14); }
+.settings-library-kind small { min-width: 16px; padding: 1px 5px; border-radius: 999px; color: #9fb8e1; background: rgba(160, 191, 251, .12); font-size: var(--text-2xs); font-weight: 600; text-align: center; }
+.settings-library-kind.is-active small { color: #172b56; background: #bbd2ff; }
+.settings-library-pane { display: flex; flex-direction: column; gap: 13px; padding: 14px 16px 18px; }
+.settings-library-heading h2, .settings-library-market-head h2 { margin: 0; color: #e7efff; font-size: var(--text-md); font-weight: 650; }
+.settings-library-heading p { margin: 4px 0 0; color: #9fb8e1; font-size: var(--text-xs); line-height: 1.5; }
+.settings-library-list { display: flex; flex-direction: column; gap: 8px; }
+.settings-library-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 10px 12px; border: 1px solid rgba(190, 213, 253, .18); border-radius: 10px; background: rgba(120, 155, 220, .05); }
+.settings-library-copy { flex: 1; min-width: 0; }
+.settings-library-copy label { display: flex; align-items: center; gap: 7px; color: #eaf2ff; font-size: var(--text-sm); font-weight: 650; overflow-wrap: anywhere; }
+.settings-library-copy p { display: -webkit-box; margin: 4px 0 0; overflow: hidden; color: #a9bee4; font-size: var(--text-xs); line-height: 1.5; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.settings-library-copy small { display: block; margin-top: 5px; color: #8fa6cf; font-size: var(--text-2xs); }
+.settings-library-version { padding: 1px 5px; border-radius: 5px; color: #9fb8e1; background: rgba(160, 191, 251, .1); font-size: var(--text-2xs); font-weight: 400; }
+.settings-library-item > button { flex: none; height: 28px; padding: 0 10px; border: 1px solid rgba(190, 213, 253, .28); border-radius: 8px; color: #dbe8ff; background: rgba(160, 191, 251, .1); font-size: var(--text-sm); font-weight: 400; }
+.settings-library-item > button:hover:not(:disabled) { background: rgba(160, 191, 251, .22); }
+.settings-library-market { display: flex; flex-direction: column; gap: 10px; padding-top: 13px; border-top: 1px solid rgba(194, 215, 255, .16); }
+.settings-library-market-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.settings-library-market-head form { display: flex; gap: 6px; flex: 1; justify-content: flex-end; }
+.settings-library-market-head input { width: min(180px, 46%); height: 30px; padding: 0 9px; border: 1px solid rgba(190, 213, 253, .35); border-radius: 8px; color: #eef4ff; background: rgba(10, 24, 58, .45); font-size: var(--text-sm); outline: none; }
+.settings-library-market-head input:focus-visible { outline: 2px solid #b4d1ff; outline-offset: 2px; }
+.settings-library-market-head button { flex: none; height: 30px; padding: 0 12px; border: 0; border-radius: 8px; color: #172b56; background: #bbd2ff; font-size: var(--text-sm); font-weight: 600; }
+.settings-library-market-head button:hover:not(:disabled) { background: #d8e5ff; }
+.settings-library-empty { margin: 0; padding: 10px 2px; color: #9fb8e1; font-size: var(--text-xs); line-height: 1.6; }
+.settings-library-error { margin: 0; padding: 8px 10px; border-radius: 8px; color: #ffbbbb; background: rgba(240, 126, 144, .09); font-size: var(--text-xs); line-height: 1.5; }
