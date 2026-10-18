@@ -1105,4 +1105,30 @@ describe('parallel conversations', () => {
     finish({ text: '答复' })
     await until(() => !controller.displayedRuntime()!.isRunning(), 'stopped')
   })
+
+  it('writes the in-flight turn to disk before quitting', async () => {
+    let finish!: (reply: ModelReply) => void
+    const model: ModelClient = {
+      respond: (_history, _signal, _progress, _session, _tool, _usage, onThinking) => {
+        onThinking?.('退出前的思考')
+        return new Promise((resolve) => { finish = resolve })
+      }
+    }
+    const store = new ConversationStore(testRoot)
+    const controller = new ConversationController(store,
+      (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model))
+    await controller.initialize()
+    const id = controller.getSnapshot().conversationLibrary.activeConversationId!
+
+    await controller.sendMessage('运行中退出')
+    await until(() => controller.displayedRuntime()!.isRunning(), 'running turn')
+    await controller.flushAll()
+
+    const saved = await store.getConversation(id)
+    expect(saved?.timeline.some((entry) => entry.kind === 'thinking' && entry.text.includes('退出前的思考'))).toBe(true)
+
+    await controller.stop()
+    finish({ text: '答复' })
+    await until(() => !controller.displayedRuntime()!.isRunning(), 'stopped')
+  })
 })

@@ -1776,13 +1776,26 @@ if (ownsSingleInstance) void app.whenReady().then(async () => {
   app.quit()
 })
 
-app.on('before-quit', () => {
+let quitting = false
+app.on('before-quit', (event) => {
+  if (quitting) return
+  quitting = true
+  // Hold the quit until the running turn has been written. A turn normally
+  // saves when it finishes; quitting mid-turn used to drop everything since
+  // the last save, which looked like the last work block disappearing.
+  event.preventDefault()
   controller?.stopAll()
   void sideChat.discardAll()
   if (balanceWindow && !balanceWindow.isDestroyed()) balanceWindow.destroy()
   balanceWindow = undefined
   tray?.destroy()
   tray = undefined
+  void Promise.race([
+    controller?.flushAll() ?? Promise.resolve(),
+    new Promise<void>((resolve) => setTimeout(resolve, 2_000))
+  ]).catch((error: unknown) => {
+    console.error('Final conversation save failed:', error)
+  }).finally(() => app.quit())
 })
 
 app.on('window-all-closed', () => app.quit())

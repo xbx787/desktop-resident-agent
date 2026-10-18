@@ -326,6 +326,20 @@ export class ConversationController {
     for (const runtime of this.runtimes.values()) runtime.stop()
   }
 
+  /** Writes every live conversation's current timeline before the app exits.
+   *  A turn persists when it finishes; without this, whatever happened since
+   *  the last save vanished on restart. */
+  async flushAll(): Promise<void> {
+    if (!this.initialized) return
+    for (const id of [...this.runtimes.keys()]) {
+      try {
+        await this.persistConversation(id)
+      } catch (error) {
+        this.onBackgroundError(error)
+      }
+    }
+  }
+
   getSnapshot(): ControllerSnapshot {
     if (!this.initialized || !this.library) throw new Error('会话库尚未就绪。')
     const id = this.activeId!
