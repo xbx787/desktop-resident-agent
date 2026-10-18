@@ -108,6 +108,7 @@ export function SettingsPage() {
   const [workspace, setWorkspace] = useState<{ path: string; saved: boolean } | null>(null)
   const [workspacePending, setWorkspacePending] = useState<string | null>(null)
   const [workspaceBusy, setWorkspaceBusy] = useState(false)
+  const [quitConfirm, setQuitConfirm] = useState(false)
   const [libraries, setLibraries] = useState<LibrarySnapshot>({ items: [], busy: false })
   const [libraryKind, setLibraryKind] = useState<LibraryKind>('mcp')
   const [marketQuery, setMarketQuery] = useState('')
@@ -881,6 +882,17 @@ export function SettingsPage() {
         </div>
       </section>}
     </main>
+    <div className="settings-quit">
+      {quitConfirm
+        ? <div className="settings-quit-confirm" role="alertdialog" aria-label="确认退出小鲸">
+            <p>退出后对话会保存，下次启动继续。</p>
+            <div className="settings-quit-actions">
+              <button type="button" onClick={() => setQuitConfirm(false)}>取消</button>
+              <button type="button" className="is-danger" onClick={() => { void window.whaleSettings.quit() }}>确认退出</button>
+            </div>
+          </div>
+        : <button type="button" className="settings-quit-button" onClick={() => setQuitConfirm(true)}>退出小鲸</button>}
+    </div>
     <div className={`settings-notice${notice?.error ? ' is-error' : ''}`} role={notice?.error ? 'alert' : 'status'}>{notice?.text}</div>
   </div>
 }

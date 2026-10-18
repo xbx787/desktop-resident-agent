@@ -998,6 +998,10 @@ function registerIpc(): void {
     if (!settingsTrusted(event)) return
     settingsWindow?.close()
   })
+  ipcMain.handle('pet:settings:quit', (event) => {
+    if (!settingsTrusted(event)) return
+    app.quit()
+  })
   ipcMain.handle('pet:libraries:list', async (event) => {
     if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
     return libraryStore.snapshot()
@@ -1690,7 +1694,12 @@ function registerIpc(): void {
 // 隔离冒烟测试：配合 DESKTOP_PET_WORKSPACE 指向临时目录时，允许再起一个实例。
 const ownsSingleInstance = process.env.DESKTOP_PET_MULTI_INSTANCE === '1' || app.requestSingleInstanceLock()
 if (!ownsSingleInstance) app.quit()
-else app.on('second-instance', () => {
+else app.on('second-instance', (_event, commandLine) => {
+  // Lets the packaging script close a running copy without killing it.
+  if (commandLine.includes('--quit')) {
+    app.quit()
+    return
+  }
   avatarWindow?.show()
   showPanel()
 })

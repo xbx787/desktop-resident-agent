@@ -21,6 +21,8 @@ export interface SettingsAPI {
   migrateWorkspace(path: string): Promise<{ path: string }>
   /** 设置窗口没有系统边框，标题栏画在页面里——这是它唯一的关闭通道。 */
   close(): Promise<void>
+  /** Quits the whole app; the conversation store is already on disk. */
+  quit(): Promise<void>
   /** Stores an avatar image (PNG/JPEG bytes) for `user` or `assistant`. */
   setAvatar(kind: 'user' | 'assistant', bytes: number[]): Promise<void>
   /** Data URL of the stored avatar, or null when none is set. */
@@ -77,7 +79,8 @@ const api: SettingsAPI = {
   growthPublish: (id) => ipcRenderer.invoke('pet:growth:publish', id),
   growthDiscard: (id) => ipcRenderer.invoke('pet:growth:discard', id),
   growthUpdateNotes: (id, notes) => ipcRenderer.invoke('pet:growth:update-notes', id, notes),
-  close: () => ipcRenderer.invoke('pet:settings:close')
+  close: () => ipcRenderer.invoke('pet:settings:close'),
+  quit: () => ipcRenderer.invoke('pet:settings:quit')
 }
 
 // 与 pet preload 相同：字号档只写 <html data-ui-size>，CSS 自己派生。

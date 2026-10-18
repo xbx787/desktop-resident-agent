@@ -36,7 +36,7 @@ function click(label: string): void {
 function bridge(overrides: Partial<SettingsAPI> = {}): SettingsAPI {
   return {
     get: async () => settings, update: async (patch) => ({ ...settings, ...patch }),
-    version: async () => '0.0.75', close: async () => {}, setAvatar: async () => {},
+    version: async () => '0.0.75', close: async () => {}, quit: async () => {}, setAvatar: async () => {},
     workspace: async () => ({ path: 'D:\\old', saved: false }),
     pickWorkspace: async () => null,
     migrateWorkspace: async (next) => ({ path: next }),
@@ -66,6 +66,20 @@ async function mount(api: SettingsAPI): Promise<void> {
   root = createRoot(container)
   await act(async () => root!.render(<SettingsPage />))
 }
+
+describe('settings quit control', () => {
+  it('asks before closing the whole app', async () => {
+    const quit = vi.fn(async () => {})
+    await mount(bridge({ quit }))
+
+    await act(async () => click('退出小鲸'))
+    expect(container!.textContent).toContain('退出后对话会保存')
+    expect(quit).not.toHaveBeenCalled()
+
+    await act(async () => click('确认退出'))
+    expect(quit).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('settings workspace migration', () => {
   it('asks for confirmation and only then migrates', async () => {
