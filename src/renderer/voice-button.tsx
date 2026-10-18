@@ -6,7 +6,7 @@ function MicrophoneIcon() {
 
 function Wave({ top }: { top?: boolean }) {
   return <span className={`panel-voice-wave-bars${top ? ' is-top' : ' is-bottom'}`} aria-hidden="true">
-    <i /><i /><i />
+    <i /><i />
   </span>
 }
 

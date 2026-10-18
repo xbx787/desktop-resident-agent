@@ -4,6 +4,26 @@ import { DeepSeekClient } from '../src/main/deepseek'
 afterEach(() => vi.unstubAllGlobals())
 
 describe('DeepSeek Responses API adapter', () => {
+  it('uses the selected persona on the next request and never keeps the previous instructions', async () => {
+    const mockFetch = vi.fn().mockImplementation(async () => new Response(JSON.stringify({
+      status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: '收到' }] }]
+    }), { status: 200 }))
+    vi.stubGlobal('fetch', mockFetch)
+    const client = new DeepSeekClient('test-key')
+    client.setIdentity({ userName: '主人', assistantName: '小鲸' })
+    client.setPersonaId('rin')
+    await client.respond([{ role: 'user', content: '你好' }], new AbortController().signal)
+    const rin = JSON.parse(mockFetch.mock.calls[0][1].body as string)
+    expect(rin.instructions).toContain('你是远坂凛')
+    expect(rin.instructions).not.toContain('你叫小鲸')
+
+    client.setPersonaId('rem')
+    await client.respond([{ role: 'user', content: '你好' }], new AbortController().signal)
+    const rem = JSON.parse(mockFetch.mock.calls[1][1].body as string)
+    expect(rem.instructions).toContain('你是雷姆')
+    expect(rem.instructions).not.toContain('你是远坂凛')
+  })
+
   it('uses the current model ID and treats a tool call as a proposal', async () => {
     const mockFetch = vi.fn().mockResolvedValue(
       new Response(

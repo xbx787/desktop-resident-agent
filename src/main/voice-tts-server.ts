@@ -32,7 +32,7 @@ export async function synthesizeSpeech(input: SynthesizeSpeechInput): Promise<Sy
   const text = input.text.trim()
   if (!text) throw new Error('没有可朗读的文字。')
 
-  const baseUrl = (input.baseUrl || 'https://api.siliconflow.com').replace(/\/+$/u, '')
+  const baseUrl = (input.baseUrl || 'https://api.siliconflow.cn').replace(/\/+$/u, '')
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), input.timeoutMs ?? 45_000)
   const forwardAbort = (): void => controller.abort()

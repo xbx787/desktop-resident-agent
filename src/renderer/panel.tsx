@@ -35,6 +35,7 @@ import { toolDiffPreview } from './tool-diff';
 import { ToolInputDetails } from './tool-input-details';
 import { TurnStats } from './turn-stats';
 import { WorkingIndicator } from './working-indicator';
+import { SubagentTray } from './subagent-tray';
 import { TurnProcess, WorkCluster } from './work-cluster';
 import { petBridge } from './pet-state';
 import { personaAvatarUrl } from './avatar-art';
@@ -47,28 +48,28 @@ import './panel.css';
 // 严格到宽松：每次操作都弹审批、只放行编辑、全部直接执行。
 const APPROVAL_MODES: ApprovalMode[] = ['default', 'acceptEdits', 'bypassPermissions']
 const APPROVAL_MODE_LABELS: Record<ApprovalMode, string> = {
-  default: '自动审批',
+  default: '手动审批',
   acceptEdits: '允许所有编辑',
   bypassPermissions: '完全访问',
   plan: '计划模式'
 }
 const APPROVAL_MODE_HINTS: Record<ApprovalMode, string> = {
-  default: '每个需要权限的操作都自动弹审批',
+  default: '每个需要权限的操作都先问你',
   acceptEdits: '文件修改自动放行，其他操作仍询问',
   bypassPermissions: '所有工具直接执行，不再询问',
   plan: '先研究并给出计划，批准后再动手'
 }
 
-/** One icon per permission mode: a question mark (every call asks), a pencil
- *  (edits pass), an open lock (everything runs). */
+/** One icon per permission mode: a raised hand (every call asks), a pencil
+ *  (edits pass), a warning shield (everything runs). */
 function ApprovalIcon({ mode }: { mode: ApprovalMode }) {
   if (mode === 'acceptEdits') {
     return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4.2 15.8l.9-3.8 7.6-7.6a1.5 1.5 0 0 1 2.1 2.1l-7.6 7.6-3 .9Z" /><path d="m11.7 5.4 2.1 2.1" /></svg>
   }
   if (mode === 'bypassPermissions') {
-    return <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4.8" y="9" width="10.4" height="7.4" rx="2" /><path d="M7.4 9V6.6a2.6 2.6 0 0 1 5.1-.7" /></svg>
+    return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.8 16.2 5v5.1c0 3.5-2.4 6.3-6.2 7.4-3.8-1.1-6.2-3.9-6.2-7.4V5L10 2.8Z" /><path d="M10 7.1v4.1" /><path d="M10 13.7h.01" /></svg>
   }
-  return <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="6.8" /><path d="M8.1 8.2a2 2 0 1 1 2.7 1.9c-.5.2-.8.6-.8 1.1v.4" /><path d="M10 13.9h.01" /></svg>
+  return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6.3 10.2V5.6a1.2 1.2 0 0 1 2.4 0v4.1" /><path d="M8.7 9.7V4.4a1.2 1.2 0 0 1 2.4 0v5.2" /><path d="M11.1 9.8V5.2a1.2 1.2 0 0 1 2.4 0v5.3" /><path d="M13.5 10.1V6.8a1.2 1.2 0 0 1 2.4 0v5.5c0 3.4-2.1 5.4-5.5 5.4-2.4 0-3.8-.9-5-2.6L3.6 12a1.3 1.3 0 0 1 2-1.6l1.6 1.7" /></svg>
 }
 
 const taskLabels: Record<TaskStatus, string> = {
@@ -323,22 +324,42 @@ export const TimelineItem = memo(function TimelineItem({ entry, running = false,
   }
   if (entry.kind === 'system') {
     // A notice has no speaker: no glyph, no clock — the hairlines and the
-    // centered, muted line set it apart from the dialogue instead.
-    return <article className="panel-event panel-event-system" aria-label={kindLabels.system}>
-      <div className="panel-event-body"><p>{entry.text}</p></div>
+    // centered, muted line set it apart from the dialogue instead. Errors
+    // take the same row but a warning tone and a leading mark.
+    const failed = entry.tone === 'error';
+    return <article className={`panel-event panel-event-system${failed ? ' is-error' : ''}`} aria-label={`${kindLabels.system}${failed ? '，错误' : ''}`}>
+      <div className="panel-event-body">
+        {failed && <span className="panel-event-system-mark" aria-hidden="true">!</span>}
+        <p>{entry.text}</p>
+      </div>
     </article>;
   }
+  // Conversation-to-conversation messages carry their source title in the
+  // body so the model sees it. The row turns that prefix into a visible
+  // sender identity (name + first-character badge) instead of showing it as
+  // ordinary prose.
+  const sourceMatch = entry.kind === 'user'
+    ? /^【来自对话「([^」]{1,40})」】\r?\n?/u.exec(entry.text)
+    : null;
+  const sender = entry.kind === 'user'
+    ? entry.sender ?? (sourceMatch ? { name: sourceMatch[1].trim(), badge: sourceMatch[1].trim().slice(0, 1) } : undefined)
+    : undefined;
+  const bodyEntry = sourceMatch ? { ...entry, text: entry.text.slice(sourceMatch[0].length) } : entry;
   return (
-    <article className={`panel-event panel-event-${entry.kind}`} data-entry-id={entry.id} aria-label={`${kindLabels[entry.kind]}，${timeLabel}`}>
+    <article className={`panel-event panel-event-${entry.kind}`} data-entry-id={entry.id} aria-label={`${sender ? sender.name : kindLabels[entry.kind]}，${timeLabel}`}>
       <div className="panel-event-avatar" aria-hidden="true" onContextMenu={onAvatarMenu}>
         {entry.kind === 'user' || entry.kind === 'assistant'
-          ? <AvatarGlyph kind={entry.kind} fallback={entry.kind === 'user' ? '你' : '鲸'}
-              name={entry.kind === 'user' ? display.avatars.user : display.avatars.assistant}
+          ? <AvatarGlyph kind={entry.kind}
+              fallback={sender?.badge ?? (entry.kind === 'user' ? '你' : '鲸')}
+              name={sender ? null : entry.kind === 'user' ? display.avatars.user : display.avatars.assistant}
               presetSrc={entry.kind === 'user' ? null : display.personaAvatar} />
           : <span className="panel-event-glyph">系</span>}
         {display.showTimestamps && <time className="panel-event-time" dateTime={entry.time}>{timeLabel}</time>}
       </div>
-      <div className="panel-event-body"><MessageBody entry={entry} running={running} onOpenImage={onOpenImage} /></div>
+      <div className="panel-event-body">
+        {sender && <span className="panel-event-sender">{sender.name}</span>}
+        <MessageBody entry={bodyEntry} running={running} onOpenImage={onOpenImage} />
+      </div>
     </article>
   );
 }, (prev, next) => prev.running === next.running && sameTimelineEntry(prev.entry, next.entry) &&
@@ -2024,9 +2045,12 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
       ? groupSessionSummaries(visibleConversations, libraryArchived, Date.now())
       : [{ key: 'all', label: null, conversations: visibleConversations }];
 
-  const status = snapshot?.proposal ? 'awaiting_approval' : snapshot?.taskStatus ?? 'idle';
+  // A parked plan, question or permission is waiting on the user; the turn is
+  // not executing, even if the runtime's last coarse status said so.
+  const awaitingInteraction = (source?: typeof snapshot): boolean => Boolean(source?.proposal || source?.plan || source?.question || source?.permission);
+  const status = awaitingInteraction(snapshot) ? 'awaiting_approval' : snapshot?.taskStatus ?? 'idle';
   const sideStatus = sideSessionId
-    ? sideChat?.snapshot?.proposal ? 'awaiting_approval' : sideChat?.snapshot?.taskStatus ?? 'idle'
+    ? awaitingInteraction(sideChat?.snapshot) ? 'awaiting_approval' : sideChat?.snapshot?.taskStatus ?? 'idle'
     : 'idle';
   // Live per-conversation statuses arrive through the library summaries now,
   // so every tab dot is truthful — the displayed conversation included.
@@ -2566,9 +2590,23 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
           </> : <button type="button" className="panel-side-chip" aria-label={`展开临时会话，${sideChat?.queuePaused ? '已停止，队列保留' : taskLabels[sideStatus]}`} title={sideChat?.queuePaused ? '已停止，队列保留；点击展开' : '展开临时会话'} onClick={() => { void setSideExpanded(true); }}><i className={`panel-task-dot panel-task-dot-${sideStatus}`} aria-hidden="true" />临时会话</button>}
           <button type="button" className="panel-side-discard" aria-label="结束并丢弃临时会话" title="结束临时会话，记录不进入会话库" onClick={() => { void discardSide(); }}>×</button>
         </div>}
-        {status !== 'idle' && !sideExpanded && (
+        {(status !== 'idle' || (snapshot?.subagents?.length ?? 0) > 0) && !sideExpanded && (
           <div className="panel-status-row">
             <span className={`panel-status panel-status-${status}`} role="status"><i />{statusLive ? <span className="panel-live-label">{taskLabels[status]}</span> : taskLabels[status]}</span>
+            <SubagentTray subagents={snapshot?.subagents}
+              onBackgroundTask={(task) => {
+                const toolUseId = task.toolUseId;
+                if (!toolUseId) return;
+                void run(async (bridge) => { await bridge.backgroundTask(toolUseId, activeConversationIdRef.current ?? undefined); });
+              }}
+              onStopTask={(task) => {
+                void run(async (bridge) => { await bridge.stopTask(task.taskId, activeConversationIdRef.current ?? undefined); });
+              }}
+              onMessageSubagent={(task, text) => {
+                const toolUseId = task.toolUseId;
+                if (!toolUseId) return;
+                void run(async (bridge) => { await bridge.messageSubagent(toolUseId, text, activeConversationIdRef.current ?? undefined); });
+              }} />
           </div>
         )}
 
@@ -2691,9 +2729,17 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
           </div>)}</div>
         </div>}
 
-        {!compactEmpty && <TaskStrip key={sideExpanded ? sideSessionId : library?.activeConversationId} tasks={tasks} planMode={Boolean(snapshot?.planMode)} />}
+        {!compactEmpty && <TaskStrip key={sideExpanded ? sideSessionId : library?.activeConversationId} tasks={tasks}
+          planMode={Boolean(snapshot?.planMode)} planSummary={sideExpanded ? undefined : snapshot?.approvedPlan} />}
 
-        {!compactEmpty && !sideExpanded && snapshot?.goal && <GoalBanner goal={snapshot.goal} onClear={clearGoal} />}
+        {!compactEmpty && !sideExpanded && snapshot?.goal && <GoalBanner goal={snapshot.goal}
+          maxIterations={snapshot.conversationLibrary?.settings.goalMaxIterations}
+          maxMinutes={snapshot.conversationLibrary?.settings.goalMaxMinutes}
+          pausedReason={snapshot.queuePauseReason}
+          onResume={snapshot.queuePauseReason
+            ? () => { void run((bridge) => bridge.resumeQueue(activeConversationIdRef.current ?? undefined)); }
+            : undefined}
+          onClear={clearGoal} />}
 
         <div className={`panel-compose-dock${composerOpen || composerExit.closing || ask || plan || permission ? ' is-open' : ''}`} ref={composeDockRef}>
           {ask ? (
@@ -2748,7 +2794,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                   maxLength={8000}
                   rows={1}
                   style={{ height: composerHeight }}
-                  placeholder={sideExpanded ? '在临时会话中提问…' : goalPrompting ? '请输入当前的目标，回车设定' : '输入消息…'}
+                  placeholder={sideExpanded ? '在临时会话中提问…' : goalPrompting ? '写清目标与可验证的完成标准，回车设定' : '输入消息…'}
                   aria-controls={suggestionOpen ? 'panel-composer-suggestions' : undefined}
                   aria-expanded={suggestionOpen && (suggestionLoading || suggestionItems.length > 0)}
                   aria-activedescendant={suggestionOpen && suggestionItems.length > 0 ? `panel-suggestion-${suggestionSelected}` : undefined}

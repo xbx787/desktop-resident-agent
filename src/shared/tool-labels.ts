@@ -21,8 +21,8 @@ const TOOL_LABELS: Record<string, string> = {
   killshell: '终止命令',
   glob: '查找文件',
   grep: '搜索',
-  task: '子任务',
-  agent: '子任务',
+  task: '子代理',
+  agent: '子代理',
   todowrite: '更新任务',
   taskcreate: '新建任务',
   taskupdate: '更新任务',
@@ -54,7 +54,9 @@ const TOOL_LABELS: Record<string, string> = {
   exitworktree: '关闭隔离工作区',
   listmcpresourcestools: '列出 MCP 资源',
   readmcpresourcetool: '读取 MCP 资源',
-  readmcpresourcedirtool: '浏览 MCP 目录'
+  readmcpresourcedirtool: '浏览 MCP 目录',
+  unknown_tool: '工具结果',
+  '未知工具': '工具结果'
 }
 
 /** A malformed model stream can leave a blob of prose where the tool name
@@ -65,5 +67,5 @@ export function toolLabel(name: string): string {
   const known = TOOL_LABELS[trimmed.toLowerCase()]
   if (known) return known
   if (!trimmed) return trimmed
-  return /^[A-Za-z0-9_.-]{1,64}$/.test(trimmed) ? trimmed : '未知工具'
+  return /^[A-Za-z0-9_.-]{1,64}$/.test(trimmed) ? trimmed : '工具'
 }

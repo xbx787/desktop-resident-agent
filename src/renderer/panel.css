@@ -400,7 +400,7 @@ body.is-resizing-panel, body.is-resizing-panel * { cursor: nwse-resize !importan
 .panel-turn-asides { min-width: 0; }
 /* The reply pieces carry no bullet: a dot per paragraph read as a list of
    unrelated items — the final answer most of all. The pieces just flow. */
-.panel-avatar-img { width: 33px; height: 33px; border: 1px solid rgba(190, 213, 253, .35); border-radius: 11.5px; object-fit: cover; }
+.panel-avatar-img { width: 33px; height: 33px; border: 1px solid rgba(190, 213, 253, .35); border-radius: 11.5px; object-fit: cover; object-position: center 34%; }
 .panel-event-glyph {
   display: grid;
   place-items: center;
@@ -425,6 +425,11 @@ body.is-resizing-panel, body.is-resizing-panel * { cursor: nwse-resize !importan
 .panel-event-system .panel-event-body::before, .panel-event-system .panel-event-body::after { content: ''; flex: 1; height: 1px; min-width: 24px; background: linear-gradient(90deg, rgba(190, 212, 255, .3), rgba(190, 212, 255, .04)); }
 .panel-event-system .panel-event-body::after { transform: scaleX(-1); }
 .panel-event-system .panel-event-body p { margin: 0; color: #a9bee4; font-size: var(--text-sm); line-height: 1.5; }
+/* Errors keep the notice row but switch tone: red hairlines, a leading mark and
+   warning text, so a failure never reads as an ordinary status note. */
+.panel-event-system.is-error .panel-event-body::before, .panel-event-system.is-error .panel-event-body::after { background: linear-gradient(90deg, rgba(244, 143, 152, .46), rgba(244, 143, 152, .04)); }
+.panel-event-system.is-error .panel-event-body p { color: #ffb8bf; }
+.panel-event-system-mark { flex: none; display: grid; place-items: center; width: 14px; height: 14px; border: 1px solid rgba(244, 143, 152, .62); border-radius: 50%; color: #ffb8bf; font-size: var(--text-2xs); font-weight: 600; line-height: 1; }
 /* A user message with attachments: the file list sits under its own hairline
    instead of trailing the sentence on the same line. */
 .panel-event-attachments { display: grid; gap: 7px; margin-top: 8px; }
@@ -639,7 +644,7 @@ body.is-resizing-panel, body.is-resizing-panel * { cursor: nwse-resize !importan
 /* Something is happening but nothing is streaming yet: say what, and for how long. */
 /* 首点（宽 5）的中心落在 16.5px 的同一条轴上（14 + 2.5）——和上面的状态点、
    统计点一列。 */
-.panel-working { display: flex; align-items: center; gap: 9px; margin: 1px 0 15px; padding-left: 14px; color: #9fb7df; font-size: var(--text-sm); }
+.panel-working { position: relative; display: flex; align-items: center; gap: 9px; margin: 1px 0 15px; padding-left: 14px; color: #9fb7df; font-size: var(--text-sm); }
 .panel-working-dots { display: inline-flex; flex: none; gap: 3px; }
 /* 三个点各走各的相位（原 .18s/.36s 错峰的等价物），变量由 30fps 的计时器推进。 */
 .panel-working-dots i { width: 5px; height: 5px; border-radius: 50%; background: #7fd8ff; opacity: calc(.4 + .6 * var(--panel-bounce-p1, 1)); transform: translateY(calc(-3px * var(--panel-bounce-p1, 1))); }
@@ -648,6 +653,47 @@ body.is-resizing-panel, body.is-resizing-panel * { cursor: nwse-resize !importan
 @keyframes panel-working-bounce { 0%, 100% { transform: translateY(0); opacity: .4; } 50% { transform: translateY(-3px); opacity: 1; } }
 .panel-working-text { color: #dbe8ff; }
 .panel-working-time { color: #90a8d4; font-variant-numeric: tabular-nums; }
+/* 子任务：每个 Task 子 agent 一个机器人头，点开是只读详情与它自己的步骤。 */
+.panel-subagent-icons { display: inline-flex; flex: none; align-items: center; gap: 3px; min-width: 0; margin-left: 1px; }
+.panel-subagent-icon { display: grid; place-items: center; flex: none; width: 20px; height: 20px; padding: 0; border: 1px solid rgba(190, 212, 255, .2); border-radius: 6px; color: #bfe4ff; background: rgba(127, 216, 255, .08); }
+.panel-subagent-icon svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.panel-subagent-icon .panel-subagent-eye { fill: currentColor; stroke: none; }
+.panel-subagent-icon.is-completed { color: #9fd8b6; border-color: rgba(159, 216, 182, .26); }
+.panel-subagent-icon.is-failed { color: #e8a7a7; border-color: rgba(232, 167, 167, .3); }
+.panel-subagent-icon.is-stopped { color: #a8b3c9; opacity: .6; }
+.panel-subagent-icon.is-open, .panel-subagent-icon:hover { border-color: rgba(150, 220, 255, .48); background: rgba(127, 216, 255, .2); }
+/* 运行中的状态灯：只动 opacity/transform。 */
+.panel-status-planning > i, .panel-status-executing > i, .panel-status-verifying > i { animation: panel-status-breathe 2.4s ease-in-out infinite; }
+@keyframes panel-status-breathe { 0%, 100% { opacity: .42; transform: translateY(.8px) scale(.78); } 50% { opacity: 1; transform: translateY(.8px) scale(1); } }
+/* 子代理详情：body 层 fixed，避开消息区的滚动裁剪。 */
+.panel-subagent-popover { position: fixed; z-index: 60; box-sizing: border-box; display: grid; gap: 5px; padding: 9px 10px; overflow-x: hidden; overflow-y: auto; border: 1px solid rgba(190, 212, 255, .3); border-radius: 11px; color: #dbe8ff; background: #1a2f5c; box-shadow: 0 8px 24px rgba(5, 14, 38, .4); font-family: var(--font-ui); font-size: var(--text-sm); scrollbar-width: thin; scrollbar-color: rgba(170, 195, 245, .32) transparent; }
+.panel-subagent-popover::-webkit-scrollbar { width: 4px; height: 0; }
+.panel-subagent-popover::-webkit-scrollbar-thumb { border-radius: 4px; background: rgba(170, 195, 245, .32); }
+.panel-subagent-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.panel-subagent-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: #7fd8ff; box-shadow: 0 0 0 2px rgba(127, 216, 255, .12); }
+.panel-subagent-dot.is-completed { background: #8fe0ae; box-shadow: 0 0 0 2px rgba(143, 224, 174, .12); }
+.panel-subagent-dot.is-failed { background: #e79a9a; box-shadow: 0 0 0 2px rgba(231, 154, 154, .12); }
+.panel-subagent-dot.is-stopped { background: #9aa8c0; box-shadow: none; }
+.panel-subagent-title { flex: 1; min-width: 0; overflow: hidden; color: #f1f6ff; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.panel-subagent-desc { margin: 0; min-width: 0; overflow: hidden; color: #e7efff; text-overflow: ellipsis; white-space: nowrap; }
+.panel-subagent-state { flex: none; color: #93aad4; font-size: var(--text-xs); }
+.panel-subagent-state.is-completed { color: #9fd8b6; }
+.panel-subagent-state.is-failed { color: #e8a7a7; }
+.panel-subagent-meta { margin: 0; min-width: 0; overflow: hidden; color: #94aad2; font-size: var(--text-xs); line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.panel-subagent-timeline { display: grid; gap: 1px; max-height: 84px; margin: 1px 0 0; padding: 4px 0 0; overflow-x: hidden; overflow-y: auto; border-top: 1px solid rgba(190, 212, 255, .12); list-style: none; scrollbar-width: thin; }
+.panel-subagent-step { display: flex; align-items: baseline; gap: 6px; min-width: 0; color: #c6d5ef; font-size: var(--text-xs); line-height: 1.5; }
+.panel-subagent-step-mark { flex: none; width: 10px; color: #84cfff; text-align: center; }
+.panel-subagent-step-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-subagent-actions { display: flex; gap: 6px; padding-top: 1px; }
+.panel-subagent-actions button { padding: 2px 8px; border: 1px solid rgba(190, 212, 255, .26); border-radius: 6px; color: #dbe8ff; background: rgba(127, 216, 255, .1); font-size: var(--text-xs); }
+.panel-subagent-actions button:hover { background: rgba(127, 216, 255, .2); }
+.panel-subagent-actions button.is-stop { color: #f0b9b9; border-color: rgba(232, 167, 167, .3); background: rgba(232, 167, 167, .1); }
+.panel-subagent-message { display: flex; gap: 6px; min-width: 0; }
+.panel-subagent-message input { flex: 1; min-width: 0; padding: 3px 7px; border: 1px solid rgba(190, 212, 255, .24); border-radius: 6px; color: #edf3ff; background: rgba(8, 20, 49, .55); font-size: var(--text-xs); }
+.panel-subagent-message input::placeholder { color: #7f94b9; }
+.panel-subagent-message button { flex: none; padding: 2px 8px; border: 1px solid rgba(190, 212, 255, .26); border-radius: 6px; color: #dbe8ff; background: rgba(127, 216, 255, .1); font-size: var(--text-xs); }
+.panel-subagent-message button:hover:not(:disabled) { background: rgba(127, 216, 255, .2); }
+.panel-subagent-message button:disabled { opacity: .45; }
 .panel-event-body, .panel-event-body *, .panel-approval-description, .panel-approval-detail dd, .panel-preview, .panel-composer textarea { -webkit-user-select: text; user-select: text; }
 .panel-bubble ::selection { color: #12244e; background: #bdd7ff; }
 .panel-markdown { margin-top: 4px; color: #edf3ff; font-size: var(--text-md); line-height: 1.58; overflow-wrap: anywhere; }
@@ -925,9 +971,14 @@ body.is-resizing-panel, body.is-resizing-panel * { cursor: nwse-resize !importan
 /* The running goal itself lives under the task strip, next to the work it drives. */
 .panel-goal-stop svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.65; stroke-linecap: round; stroke-linejoin: round; }
 /* The running goal shares the tasks' band, one line under it. */
-.panel-goal-banner { flex: none; display: flex; align-items: center; gap: 8px; padding: 5px 14px 6px; border-top: 1px solid rgba(195, 215, 253, .14); background: rgba(18, 39, 81, .28); }
+.panel-goal-banner { flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 3px 8px; padding: 5px 14px 6px; border-top: 1px solid rgba(195, 215, 253, .14); background: rgba(18, 39, 81, .28); }
 .panel-goal-banner-condition { flex: 1; min-width: 0; overflow: hidden; color: #dbe8ff; font-size: var(--text-sm); text-overflow: ellipsis; white-space: nowrap; }
 .panel-goal-banner-meta { flex: none; color: #93aad4; font-size: var(--text-xs); }
+.panel-goal-banner-budget { flex: none; color: #93aad4; font-size: var(--text-xs); }
+.panel-goal-banner-reason { flex: 1 1 100%; min-width: 0; overflow: hidden; color: #c9a87a; font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
+.panel-goal-banner-pause { flex: 1 1 auto; min-width: 0; overflow: hidden; color: #e0b48a; font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
+.panel-goal-resume { flex: none; padding: 2px 8px; border: 1px solid rgba(224, 180, 138, .34); border-radius: 7px; color: #efd3b4; background: rgba(224, 180, 138, .1); font-size: var(--text-xs); }
+.panel-goal-resume:hover { background: rgba(224, 180, 138, .2); }
 .panel-goal-stop { display: grid; place-items: center; flex: none; width: 22px; height: 22px; padding: 0; border: 1px solid rgba(190, 212, 255, .22); border-radius: 7px; color: #dce8ff; background: rgba(160, 191, 251, .12); }
 .panel-goal-stop:hover { background: rgba(160, 191, 251, .22); }
 /* Thinking depth sits on the toolbar, one tap away; the depth slider itself
@@ -1012,9 +1063,12 @@ body.is-resizing-panel, body.is-resizing-panel * { cursor: nwse-resize !importan
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes voice-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .55; transform: scale(.85); } }
 @media (prefers-reduced-motion: reduce) {
-  .panel-bubble:not([hidden]), .panel-library-drawer, .panel-library-drawer.is-closing, .panel-composer, .panel-composer.is-closing, .panel-send-spinner, .panel-scroll-bottom, .panel-scroll-ring, .panel-thought-state.is-running, .panel-turn-stats-dot.is-running, .panel-working-dots i, .panel-cluster-state.is-running, .panel-attachment-preview { animation: none; }
+  .panel-bubble:not([hidden]), .panel-library-drawer, .panel-library-drawer.is-closing, .panel-composer, .panel-composer.is-closing, .panel-send-spinner, .panel-scroll-bottom, .panel-scroll-ring, .panel-thought-state.is-running, .panel-turn-stats-dot.is-running, .panel-working-dots i, .panel-cluster-state.is-running, .panel-attachment-preview, .panel-status > i { animation: none; }
   .panel-bubble, .panel-model-menu, .panel-context-tooltip, .panel-cluster-chevron, .panel-tasks-chevron, .panel-mode-switch, .panel-mode-switch::after { transition: none; }
   .panel-compose-trigger:hover { transform: none; }
   .panel-live-label { animation: none; text-shadow: none; background-image: none; -webkit-text-fill-color: var(--panel-live-base); }
   .panel-live-label::before, .panel-live-label::after { display: none; }
 }
+
+/* 另一个对话/代理注入的消息：头像位显示来源徽章，正文前标出名字。 */
+.panel-event-sender { display: inline-flex; align-items: center; margin: 0 0 3px; padding: 1px 6px; border-radius: 5px; color: #f0c68c; background: rgba(240, 196, 123, .12); font-size: var(--text-2xs); line-height: 1.4; }

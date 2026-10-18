@@ -30,7 +30,10 @@ export function parseTranscribeRequest(raw: unknown): { bytes: number[]; mimeTyp
   if (!Array.isArray(record.bytes) || record.bytes.length === 0 || record.bytes.length > MAX_AUDIO_BYTES) invalid()
   if (record.bytes.some((value) => typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 255)) invalid()
   const mimeType = typeof record.mimeType === 'string' ? record.mimeType : ''
-  if (!AUDIO_MIMES.has(mimeType)) invalid()
+  // MediaRecorder reports `audio/webm;codecs=opus`; the codec parameter is
+  // valid and must not turn a normal recording into an "invalid request".
+  const baseMime = mimeType.split(';', 1)[0].trim().toLowerCase()
+  if (!AUDIO_MIMES.has(baseMime)) throw new Error('录音格式不受支持。')
   return { bytes: record.bytes as number[], mimeType }
 }
 

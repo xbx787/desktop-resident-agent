@@ -1131,4 +1131,21 @@ describe('parallel conversations', () => {
     finish({ text: '答复' })
     await until(() => !controller.displayedRuntime()!.isRunning(), 'stopped')
   })
+
+  it('hands a message from one conversation to another with its source', async () => {
+    const store = new ConversationStore(testRoot)
+    const source = await store.createConversation('开发2', 'demo')
+    const target = await store.createConversation('开发1', 'demo')
+    await store.setActiveConversation(source.id)
+    const controller = new ConversationController(store,
+      (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))
+    await controller.initialize()
+    const delivered = await controller.sendToConversation('开发1', '打包一下', source.id)
+    expect(delivered).toMatchObject({ id: target.id, title: '开发1' })
+    await controller.selectConversation(target.id)
+    await until(() => controller.getSnapshot().timeline.some((entry) =>
+      entry.kind === 'user' && entry.text.includes('【来自对话「开发2」】') && entry.text.includes('打包一下')), 'delivered message')
+    // A conversation cannot message itself, and the body keeps its source.
+    await expect(controller.sendToConversation('开发2', 'x', source.id)).rejects.toThrow('不能给当前对话自己发消息')
+  })
 })

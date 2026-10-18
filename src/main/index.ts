@@ -29,6 +29,7 @@ import { LibraryStore } from './library-store'
 import { searchMarket } from './marketplace'
 import { VoiceService } from './voice-service'
 import { registerVoiceIpc } from './voice-ipc'
+import { InboxWatcher } from './inbox-watcher'
 import { isLibraryItem, isLibraryKind } from '../shared/libraries'
 import { generateConversationTitle } from './title-generation'
 import { APP_SLASH_COMMANDS, listClaudeWorkflows, parseAppSlashCommand } from './claude-workflows'
@@ -561,7 +562,14 @@ function createAvatarWindow(): BrowserWindow {
     }
   })
   if (process.platform === 'win32') win.setShape([avatarRegion({ width, height })])
-  win.once('ready-to-show', () => win.show())
+  // 人物永远在最上层：连其他置顶窗口（面板、播放器）也不能把她盖住。
+  win.setAlwaysOnTop(true, 'screen-saver')
+  win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  win.on('show', () => win.setAlwaysOnTop(true, 'screen-saver'))
+  win.once('ready-to-show', () => {
+    win.show()
+    win.moveTop()
+  })
   win.on('move', () => {
     // 拖动的是头像窗口；逻辑舞台跟着它的右下角平移，面板窗口再跟着舞台走。
     if (stageBounds) {
@@ -1377,6 +1385,30 @@ function registerIpc(): void {
     if (conversationId !== undefined && typeof conversationId !== 'string') throw new Error('会话编号无效。')
     return activeController().interruptTurn(conversationId as string | undefined)
   })
+  ipcMain.handle('pet:background-task', (event, toolUseId: unknown, conversationId: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (typeof toolUseId !== 'string' || !toolUseId) throw new Error('子代理编号无效。')
+    if (conversationId !== undefined && typeof conversationId !== 'string') throw new Error('会话编号无效。')
+    return activeController().backgroundTask(toolUseId, conversationId as string | undefined)
+  })
+  ipcMain.handle('pet:stop-task', (event, taskId: unknown, conversationId: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (typeof taskId !== 'string' || !taskId) throw new Error('子代理编号无效。')
+    if (conversationId !== undefined && typeof conversationId !== 'string') throw new Error('会话编号无效。')
+    return activeController().stopTask(taskId, conversationId as string | undefined)
+  })
+  ipcMain.handle('pet:message-subagent', (event, toolUseId: unknown, text: unknown, conversationId: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (typeof toolUseId !== 'string' || !toolUseId) throw new Error('子代理编号无效。')
+    if (typeof text !== 'string' || !text.trim()) throw new Error('消息不能为空。')
+    if (conversationId !== undefined && typeof conversationId !== 'string') throw new Error('会话编号无效。')
+    return activeController().messageSubagent(toolUseId, text, conversationId as string | undefined)
+  })
+  ipcMain.handle('pet:resume-queue', (event, conversationId: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (conversationId !== undefined && typeof conversationId !== 'string') throw new Error('会话编号无效。')
+    return activeController().resumeQueue(conversationId as string | undefined)
+  })
   ipcMain.handle('pet:save-model-profile', (event, profile: unknown) => {
     if (!modelTrusted(event)) throw new Error('无效的界面请求。')
     if (!isModelProfile(profile)) throw new Error('模型配置格式无效。')
@@ -1737,6 +1769,8 @@ if (ownsSingleInstance) void app.whenReady().then(async () => {
     console.warn('Claude user resource links unavailable:', error instanceof Error ? error.message : String(error))
   })
   await activeController().initialize()
+  inboxWatcher = new InboxWatcher(path.join(dataRoot, 'inbox'), activeController())
+  inboxWatcher.start()
   const initialSettings = (await activeController().getLibraryState()).settings
   memory.setEnabled(initialSettings.memoryEnabled)
   currentUiSize = initialSettings.uiSize
@@ -1799,6 +1833,7 @@ if (ownsSingleInstance) void app.whenReady().then(async () => {
 })
 
 let quitting = false
+let inboxWatcher: InboxWatcher | undefined
 /** Set by the settings restart button; consumed once the turn is saved. */
 let relaunchOnQuit = false
 app.on('before-quit', (event) => {
@@ -1808,7 +1843,9 @@ app.on('before-quit', (event) => {
   // saves when it finishes; quitting mid-turn used to drop everything since
   // the last save, which looked like the last work block disappearing.
   event.preventDefault()
-  controller?.stopAll()
+  inboxWatcher?.stop()
+  inboxWatcher = undefined
+  controller?.stopAll(true)
   voiceService.dispose()
   void sideChat.discardAll()
   if (balanceWindow && !balanceWindow.isDestroyed()) balanceWindow.destroy()

@@ -18,7 +18,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
 import { ClaudeAgentClient, boundedConversation } from '../src/main/claude-agent'
 import { AgentTurnError } from '../src/main/agent-errors'
 import type { DialogueLine, ModelToolEvent } from '../src/main/deepseek'
-import type { ApprovalMode, CompactionState, PlanApprovalRequest, TaskUsage, ToolPermissionRequest } from '../src/shared/contracts'
+import type { ApprovalMode, CompactionState, PlanApprovalRequest, SubagentTask, TaskUsage, ToolPermissionRequest } from '../src/shared/contracts'
 
 const executable = path.join(process.cwd(), 'package.json')
 const sessionId = '11111111-1111-4111-8111-111111111111'
@@ -34,6 +34,8 @@ type Request = {
     disallowedTools?: string[]
     tools?: string[]
     permissionMode?: string
+    planModeInstructions?: string
+    forwardSubagentText?: boolean
     systemPrompt?: { append?: string }
     hooks: {
       PreCompact?: Array<{ hooks: Array<(input: { hook_event_name: string; trigger?: string }) => Promise<unknown>> }>
@@ -213,6 +215,34 @@ describe('Claude Agent SDK persistent streaming session', () => {
       expect(request.options.env.CLAUDE_CONFIG_DIR).toBe(configDir)
       expect(request.options.tools).toBeUndefined()
       expect(client.getCommandCatalog()).toEqual({ commands: ['/compact', '/review'], skills: ['review'] })
+    } finally { await client.dispose() }
+  })
+
+  it('builds a fresh query with the new persona and bounded history after a preset switch', async () => {
+    const sent: string[] = []
+    queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* (message) {
+      sent.push(String(message.message.content))
+      yield { type: 'result', subtype: 'success', is_error: false, result: '已处理', session_id: sessionId,
+        user_message_uuids: [message.uuid], queued_turn_count: 0 }
+    }))
+    const client = new ClaudeAgentClient(executable, 'test-key', process.cwd(), configDir)
+    try {
+      client.setPersonaId('rin')
+      await client.respond([{ role: 'user', content: '第一轮' }], new AbortController().signal)
+      client.setPersonaId('rem')
+      await client.respond([
+        { role: 'user', content: '第一轮' }, { role: 'assistant', content: '已处理' },
+        { role: 'user', content: '第二轮' }
+      ], new AbortController().signal, undefined, null)
+      expect(queryMock).toHaveBeenCalledTimes(2)
+      const first = queryMock.mock.calls[0][0] as Request
+      const second = queryMock.mock.calls[1][0] as Request
+      expect(first.options.systemPrompt?.append).toContain('你是远坂凛')
+      expect(second.options.systemPrompt?.append).toContain('你是雷姆')
+      expect(second.options.systemPrompt?.append).not.toContain('你是远坂凛')
+      expect(second.options.resume).toBeUndefined()
+      expect(sent[1]).toContain('第一轮')
+      expect(sent[1]).toContain('第二轮')
     } finally { await client.dispose() }
   })
 
@@ -1107,5 +1137,149 @@ describe('Agent failure classification', () => {
       await client.dispose()
       await run
     }
+  })
+})
+
+describe('Task-tool subagents', () => {
+  it('maps task events to subagent rows and keeps their child timelines', async () => {
+    queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* (message) {
+      yield { type: 'system', subtype: 'task_started', task_id: 't1', tool_use_id: 'tool-1',
+        description: '研究协议', subagent_type: 'Explore', task_type: 'local_agent' }
+      yield { type: 'system', subtype: 'task_started', task_id: 't2', tool_use_id: 'tool-2',
+        description: '查历史', subagent_type: 'Explore', task_type: 'local_agent' }
+      yield { type: 'system', subtype: 'task_started', task_id: 't3', tool_use_id: 'tool-3',
+        description: '写摘要', subagent_type: 'Plan', task_type: 'local_agent' }
+      yield { type: 'system', subtype: 'task_progress', task_id: 't1', tool_use_id: 'tool-1',
+        description: '研究协议', subagent_type: 'Explore', last_tool_name: 'Read',
+        usage: { total_tokens: 120, tool_uses: 3, duration_ms: 1_500 } }
+      yield { type: 'assistant', parent_tool_use_id: 'tool-1', uuid: 'child-text',
+        message: { id: 'child-message', content: [
+          { type: 'text', text: '看到两份文档' },
+          { type: 'tool_use', id: 'inner-1', name: 'Read', input: { file_path: 'a.md' } }
+        ] } }
+      yield { type: 'user', parent_tool_use_id: 'tool-1',
+        message: { content: [{ type: 'tool_result', tool_use_id: 'inner-1', content: 'ok' }] } }
+      yield { type: 'system', subtype: 'task_notification', task_id: 't1', tool_use_id: 'tool-1',
+        status: 'completed', summary: '协议读完了',
+        usage: { total_tokens: 240, tool_uses: 4, duration_ms: 2_500 } }
+      yield { type: 'result', subtype: 'success', is_error: false, result: '完成', session_id: sessionId,
+        user_message_uuids: [message.uuid], queued_turn_count: 0 }
+    }))
+    const client = new ClaudeAgentClient(executable, 'test-key', process.cwd())
+    try {
+      const updates: SubagentTask[][] = []
+      client.setSubagentTasksListener((tasks) => updates.push(tasks))
+      await client.respond([{ role: 'user', content: '分头查' }], new AbortController().signal)
+      const final = updates.at(-1)!
+      expect(final.map((task) => task.taskId)).toEqual(['t1', 't2', 't3'])
+      const first = final.find((task) => task.taskId === 't1')!
+      expect(first).toMatchObject({ description: '研究协议', subagentType: 'Explore',
+        status: 'completed', totalTokens: 240, toolUses: 4, lastToolName: 'Read', summary: '协议读完了' })
+      expect(first.toolUseId).toBe('tool-1')
+      expect(first.endedAt).toBeDefined()
+      expect(first.timeline?.find((entry) => entry.id === 'text-child-text-0')?.text).toBe('看到两份文档')
+      expect(first.timeline?.find((entry) => entry.id === 'inner-1')?.tool).toMatchObject({ name: 'Read', status: 'done' })
+      expect(final.filter((task) => task.status === 'running')).toHaveLength(2)
+    } finally { await client.dispose() }
+  })
+
+  it('excludes ambient and non-subagent tasks from the icon set', async () => {
+    queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* (message) {
+      yield { type: 'system', subtype: 'task_started', task_id: 'shell-1',
+        description: '后台命令', task_type: 'local_bash' }
+      yield { type: 'system', subtype: 'task_started', task_id: 'ambient-1',
+        description: 'watcher', subagent_type: 'Explore', task_type: 'local_agent', ambient: true }
+      yield { type: 'result', subtype: 'success', is_error: false, result: '完成', session_id: sessionId,
+        user_message_uuids: [message.uuid], queued_turn_count: 0 }
+    }))
+    const client = new ClaudeAgentClient(executable, 'test-key', process.cwd())
+    try {
+      const updates: SubagentTask[][] = []
+      client.setSubagentTasksListener((tasks) => updates.push(tasks))
+      await client.respond([{ role: 'user', content: '跑' }], new AbortController().signal)
+      expect(updates.flat()).toHaveLength(0)
+    } finally { await client.dispose() }
+  })
+
+  it('registers the conversations MCP tools when a bridge is wired', async () => {
+    queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* () {}))
+    const client = new ClaudeAgentClient(executable, 'test-key', process.cwd())
+    try {
+      client.setConversationBridge({
+        list: () => [{ id: 'a', title: '开发1', running: false, archived: false }],
+        send: async () => ({ id: 'a', title: '开发1' })
+      })
+      await client.getContextUsage(sessionId)
+      const request = queryMock.mock.calls[0][0] as Request
+      const server = request.options.mcpServers.conversations as { name?: string } | undefined
+      expect(server?.name).toBe('conversations')
+    } finally { await client.dispose() }
+  })
+
+  it('forwards backgroundTasks and stopTask to the SDK query', async () => {
+    const background = vi.fn(async () => true)
+    const stop = vi.fn(async () => undefined)
+    queryMock.mockImplementation((request: Request) => Object.assign(
+      fakeQuery(request, async function* () {}), { backgroundTasks: background, stopTask: stop }))
+    const client = new ClaudeAgentClient(executable, 'test-key', process.cwd())
+    try {
+      await client.getContextUsage(sessionId)
+      await expect(client.backgroundTask('tool-1')).resolves.toBe(true)
+      expect(background).toHaveBeenCalledWith('tool-1')
+      await client.stopTask('t1')
+      expect(stop).toHaveBeenCalledWith('t1')
+    } finally { await client.dispose() }
+  })
+
+  it('leaves plan mode locally when a parked plan is approved', async () => {
+    queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* () {}))
+    const client = new ClaudeAgentClient(executable, 'test-key', process.cwd())
+    try {
+      await client.setPlanMode(true)
+      await client.getContextUsage(sessionId)
+      const canUseTool = (queryMock.mock.calls[0][0] as Request).options.canUseTool
+      const parked: (PlanApprovalRequest | null)[] = []
+      const planFlags: boolean[] = []
+      client.setPlanListener((plan) => parked.push(plan))
+      client.setPlanModeListener((on) => planFlags.push(on))
+      const verdict = canUseTool('ExitPlanMode', { plan: '1. 改配置\n2. 跑测试' }, { signal: new AbortController().signal })
+      await vi.waitFor(() => expect(parked).toHaveLength(1))
+      expect(client.answerPlan(parked[0]!.id, true)).toBe(true)
+      await expect(verdict).resolves.toEqual({ behavior: 'allow' })
+      expect((client as unknown as { planMode: boolean }).planMode).toBe(false)
+      expect(planFlags).toEqual([false])
+    } finally { await client.dispose() }
+  })
+
+  it('follows a mid-session permission-mode change from the status channel', async () => {
+    queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* (message) {
+      yield { type: 'system', subtype: 'status', status: 'compacting', permissionMode: 'bypassPermissions' }
+      yield { type: 'result', subtype: 'success', is_error: false, result: 'ok', session_id: sessionId,
+        user_message_uuids: [message.uuid], queued_turn_count: 0 }
+    }))
+    const client = new ClaudeAgentClient(executable, 'test-key', process.cwd())
+    try {
+      await client.setPlanMode(true)
+      const flags: boolean[] = []
+      client.setPlanModeListener((on) => flags.push(on))
+      await client.respond([{ role: 'user', content: '执行' }], new AbortController().signal)
+      expect(flags).toContain(false)
+      expect((client as unknown as { planMode: boolean }).planMode).toBe(false)
+    } finally { await client.dispose() }
+  })
+
+  it('gives plan mode numbered steps, acceptance checks and a task list', async () => {
+    queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* () {}))
+    const client = new ClaudeAgentClient(executable, 'test-key', process.cwd())
+    try {
+      await client.getContextUsage(sessionId)
+      const options = (queryMock.mock.calls[0][0] as Request).options
+      const instructions = options.planModeInstructions ?? ''
+      expect(instructions).toContain('编号步骤')
+      expect(instructions).toContain('验收方式')
+      expect(instructions).toContain('TaskCreate')
+      // The detail pane needs the child's own sentences, not just tool calls.
+      expect(options.forwardSubagentText).toBe(true)
+    } finally { await client.dispose() }
   })
 })

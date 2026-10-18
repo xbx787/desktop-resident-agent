@@ -32,4 +32,10 @@ describe('toolLabel', () => {
     expect(toolLabel('SomeFutureTool')).toBe('SomeFutureTool')
     expect(toolLabel('')).toBe('')
   })
+
+  it('labels a missing tool name as a result, not "未知工具"', () => {
+    expect(toolLabel('unknown_tool')).toBe('工具结果')
+    expect(toolLabel('未知工具')).toBe('工具结果')
+    expect(toolLabel('Graeme</broken>')).toBe('工具')
+  })
 })

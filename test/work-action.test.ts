@@ -35,8 +35,9 @@ describe('work header action', () => {
       tool('b', 'Edit', JSON.stringify({ file_path: 'src/renderer/panel.tsx' })),
       tool('c', 'Bash', JSON.stringify({ description: '跑测试' }))
     ]
+    items[2].endedAt = '2026-10-18T00:00:10.000Z'
     const facts = workFacts(items, Date.parse('2026-10-18T00:00:10.000Z'), false)
-    expect(workFactsParts(facts, false)).toEqual(['执行了命令、编辑了文件'])
-    expect(workFactsParts(facts, true)).toEqual(['执行命令：跑测试'])
+    expect(workFactsParts(facts, false)).toEqual(['3 项操作', '00:10'])
+    expect(workFactsParts(facts, true)).toEqual(['执行命令：跑测试', '3 项操作', '00:10'])
   })
 })

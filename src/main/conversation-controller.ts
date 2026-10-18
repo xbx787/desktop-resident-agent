@@ -7,6 +7,7 @@ import { containsSensitiveData } from './memory-service'
 import { attachmentContext, validAttachmentList } from './local-context'
 import { snapshotSessionMentions } from './session-context'
 import { parseLibraryMentions } from '../shared/libraries'
+import type { ConversationTarget } from './conversation-tools'
 import {
   ConversationStore,
   ConversationStoreError,
@@ -89,6 +90,8 @@ export class ConversationController {
   private readonly drainGenerations = new Map<string, number>()
   /** Explicit stop and goal budget pauses retain the pending queue on disk. */
   private readonly pausedQueues = new Map<string, string>()
+  /** Timestamps of recent cross-conversation sends, keyed source→target. */
+  private readonly crossSends = new Map<string, number[]>()
   /** A displayed conversation without a runtime is served from this record. */
   private displayedRecord: ConversationRecord | null = null
   /** The last goal key written per conversation (see persistGoalChange). */
@@ -284,6 +287,19 @@ export class ConversationController {
       runtime.setAutoCompactPercent(this.library.settings.autoCompactPercent ?? AUTO_COMPACT_DEFAULT_PERCENT)
       runtime.setGoalBudget(this.library.settings.goalMaxIterations, this.library.settings.goalMaxMinutes)
     }
+    // A budget-exceeded goal is cleared through the same /goal clear path the
+    // banner uses; stop() alone would leave the CLI's loop armed.
+    runtime.setGoalClearHandler(() => {
+      void this.clearGoal(id).catch((error: unknown) => {
+        console.error('Goal budget clear failed:', error)
+      })
+    })
+    // Conversation-to-conversation messaging, exposed to the model as the
+    // conversations MCP tools.
+    runtime.setConversationBridge({
+      list: () => this.listConversationTargets(),
+      send: (target, text, sourceId) => this.sendToConversation(target, text, sourceId)
+    })
     // A conversation keeps the entries added with @ across restarts.
     if (this.resolveLibraries && rec.activeLibraries?.length) {
       try {
@@ -321,9 +337,10 @@ export class ConversationController {
     return undefined
   }
 
-  /** Stops every live runtime — used when the app is quitting. */
-  stopAll(): void {
-    for (const runtime of this.runtimes.values()) runtime.stop()
+  /** Stops every live runtime — used when the app is quitting. Pass
+   *  `silent=true` on quit/restart so closing the app writes no stop notice. */
+  stopAll(silent = false): void {
+    for (const runtime of this.runtimes.values()) runtime.stop(undefined, silent)
   }
 
   /** Writes every live conversation's current timeline before the app exits.
@@ -522,6 +539,35 @@ export class ConversationController {
     return record
   }
 
+  /** The visible identity of a conversation, used when it sends a message. */
+  conversationSender(id: string): { name: string; badge: string } | undefined {
+    const found = this.library?.conversations.find((item) => item.id === id)
+    const name = found?.title.trim().slice(0, 40)
+    if (!name) return undefined
+    return { name, badge: name.slice(0, 1) }
+  }
+
+  /** Records a message from another local conversation without starting a
+   *  model turn in this one. */
+  async appendExternalMessage(text: string, from: { name: string; badge: string },
+    conversationId?: string): Promise<void> {
+    await this.initialize()
+    const id = conversationId ?? this.activeId
+    if (!id) throw new ConversationStoreError('NOT_FOUND', '找不到这个会话。')
+    const clean = text.trim()
+    if (!clean) return
+    const name = from.name.trim().slice(0, 40)
+    const badge = from.badge.trim().slice(0, 2)
+    if (!name || !badge) throw new ConversationStoreError('INVALID_INPUT', '消息来源无效。')
+    await this.serialize(async () => {
+      const target = await this.store.getConversation(id)
+      if (!target) throw new ConversationStoreError('NOT_FOUND', '找不到这个会话。')
+      const runtime = await this.ensureRuntime(id, target)
+      runtime.appendExternalMessage({ name, badge }, clean.slice(0, 8_000))
+      await this.persistConversation(id)
+    })
+  }
+
   async getLibraryState(): Promise<ConversationLibraryState> {
     await this.initialize()
     return this.getSnapshot().conversationLibrary
@@ -564,6 +610,10 @@ export class ConversationController {
       if (!target) throw new ConversationStoreError('NOT_FOUND', '找不到这个会话。')
       if (target.archivedAt !== null) throw new ConversationStoreError('ARCHIVED_CONVERSATION', '请先恢复归档会话。')
       const runtime = await this.ensureRuntime(id, target)
+      // A foreground subagent blocks the running turn. The user just sent
+      // something, so release those tasks to the background and let the main
+      // turn take the message now.
+      await runtime.releaseForegroundSubagents().catch(() => undefined)
       // @ references add library entries to this conversation. Installed keys
       // persist; unknown ones are ignored rather than failing the send.
       const mentioned = parseLibraryMentions(clean).map((ref) => `${ref.kind}:${ref.id}`)
@@ -1156,5 +1206,83 @@ export class ConversationController {
     const runtime = this.runtimeIfAny(conversationId ?? this.activeId)
     if (!runtime) throw new Error('找不到这个会话。')
     await runtime.answerPermission(id, allow)
+  }
+
+  /** Moves one foreground subagent to the background; the main turn resumes. */
+  async backgroundTask(toolUseId: string, conversationId?: string): Promise<boolean> {
+    await this.initialize()
+    const runtime = this.runtimeIfAny(conversationId ?? this.activeId)
+    if (!runtime) throw new Error('找不到这个会话。')
+    return runtime.backgroundSubagent(toolUseId)
+  }
+
+  /** Stops one Task-tool subagent without touching the main turn. */
+  async stopTask(taskId: string, conversationId?: string): Promise<void> {
+    await this.initialize()
+    const runtime = this.runtimeIfAny(conversationId ?? this.activeId)
+    if (!runtime) throw new Error('找不到这个会话。')
+    await runtime.stopSubagent(taskId)
+  }
+
+  /** Sends a message into one running subagent's own stream. */
+  async messageSubagent(toolUseId: string, text: string, conversationId?: string): Promise<boolean> {
+    await this.initialize()
+    const runtime = this.runtimeIfAny(conversationId ?? this.activeId)
+    if (!runtime) throw new Error('找不到这个会话。')
+    return runtime.messageSubagent(toolUseId, text)
+  }
+
+  /** Conversations the model may address, with live running state. */
+  private listConversationTargets(): ConversationTarget[] {
+    return (this.library?.conversations ?? []).map((item) => ({
+      id: item.id,
+      title: item.title,
+      running: this.runtimes.get(item.id)?.isRunning() ?? false,
+      archived: item.archivedAt !== null
+    }))
+  }
+
+  /** One conversation handing a message to another. The body carries its
+   *  source, so the receiving model and the reader both know where it came
+   *  from. A small rate limit stops two models from volleying forever. */
+  async sendToConversation(target: string, text: string, sourceConversationId?: string): Promise<{ id: string; title: string }> {
+    await this.initialize()
+    const library = this.library
+    if (!library) throw new ConversationStoreError('NOT_FOUND', '会话库尚未就绪。')
+    const clean = text.trim()
+    if (!clean) throw new ConversationStoreError('INVALID_INPUT', '消息不能为空。')
+    const matches = library.conversations.filter((item) => item.id === target || item.title === target)
+    if (matches.length === 0) throw new ConversationStoreError('NOT_FOUND', '找不到目标对话。')
+    if (matches.length > 1) throw new ConversationStoreError('INVALID_INPUT', '对话标题不唯一，请改用 id。')
+    const destination = matches[0]
+    if (destination.archivedAt !== null) throw new ConversationStoreError('ARCHIVED_CONVERSATION', '目标对话已归档，请先恢复。')
+    const sourceId = sourceConversationId ?? this.activeId ?? undefined
+    if (sourceId === destination.id) throw new ConversationStoreError('INVALID_INPUT', '不能给当前对话自己发消息。')
+    const key = `${sourceId ?? '-'}>${destination.id}`
+    const now = Date.now()
+    const recent = (this.crossSends.get(key) ?? []).filter((at) => now - at < 60_000)
+    if (recent.length >= 3) throw new ConversationStoreError('INVALID_INPUT', '转达太频繁，请稍后再试。')
+    recent.push(now)
+    this.crossSends.set(key, recent)
+    const source = sourceId ? library.conversations.find((item) => item.id === sourceId) : undefined
+    const body = source ? `【来自对话「${source.title}」】\n${clean}` : clean
+    await this.sendMessage(body, [], 'queue', destination.id)
+    return { id: destination.id, title: destination.title }
+  }
+
+  /** Explicit resume for a queue paused by a stop, a goal budget or a persona
+   *  switch. The next send would resume it anyway; this lets the goal banner
+   *  do it without inventing a message. */
+  async resumeQueue(conversationId?: string): Promise<void> {
+    await this.initialize()
+    const id = conversationId ?? this.activeId
+    if (!id) return
+    const runtime = this.runtimes.get(id)
+    if (!this.pausedQueues.has(id) && !runtime?.getQueuePauseReason()) return
+    this.pausedQueues.delete(id)
+    runtime?.resumeQueue()
+    this.scheduleDrain(id)
+    this.emit()
+    await this.persistConversation(id)
   }
 }

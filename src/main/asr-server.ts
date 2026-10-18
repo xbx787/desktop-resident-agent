@@ -24,7 +24,7 @@ export async function transcribeAudio(request: TranscribeAudioRequest): Promise<
   form.append('file', blob, 'recording.webm')
   form.append('model', request.model ?? 'FunAudioLLM/SenseVoiceSmall')
 
-  const baseUrl = (request.baseUrl ?? 'https://api.siliconflow.com').replace(/\/$/, '')
+  const baseUrl = (request.baseUrl ?? 'https://api.siliconflow.cn').replace(/\/$/, '')
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), 30_000)
   try {

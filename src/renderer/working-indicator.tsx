@@ -14,12 +14,13 @@ export function workingPhrase(input: { sending: boolean; thinking: boolean; stat
   if (input.thinking) return '正在思考'
   switch (input.status) {
     case 'planning': return '正在理解你的需求'
+    case 'awaiting_approval': return null
     case 'executing': {
       if (!input.tool) return '正在执行工具'
       const label = toolLabel(input.tool)
       // Chinese labels are verb phrases — "正在读取", not "正在执行 读取". Tools
       // without a label keep their own name and the wordier wording.
-      if (label === '子任务') return '正在执行子任务'
+      if (label === '子代理') return '正在执行子代理'
       return label === input.tool ? `正在执行 ${input.tool}` : `正在${label}`
     }
     case 'verifying': return '正在整理结果'

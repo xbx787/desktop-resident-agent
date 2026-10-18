@@ -1,7 +1,7 @@
 /** Shared voice constants. The renderer never sees an API key; these are only
  *  models, voices, and bounds used by both processes. */
 
-export const DEFAULT_SILICONFLOW_BASE_URL = 'https://api.siliconflow.com'
+export const DEFAULT_SILICONFLOW_BASE_URL = 'https://api.siliconflow.cn'
 export const SILICONFLOW_KEY_PAGES = [
   'https://cloud.siliconflow.cn/account/ak',
   'https://cloud.siliconflow.com/account/ak'

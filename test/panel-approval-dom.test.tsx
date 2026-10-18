@@ -72,10 +72,10 @@ describe('the approval-mode control', () => {
     const trigger = host.querySelector<HTMLElement>('.panel-approval-button')!
     // Icon only: the mode lives in the aria-label/title, not as a word on the bar.
     expect(trigger.textContent).toBe('')
-    expect(trigger.getAttribute('aria-label')).toBe('审批模式：自动审批')
+    expect(trigger.getAttribute('aria-label')).toBe('审批模式：手动审批')
     await act(async () => { trigger.click() })
     const text = host.querySelector('.panel-approval-menu')?.textContent ?? ''
-    expect(text).toContain('自动审批')
+    expect(text).toContain('手动审批')
     expect(text).toContain('允许所有编辑')
     expect(text).toContain('完全访问')
     expect(text).not.toContain('计划模式')

@@ -443,4 +443,5 @@ describe('Claude Agent SDK live tool access', () => {
       await fs.rm(probeDir, { recursive: true, force: true })
     }
   }, 140_000)
+
 })

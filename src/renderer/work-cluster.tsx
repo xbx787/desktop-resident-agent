@@ -3,6 +3,7 @@ import type { TimelineEntry } from '../shared/contracts'
 import { toolLabel } from '../shared/tool-labels'
 import { thinkingDurationText, thinkingElapsedSeconds } from './thinking-item'
 import { toolArgumentPreview } from './tool-arguments'
+import { formatDuration } from './duration'
 import { sameTimelineEntry, type TurnSegment } from './timeline-groups'
 
 export interface WorkFacts {
@@ -38,8 +39,8 @@ const ACTION_WORDS: Record<string, { doing: string; done: string }> = {
   'mcp__deepseek__search': { doing: '搜索网页', done: '搜索了网页' },
   webfetch: { doing: '抓取网页', done: '抓取了网页' },
   'mcp__deepseek__fetch': { doing: '抓取网页', done: '抓取了网页' },
-  task: { doing: '启动子任务', done: '启动了子任务' },
-  agent: { doing: '启动子任务', done: '启动了子任务' },
+  task: { doing: '启动子代理', done: '启动了子代理' },
+  agent: { doing: '启动子代理', done: '启动了子代理' },
   askuserquestion: { doing: '询问你', done: '询问了你' },
   exitplanmode: { doing: '提交计划', done: '提交了计划' },
   skill: { doing: '调用技能', done: '调用了技能' }
@@ -91,12 +92,15 @@ export function workFacts(items: TimelineEntry[], nowMs: number, running: boolea
   return { steps: items.length, toolCount: tools.length, toolSummary: toolSummaryOf(tools), thinkingSeconds, elapsedSeconds, lastTool, actions }
 }
 
-/** While running: the latest action; a command also keeps its one-line
- *  description. Once finished: just the action names, in order, with nothing
- *  else — "执行了命令、编辑了文件". */
+/** The visible tail of a work row: while running, the latest action; then the
+ *  operation count and elapsed time. The finished row keeps the count and
+ *  clock but drops the action list. */
 export function workFactsParts(facts: WorkFacts, running: boolean): string[] {
-  if (running) return facts.lastTool ? [workAction(facts.lastTool)] : []
-  return facts.actions.length ? [facts.actions.join('、')] : []
+  const parts: string[] = []
+  if (running && facts.lastTool) parts.push(workAction(facts.lastTool))
+  if (facts.toolCount > 0) parts.push(`${facts.toolCount} 项操作`)
+  if (facts.elapsedSeconds !== null && facts.elapsedSeconds >= 1) parts.push(formatDuration(facts.elapsedSeconds))
+  return parts
 }
 
 /** Everything the header knows, tool breakdown included — the hover title and
@@ -115,8 +119,9 @@ function Chevron() {
 /** The header's state word, shaped after a thinking row's 「思考中/已思考」:
  *  live while the stretch runs, settled once it ends. The bare clock beside it
  *  stays the only number on the row. */
-function ClusterLabel({ running }: { running: boolean }) {
-  return <span className={`panel-cluster-label${running ? ' panel-live-label' : ''}`}>{running ? '正在工作' : '已工作'}</span>
+function ClusterLabel({ running, label }: { running: boolean; label: 'work' | 'thought' }) {
+  const text = label === 'thought' ? '思维链' : running ? '正在工作' : '已工作'
+  return <span className={`panel-cluster-label${running ? ' panel-live-label' : ''}`}>{text}</span>
 }
 
 /**
@@ -155,7 +160,7 @@ export const WorkCluster = memo(function WorkCluster({ items, running, renderEnt
     }}>
     <summary className="panel-cluster-summary" aria-label={`${fullText || '工作记录'}，单击${open ? '收起' : '展开'}`}>
       <Chevron />
-      <ClusterLabel running={running} />
+      <ClusterLabel running={running} label="work" />
       {parts.length > 0 && <span className="panel-cluster-facts">{parts.map((part) => <span key={part}>{part}</span>)}</span>}
       <span className={`panel-cluster-state${running ? ' is-running' : ''}`} aria-hidden="true">{running ? '…' : '✓'}</span>
     </summary>
@@ -195,13 +200,15 @@ export const TurnProcess = memo(function TurnProcess({ segments, renderEntry, re
   const items = segments.flatMap((segment) => segment.kind === 'work' ? segment.items : [segment.entry])
   // A finished stretch: every span is closed, so the clock never reads nowMs.
   const facts = workFacts(items, 0, false)
-  const parts = workFactsParts(facts, false)
+  // The outer 「思维链」 row stays clean; counts and the clock belong to the
+  // nested 「已工作」 rows that open beneath it.
+  const parts: string[] = []
   const fullText = workFactsText(facts)
   return <details className="panel-cluster is-turn-process" open={open}
     onToggle={(event) => setOpen(event.currentTarget.open)}>
     <summary className="panel-cluster-summary" aria-label={`过程：${fullText || '工作记录'}，单击${open ? '收起' : '展开'}`}>
       <Chevron />
-      <ClusterLabel running={false} />
+      <ClusterLabel running={false} label="thought" />
       {parts.length > 0 && <span className="panel-cluster-facts">{parts.map((part) => <span key={part}>{part}</span>)}</span>}
       <span className="panel-cluster-state" aria-hidden="true">✓</span>
     </summary>

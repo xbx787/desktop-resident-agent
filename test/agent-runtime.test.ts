@@ -8,6 +8,7 @@ import { AgentTurnError } from '../src/main/agent-errors'
 import type { DialogueLine, ModelClient, ModelReply } from '../src/main/deepseek'
 import { NoteStore } from '../src/main/note-store'
 import { usageSpendYuan } from '../src/shared/deepseek-pricing'
+import type { AgentGoal, ApprovalMode, AskQuestionRequest, PlanApprovalRequest, SubagentTask } from '../src/shared/contracts'
 
 const projectRoot = process.cwd()
 let testRoot: string
@@ -78,6 +79,67 @@ describe('approved test-note capability', () => {
     const draft = store.makeDraft('链接测试', '不能写出测试目录')
     await expect(store.createAndVerify(draft)).rejects.toThrow('符号链接')
     expect(await fs.readdir(outside)).toEqual([])
+  })
+})
+
+describe('persona switching', () => {
+  it('forwards a new preset to both model paths and opens a fresh SDK session', async () => {
+    const sessions: Array<string | null | undefined> = []
+    const claude: ModelClient = {
+      setPersonaId: vi.fn(),
+      respond: async (_history, _signal, _progress, sessionId) => {
+        sessions.push(sessionId)
+        return { text: '完成', sdkSessionId: 'old-sdk-session' }
+      }
+    }
+    const direct: ModelClient = { setPersonaId: vi.fn(), respond: async () => ({ text: '收到' }) }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), direct, undefined, claude)
+    await runtime.sendMessage('第一轮')
+    expect(runtime.exportConversationState().sdkSessionId).toBe('old-sdk-session')
+    runtime.setPersona('rin')
+    expect(claude.setPersonaId).toHaveBeenCalledWith('rin')
+    expect(direct.setPersonaId).toHaveBeenCalledWith('rin')
+    expect(runtime.exportConversationState().sdkSessionId).toBeNull()
+    await runtime.sendMessage('第二轮')
+    expect(sessions).toEqual([null, null])
+    runtime.setModelMode('live')
+    runtime.setPersona('rem')
+    expect(claude.setPersonaId).toHaveBeenCalledWith('rem')
+    expect(direct.setPersonaId).toHaveBeenCalledWith('rem')
+    await runtime.sendMessage('直连')
+    expect(runtime.getSnapshot().taskStatus).toBe('done')
+  })
+
+  it('does not retain an old SDK resume id when the preset changes during a turn', async () => {
+    let finish!: (reply: ModelReply) => void
+    let entered!: () => void
+    const started = new Promise<void>((resolve) => { entered = resolve })
+    const model: ModelClient = {
+      setPersonaId: vi.fn(),
+      respond: () => { entered(); return new Promise<ModelReply>((resolve) => { finish = resolve }) }
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    const first = runtime.sendMessage('运行中')
+    await started
+    runtime.setPersona('yui')
+    finish({ text: '旧人设这轮结束', sdkSessionId: 'stale-sdk' })
+    await first
+    expect(runtime.exportConversationState().sdkSessionId).toBeNull()
+  })
+
+  it('marks a live goal unverified and pauses its queue when the old session is replaced', () => {
+    let onGoal: ((goal: { condition: string; phase: 'confirmed'; startedAt: string }) => void) | undefined
+    const model: ModelClient = {
+      respond: async () => ({ text: '完成' }),
+      setGoalListener: (listener) => { onGoal = listener as typeof onGoal }
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    onGoal?.({ condition: '完成任务', phase: 'confirmed', startedAt: new Date().toISOString() })
+    runtime.setPersona('rin')
+    expect(runtime.getSnapshot().goal).toMatchObject({ phase: 'unverified' })
+    expect(runtime.getQueuePauseReason()).toContain('重新设定目标')
+    onGoal?.({ condition: '完成任务', phase: 'confirmed', startedAt: new Date().toISOString() })
+    expect(runtime.getSnapshot().goal).toMatchObject({ phase: 'unverified' })
   })
 })
 
@@ -608,5 +670,129 @@ describe('plan mode and /goal truth', () => {
     report({ condition: '时间目标', phase: 'confirmed', startedAt: new Date(Date.now() - 6 * 60_000).toISOString(), iterations: 1 })
     expect(runtime.getSnapshot().goal?.phase).toBe('unverified')
     expect(runtime.getQueuePauseReason()).toContain('5 分钟上限')
+  })
+})
+
+describe('subagents, interactions and goal truth in the snapshot', () => {
+  it('mirrors the SDK subagent set into the snapshot', () => {
+    let report!: (tasks: SubagentTask[]) => void
+    const model: ModelClient = {
+      respond: async () => ({ text: 'ok' }),
+      setSubagentTasksListener: (listener) => { report = listener }
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    report([{ taskId: 't1', description: '查资料', status: 'running', toolUses: 2, totalTokens: 900 }])
+    expect(runtime.getSnapshot().subagents).toMatchObject([
+      { taskId: 't1', description: '查资料', status: 'running', toolUses: 2, totalTokens: 900 }
+    ])
+    report([])
+    expect(runtime.getSnapshot().subagents).toEqual([])
+  })
+
+  it('reports awaiting approval while any interaction is parked, then resumes', () => {
+    let ask!: (question: AskQuestionRequest | null) => void
+    let plan!: (plan: PlanApprovalRequest | null) => void
+    let permission!: (request: { id: string; tool: string; summary: string; input: string } | null) => void
+    const model: ModelClient = {
+      respond: async () => ({ text: 'ok' }),
+      setQuestionListener: (listener) => { ask = listener },
+      setPlanListener: (listener) => { plan = listener },
+      setPermissionListener: (listener) => { permission = listener }
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    ask({ id: 'q1', questions: [{ key: 'pick', question: '选哪个？', options: [], multiSelect: false }] })
+    expect(runtime.getSnapshot().taskStatus).toBe('awaiting_approval')
+    permission({ id: 'p1', tool: 'Bash', summary: '执行命令', input: '{}' })
+    ask(null)
+    // The permission is still parked: the turn is still waiting, not executing.
+    expect(runtime.getSnapshot().taskStatus).toBe('awaiting_approval')
+    plan({ id: 'pl1', plan: '1. 改配置\n2. 跑测试' })
+    permission(null)
+    expect(runtime.getSnapshot().taskStatus).toBe('awaiting_approval')
+    plan(null)
+    expect(runtime.getSnapshot().taskStatus).toBe('planning')
+  })
+
+  it('keeps the approved plan and persists leaving plan mode', async () => {
+    let park!: (plan: PlanApprovalRequest | null) => void
+    let modeListener!: (mode: ApprovalMode) => void
+    let planListener!: (on: boolean) => void
+    const model: ModelClient = {
+      respond: async () => ({ text: 'ok' }),
+      setApprovalMode: async () => true,
+      setPlanListener: (listener) => { park = listener },
+      answerPlan: () => { park(null); return true },
+      setApprovalModeListener: (listener) => { modeListener = listener },
+      setPlanModeListener: (listener) => { planListener = listener }
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    await runtime.setApprovalMode('plan')
+    park({ id: 'p1', plan: '1. 改配置\n2. 跑测试' })
+    await runtime.answerPlan('p1', true)
+    expect(runtime.getSnapshot().approvedPlan).toContain('改配置')
+    // The SDK client mirrors its own exit from plan mode through both listeners.
+    modeListener('bypassPermissions')
+    planListener(false)
+    expect(runtime.getSnapshot().planMode).toBe(false)
+    expect(runtime.exportConversationState().approvalMode).toBe('bypassPermissions')
+  })
+
+  it('carries the goal stop-hook reason and the paused queue into the snapshot', () => {
+    let report!: (goal: AgentGoal | null) => void
+    const model: ModelClient = {
+      respond: async () => ({ text: 'ok' }),
+      setGoalListener: (listener) => { report = listener }
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    report({ condition: '写完测试', phase: 'confirmed', startedAt: new Date().toISOString(),
+      iterations: 2, lastReason: '还有 2 个用例未通过' })
+    expect(runtime.getSnapshot().goal).toMatchObject({ iterations: 2, lastReason: '还有 2 个用例未通过' })
+    runtime.setGoalBudget(2, 60)
+    expect(runtime.getSnapshot().queuePauseReason).toContain('2 轮上限')
+  })
+
+  it('clears an exhausted goal through the controller path, not stop alone', () => {
+    let report!: (goal: AgentGoal | null) => void
+    const clear = vi.fn()
+    const model: ModelClient = {
+      respond: async () => ({ text: 'ok' }),
+      setGoalListener: (listener) => { report = listener }
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    runtime.setGoalClearHandler(clear)
+    runtime.setGoalBudget(3, 5)
+    report({ condition: '轮数目标', phase: 'confirmed', startedAt: new Date().toISOString(), iterations: 3 })
+    expect(clear).toHaveBeenCalledTimes(1)
+    expect(runtime.getSnapshot().goal?.phase).toBe('unverified')
+  })
+
+  it('rolls back a goal that never reached the CLI when the send fails', async () => {
+    let report!: (goal: AgentGoal | null) => void
+    const model: ModelClient = {
+      respond: async () => { throw new Error('网络断开') },
+      setGoalListener: (listener) => { report = listener }
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    report({ condition: '旧目标', phase: 'confirmed', startedAt: new Date().toISOString(), iterations: 1 })
+    await runtime.sendMessage('/goal 新目标')
+    expect(runtime.getSnapshot().goal).toMatchObject({ condition: '旧目标', phase: 'confirmed' })
+  })
+
+  it('releases foreground subagents so a user message can be handled now', async () => {
+    let report!: (tasks: SubagentTask[]) => void
+    const background = vi.fn(async () => true)
+    const model: ModelClient = {
+      respond: async () => ({ text: 'ok' }),
+      setSubagentTasksListener: (listener) => { report = listener },
+      backgroundTask: background
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    report([{ taskId: 't1', description: '前台子代理', status: 'running' }])
+    await runtime.releaseForegroundSubagents()
+    expect(background).toHaveBeenCalledTimes(1)
+    // Already backgrounded tasks do not need another control request.
+    report([{ taskId: 't1', description: '前台子代理', status: 'running', isBackgrounded: true }])
+    await runtime.releaseForegroundSubagents()
+    expect(background).toHaveBeenCalledTimes(1)
   })
 })

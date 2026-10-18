@@ -26,7 +26,11 @@ function makeHarness() {
   const openExternal = vi.fn(async () => undefined)
   const openPath = vi.fn(async () => undefined)
   registerVoiceIpc({
-    ipcMain: { handle: (channel, handler) => { handlers.set(channel, handler as never) } } as never,
+    ipcMain: {
+      handle: (channel: string, handler: (event: IpcMainInvokeEvent, ...args: unknown[]) => unknown) => {
+        handlers.set(channel, handler as never)
+      }
+    } as never,
     service: service as never,
     trusted: (event) => event.sender.id === 1,
     settingsTrusted: (event) => event.sender.id === 2,
@@ -54,7 +58,10 @@ describe('voice IPC', () => {
   it('validates transcribe and synthesize arguments', async () => {
     const { handlers } = makeHarness()
     expect(() => handlers.get('pet:transcribe-audio')!(avatarEvent, { bytes: [], mimeType: 'audio/webm' })).toThrow('无效')
-    expect(() => handlers.get('pet:transcribe-audio')!(avatarEvent, { bytes: [1], mimeType: 'text/plain' })).toThrow('无效')
+    expect(() => handlers.get('pet:transcribe-audio')!(avatarEvent, { bytes: [1], mimeType: 'text/plain' })).toThrow('录音格式不受支持')
+    expect(parseTranscribeRequest({ bytes: [1], mimeType: 'audio/webm;codecs=opus' })).toEqual({
+      bytes: [1], mimeType: 'audio/webm;codecs=opus'
+    })
     expect(() => handlers.get('pet:voice:synthesize')!(avatarEvent, { text: '' })).toThrow('无效')
     expect(() => handlers.get('pet:voice:synthesize')!(avatarEvent, { text: 'x'.repeat(301) })).toThrow('无效')
     expect(() => handlers.get('pet:voice:synthesize')!(avatarEvent, { text: '你好', voice: 'nope' })).toThrow('无效')

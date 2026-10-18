@@ -150,7 +150,7 @@ describe('composer submissions stay with their conversation', () => {
     await switchTo('a')
     const restored = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="输入消息"]')!
     expect(restored.value).toBe('整理项目')
-    expect(restored.placeholder).toBe('请输入当前的目标，回车设定')
+    expect(restored.placeholder).toBe('写清目标与可验证的完成标准，回车设定')
   })
 
   it('allows B to send while A is pending and keeps each conversation locked independently', async () => {

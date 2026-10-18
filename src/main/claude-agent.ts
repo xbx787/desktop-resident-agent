@@ -7,11 +7,12 @@ import { AgentTurnError, classifyAgentFailure } from './agent-errors'
 import { parseAskQuestions } from './ask-questions'
 import { CLAUDE_BASE_URL, DEFAULT_CLAUDE_MODEL, claudeEnvironment, normalizeAutoCompactPercent } from './claude-code'
 import { createDeepSeekToolsServer, resolveDeepSeekToolsKey } from './deepseek-tools'
+import { createConversationToolsServer, type ConversationBridge } from './conversation-tools'
 import { startEffortProxy, type EffortProxy } from './effort-proxy'
 import { buildPersona } from './persona'
 import type { DialogueLine, ModelClient, ModelReply, ModelToolEvent } from './deepseek'
-import type { AgentGoal, ApprovalMode, AskAnswers, AskQuestionRequest, CompactionState, EffortLevel, PlanApprovalRequest, TaskUsage, ToolPermissionRequest } from '../shared/contracts'
-import { AUTO_COMPACT_DEFAULT_PERCENT } from '../shared/contracts'
+import type { AgentGoal, ApprovalMode, AskAnswers, AskQuestionRequest, CompactionState, EffortLevel, PlanApprovalRequest, SubagentStatus, SubagentTask, TaskUsage, TimelineEntry, ToolPermissionRequest } from '../shared/contracts'
+import { AUTO_COMPACT_DEFAULT_PERCENT, isApprovalMode } from '../shared/contracts'
 import { toolLabel } from '../shared/tool-labels'
 
 
@@ -39,6 +40,13 @@ const PERSONA_TAIL = [
 ].join('\n')
 /** 搜索关掉时写进人设：模型应该从一开始就不打算搜索，而不是试一次被拒。 */
 const NO_WEB_SEARCH_RULE = '当前已禁用联网搜索：不要调用 WebSearch、WebFetch、mcp__deepseek__search、mcp__deepseek__fetch，也不要尝试用其他方式联网。直接基于已有信息回答；信息不足时说明缺少哪些信息，不要反复尝试搜索。'
+/** 计划模式的工作流正文：计划要能被执行和验收，而不是一段意向说明。 */
+const PLAN_MODE_INSTRUCTIONS = [
+  '在计划模式中先调研、再提交计划；未经批准不要改动文件或执行有副作用的命令。',
+  '计划必须使用编号步骤，每一步写清楚要改什么、改哪里。',
+  '每一步都要给出可验证的验收方式（命令、测试或明确检查点）。',
+  '同时用 TaskCreate 建立与步骤一一对应的任务清单，实施阶段用 TaskUpdate 更新状态。'
+].join('\n')
 
 export interface AgentContextUsage {
   status: 'available' | 'unavailable'
@@ -259,6 +267,16 @@ export class ClaudeAgentClient implements ModelClient {
   private planListener?: (plan: PlanApprovalRequest | null) => void
   private permissionListener?: (request: ToolPermissionRequest | null) => void
   private compactingListener?: (state: CompactionState) => void
+  private subagentListener?: (tasks: SubagentTask[]) => void
+  /** Live Task-tool subagents by task id, in the order they started. */
+  private readonly subagentTasks = new Map<string, SubagentTask>()
+  /** task_started.tool_use_id → task_id; child frames name the former. */
+  private readonly subagentByToolUse = new Map<string, string>()
+  private subagentPublishTimer?: ReturnType<typeof setTimeout>
+  private lastSubagentPublishAt = 0
+  private readonly subagentCleanupTimers = new Set<ReturnType<typeof setTimeout>>()
+  /** Host-side conversation-to-conversation message channel, if wired. */
+  private conversationBridge?: ConversationBridge
   /** A parked AskUserQuestion: the CLI turn waits here until the panel answers. */
   private pendingQuestion?: { id: string; settle: (answers: AskAnswers | null) => void }
   /** A parked ExitPlanMode: the CLI waits for the plan to be approved or sent back. */
@@ -572,6 +590,237 @@ export class ClaudeAgentClient implements ModelClient {
     this.compactingListener = listener
   }
 
+  setSubagentTasksListener(listener: (tasks: SubagentTask[]) => void): void {
+    this.subagentListener = listener
+  }
+
+  /** Enables the conversations MCP tools. Takes effect on the next query. */
+  setConversationBridge(bridge?: ConversationBridge): void {
+    this.conversationBridge = bridge
+    this.queryDirty = true
+    if (!this.activeTurn) void this.closeQuery()
+  }
+
+  /** Ctrl+B for one tool call: the blocking Task returns immediately and the
+   *  main turn continues while the subagent keeps running. */
+  async backgroundTask(toolUseId?: string): Promise<boolean> {
+    const active = this.agentQuery
+    if (!active?.backgroundTasks) throw new Error('当前引擎不支持后台运行子代理。')
+    try {
+      return await active.backgroundTasks(toolUseId)
+    } catch (error) {
+      throw new Error(this.redact(error instanceof Error ? error.message : '后台运行子代理失败。'))
+    }
+  }
+
+  /** Stops one subagent; the CLI answers with task_notification stopped. */
+  async stopTask(taskId: string): Promise<void> {
+    const active = this.agentQuery
+    if (!active?.stopTask) throw new Error('当前引擎不支持停止子代理。')
+    try {
+      await active.stopTask(taskId)
+    } catch (error) {
+      throw new Error(this.redact(error instanceof Error ? error.message : '停止子代理失败。'))
+    }
+  }
+
+  /** The current subagent set, deep-copied so the renderer snapshot owns it. */
+  private subagentSnapshot(): SubagentTask[] {
+    return [...this.subagentTasks.values()].map((task) => structuredClone(task))
+  }
+
+  /** Task events stream far faster than the panel needs them; starts, endings
+   *  and explicit state patches publish at once, progress at most every 2 s. */
+  private publishSubagents(immediate = false): void {
+    if (!this.subagentListener) return
+    const now = Date.now()
+    const wait = Math.max(0, 2_000 - (now - this.lastSubagentPublishAt))
+    if (!immediate && wait > 0) {
+      if (!this.subagentPublishTimer) {
+        this.subagentPublishTimer = setTimeout(() => {
+          this.subagentPublishTimer = undefined
+          this.publishSubagents(true)
+        }, wait)
+      }
+      return
+    }
+    if (this.subagentPublishTimer) {
+      clearTimeout(this.subagentPublishTimer)
+      this.subagentPublishTimer = undefined
+    }
+    this.lastSubagentPublishAt = now
+    this.subagentListener(this.subagentSnapshot())
+  }
+
+  /** A new turn starts with a clean icon row: finished tasks from the last
+   *  turn go now, while background tasks still running stay visible. */
+  private pruneFinishedSubagents(): void {
+    let changed = false
+    for (const [taskId, task] of this.subagentTasks) {
+      if (task.status === 'running') continue
+      this.subagentTasks.delete(taskId)
+      if (task.toolUseId) this.subagentByToolUse.delete(task.toolUseId)
+      changed = true
+    }
+    if (changed) this.publishSubagents(true)
+  }
+
+  private clearSubagents(): void {
+    for (const timer of this.subagentCleanupTimers) clearTimeout(timer)
+    this.subagentCleanupTimers.clear()
+    if (this.subagentPublishTimer) {
+      clearTimeout(this.subagentPublishTimer)
+      this.subagentPublishTimer = undefined
+    }
+    if (!this.subagentTasks.size && !this.subagentByToolUse.size) return
+    this.subagentTasks.clear()
+    this.subagentByToolUse.clear()
+    this.publishSubagents(true)
+  }
+
+  /** Task events name their subagent by task_id; child frames name the Task
+   *  tool_use block instead. Both maps are pruned with the task. */
+  private handleSubagentEvent(message: SDKMessage): void {
+    if (message.type !== 'system') return
+    if (message.subtype === 'task_started') {
+      if (!isSubagentTask(message.task_type, message.subagent_type, message.ambient, message.skip_transcript)) return
+      const existing = this.subagentTasks.get(message.task_id)
+      const task: SubagentTask = {
+        taskId: message.task_id,
+        description: message.description,
+        status: 'running',
+        startedAt: existing?.startedAt ?? new Date().toISOString(),
+        ...(message.tool_use_id ? { toolUseId: message.tool_use_id } : existing?.toolUseId ? { toolUseId: existing.toolUseId } : {}),
+        ...(message.subagent_type ? { subagentType: message.subagent_type } : {}),
+        ...(message.is_backgrounded !== undefined ? { isBackgrounded: message.is_backgrounded } : {}),
+        ...(message.parent_task_id ? { parentTaskId: message.parent_task_id } : {}),
+        ...(existing?.timeline?.length ? { timeline: existing.timeline } : {})
+      }
+      this.subagentTasks.set(task.taskId, task)
+      if (task.toolUseId) this.subagentByToolUse.set(task.toolUseId, task.taskId)
+      this.publishSubagents(true)
+      return
+    }
+    if (message.subtype === 'task_progress') {
+      const task = this.subagentTasks.get(message.task_id)
+      if (!task) return
+      if (message.tool_use_id && !task.toolUseId) {
+        task.toolUseId = message.tool_use_id
+        this.subagentByToolUse.set(message.tool_use_id, task.taskId)
+      }
+      if (message.description) task.description = message.description
+      if (message.subagent_type) task.subagentType = message.subagent_type
+      applySubagentUsage(task, message.usage)
+      if (message.last_tool_name) task.lastToolName = message.last_tool_name
+      if (message.summary) task.summary = message.summary
+      this.publishSubagents()
+      return
+    }
+    if (message.subtype === 'task_updated') {
+      const task = this.subagentTasks.get(message.task_id)
+      if (!task) return
+      const patch = message.patch
+      if (patch.description) task.description = patch.description
+      if (patch.is_backgrounded !== undefined) task.isBackgrounded = patch.is_backgrounded
+      if (patch.status) {
+        const status = subagentStatus(patch.status)
+        if (status) {
+          task.status = status
+          if (status !== 'running' && !task.endedAt) task.endedAt = new Date().toISOString()
+        }
+      }
+      if (patch.error) task.summary = patch.error
+      this.publishSubagents(true)
+      this.scheduleSubagentCleanup(task)
+      return
+    }
+    if (message.subtype === 'task_notification') {
+      const task = this.subagentTasks.get(message.task_id)
+      if (!task) return
+      task.status = message.status
+      task.endedAt = new Date().toISOString()
+      if (message.summary) task.summary = message.summary
+      if (message.tool_use_id && !task.toolUseId) {
+        task.toolUseId = message.tool_use_id
+        this.subagentByToolUse.set(message.tool_use_id, task.taskId)
+      }
+      applySubagentUsage(task, message.usage)
+      this.publishSubagents(true)
+      this.scheduleSubagentCleanup(task)
+      return
+    }
+    if (message.subtype === 'background_tasks_changed') {
+      const background = new Set(message.tasks.filter((task) => !task.ambient).map((task) => task.task_id))
+      for (const task of this.subagentTasks.values()) {
+        if (task.status === 'running') task.isBackgrounded = background.has(task.taskId)
+      }
+      this.publishSubagents()
+    }
+  }
+
+  /** A finished task stays in the snapshot long enough for the panel to show
+   *  its ending; the renderer adds its own few seconds of retention after
+   *  that. Removing it here keeps a long session from growing the payload. */
+  private scheduleSubagentCleanup(task: SubagentTask): void {
+    if (task.status === 'running') return
+    const timer = setTimeout(() => {
+      this.subagentCleanupTimers.delete(timer)
+      const current = this.subagentTasks.get(task.taskId)
+      if (!current || current.status === 'running') return
+      this.subagentTasks.delete(task.taskId)
+      if (current.toolUseId) this.subagentByToolUse.delete(current.toolUseId)
+      this.publishSubagents(true)
+    }, 30_000)
+    timer.unref?.()
+    this.subagentCleanupTimers.add(timer)
+  }
+
+  /** Assistant text and tool calls inside a subagent, keyed by its parent
+   *  tool_use id. Kept small: this is a detail pane, not a transcript copy. */
+  private collectSubagentFrame(message: SDKMessage): void {
+    if (message.type !== 'assistant' && message.type !== 'user') return
+    const parentId = message.parent_tool_use_id
+    if (!parentId) return
+    const taskId = this.subagentByToolUse.get(parentId)
+    const task = taskId ? this.subagentTasks.get(taskId) : undefined
+    if (!task) return
+    const timeline = task.timeline ?? (task.timeline = [])
+    const now = new Date().toISOString()
+    if (message.type === 'assistant') {
+      for (const [index, block] of message.message.content.entries()) {
+        if (block.type === 'text' && block.text) {
+          const id = `text-${message.uuid}-${index}`
+          const text = block.text.slice(0, 800)
+          const existing = timeline.find((entry) => entry.id === id)
+          if (existing) existing.text = text
+          else timeline.push({ id, time: now, kind: 'assistant', text })
+        }
+        if (block.type === 'tool_use') {
+          const existing = timeline.find((entry) => entry.id === block.id)
+          const entry: TimelineEntry = {
+            id: block.id, time: now, kind: 'tool',
+            text: `${toolLabel(block.name)}（执行中）`,
+            tool: { toolUseId: block.id, name: block.name, status: 'running',
+              input: this.summary(block.input, true).slice(0, 800) }
+          }
+          if (existing) Object.assign(existing, entry)
+          else timeline.push(entry)
+        }
+      }
+    } else if (Array.isArray(message.message.content)) {
+      for (const block of message.message.content) {
+        if (block.type !== 'tool_result') continue
+        const entry = timeline.find((item) => item.tool?.toolUseId === block.tool_use_id)
+        if (!entry?.tool) continue
+        entry.tool.status = block.is_error ? 'error' : 'done'
+        entry.tool.output = this.summary(block.content).slice(0, 1_000)
+        entry.text = `${toolLabel(entry.tool.name)}${block.is_error ? '（失败）' : '（已完成）'}`
+      }
+    }
+    if (timeline.length > 40) timeline.splice(0, timeline.length - 40)
+    this.publishSubagents()
+  }
+
   /** The panel's verdict on a parked tool call. */
   answerPermission(id: string, allow: boolean): boolean {
     if (this.pendingPermission?.id !== id) return false
@@ -698,11 +947,16 @@ export class ClaudeAgentClient implements ModelClient {
       if (signal.aborted) { settle(null); return }
       signal.addEventListener('abort', () => settle(null), { once: true })
       this.planListener?.({ id, plan })
-    }).then((approved): PermissionResult => approved === true
-      ? { behavior: 'allow' }
-      : approved === false
-        ? { behavior: 'deny', message: 'The user rejected this plan. Stay in plan mode and revise it before proposing again.' }
-        : { behavior: 'deny', message: 'User cancelled the plan review.', interrupt: true })
+    }).then((approved): PermissionResult => {
+      // Approving the plan is what lets the CLI leave plan mode; mirror that
+      // locally at once instead of waiting for a later init/status frame.
+      if (approved === true && this.approvalMode === 'plan') this.applyApprovalMode(this.lastNonPlanMode)
+      return approved === true
+        ? { behavior: 'allow' }
+        : approved === false
+          ? { behavior: 'deny', message: 'The user rejected this plan. Stay in plan mode and revise it before proposing again.' }
+          : { behavior: 'deny', message: 'User cancelled the plan review.', interrupt: true }
+    })
   }
 
   /** The effort rewrite targets exactly the fields DeepSeek documents, so the
@@ -812,6 +1066,7 @@ export class ClaudeAgentClient implements ModelClient {
         mcpServers: {
           ...this.mcpServers,
           ...this.libraryMcpServers,
+          ...(this.conversationBridge ? { conversations: createConversationToolsServer(this.conversationBridge) } : {}),
           ...(deepseekTools ? { deepseek: deepseekTools } : {})
         },
         ...(this.libraryPlugins.length
@@ -821,6 +1076,7 @@ export class ClaudeAgentClient implements ModelClient {
           ? (deepseekTools ? ['WebSearch', 'WebFetch'] : undefined)
           : ['WebSearch', 'WebFetch', 'mcp__deepseek__search', 'mcp__deepseek__fetch'],
         permissionMode: this.approvalMode,
+        planModeInstructions: PLAN_MODE_INSTRUCTIONS,
         allowDangerouslySkipPermissions: true,
         // CLI 2.1.210 会把 SDK 请求的 bypassPermissions 降级为 default（实测），
         // 因此同时挂上 canUseTool：普通工具直接放行；AskUserQuestion 转发面板，
@@ -844,6 +1100,8 @@ export class ClaudeAgentClient implements ModelClient {
           }] }]
         },
         includePartialMessages: true,
+        // The subagent pane shows the child's own sentences, not just tools.
+        forwardSubagentText: true,
         abortController: controller,
         maxTurns: MAX_TURNS,
         persistSession: this.persistSession,
@@ -866,6 +1124,7 @@ export class ClaudeAgentClient implements ModelClient {
     onToolEvent?: (event: ModelToolEvent) => void, onTaskUsage?: (usage: TaskUsage) => void,
     onThinking?: (text: string, segment?: number) => void): Promise<ModelReply> {
     if (signal.aborted) return Promise.reject(abortError())
+    this.pruneFinishedSubagents()
     if (this.activeTurn) return Promise.reject(new Error('当前任务尚未完成。'))
     const channel = this.messageChannel
     if (!channel || !this.agentQuery) return Promise.reject(new Error('小鲸引擎会话未启动。'))
@@ -910,7 +1169,7 @@ export class ClaudeAgentClient implements ModelClient {
   private handleMessage(message: SDKMessage): void {
     // SDK reports confirmed /goal state here, including a null clear event.
     if ((message as { type?: string }).type === 'active_goal') {
-      const value = (message as { value?: { condition?: unknown; iterations?: unknown; set_at?: unknown } | null }).value
+      const value = (message as { value?: { condition?: unknown; iterations?: unknown; set_at?: unknown; last_reason?: unknown } | null }).value
       if (value === null) this.goalListener?.(null)
       else if (value && typeof value.condition === 'string' && value.condition.trim()) {
         const rawStart = value.set_at
@@ -919,10 +1178,15 @@ export class ClaudeAgentClient implements ModelClient {
         const startedAt = Number.isFinite(epoch) && epoch > 0 && epoch <= Date.now() + 60_000
           ? new Date(epoch).toISOString() : new Date().toISOString()
         this.goalListener?.({ condition: value.condition.trim(), phase: 'confirmed',
-          startedAt, ...(Number.isSafeInteger(value.iterations) && Number(value.iterations) >= 0
+          startedAt,
+          ...(typeof value.last_reason === 'string' && value.last_reason.trim()
+            ? { lastReason: value.last_reason.trim().slice(0, 400) } : {}),
+          ...(Number.isSafeInteger(value.iterations) && Number(value.iterations) >= 0
             ? { iterations: Number(value.iterations) } : {}) })
       }
     }
+    this.handleSubagentEvent(message)
+    this.collectSubagentFrame(message)
     const turn = this.activeTurn
     if (message.type === 'system' && message.subtype === 'init') {
       // The CLI can enter plan mode on its own (EnterPlanMode) and reports it
@@ -932,6 +1196,12 @@ export class ClaudeAgentClient implements ModelClient {
       this.commands = [...message.slash_commands]
       this.skills = [...message.skills]
       this.terminalCommands = new Set((message.terminal_slash_commands ?? []).map((name) => name.replace(/^\//u, '').toLowerCase()))
+    }
+    // The CLI reports mid-session permission-mode changes (including leaving
+    // plan when ExitPlanMode is approved) on its status channel.
+    if (message.type === 'system' && message.subtype === 'status' &&
+        isApprovalMode(message.permissionMode) && message.permissionMode !== this.approvalMode) {
+      this.applyApprovalMode(message.permissionMode)
     }
     if (message.type === 'system' && message.subtype === 'commands_changed') {
       this.commands = message.commands.map((command) => command.name)
@@ -1056,7 +1326,7 @@ export class ClaudeAgentClient implements ModelClient {
         if (block.type !== 'tool_result' || message.parent_tool_use_id != null) continue
         const images = this.toolImages(block.content, this.toolInputs.get(block.tool_use_id))
         turn.onToolEvent?.({
-          toolUseId: block.tool_use_id, toolName: this.toolNames.get(block.tool_use_id) ?? '未知工具', phase: 'result',
+          toolUseId: block.tool_use_id, toolName: this.toolNames.get(block.tool_use_id) ?? 'unknown_tool', phase: 'result',
           output: this.summary(block.content), ...(images.length ? { images } : {}), isError: block.is_error === true
         })
         turn.activeToolIds.delete(block.tool_use_id)
@@ -1141,7 +1411,7 @@ export class ClaudeAgentClient implements ModelClient {
   private finishTurn(turn: OwnedTurn, error?: Error, reply?: ModelReply): void {
     if (this.activeTurn !== turn) return
     for (const id of turn.activeToolIds) {
-      turn.onToolEvent?.({ toolUseId: id, toolName: this.toolNames.get(id) ?? '未知工具',
+      turn.onToolEvent?.({ toolUseId: id, toolName: this.toolNames.get(id) ?? 'unknown_tool',
         phase: 'result', output: error ? this.redact(error.message)
           : turn.interruptedByUser ? '已由人工中止。' : '工具未返回结果。', isError: true })
       this.toolNames.delete(id)
@@ -1205,10 +1475,12 @@ export class ClaudeAgentClient implements ModelClient {
     this.latestUsage = unavailable()
     this.toolNames.clear()
     this.toolInputs.clear()
+    this.clearSubagents()
   }
 
   private closeQuery(): Promise<void> {
     this.clearIdleRelease()
+    this.clearSubagents()
     // A parked question or plan cannot survive its query: settle them so the
     // panel clears and the waiting canUseTool promise never dangles.
     this.pendingQuestion?.settle(null)
@@ -1248,6 +1520,34 @@ export class ClaudeAgentClient implements ModelClient {
   private isCompactUnneeded(text: string): boolean {
     return /not enough messages to compact/i.test(text)
   }
+}
+
+/** Only Task-tool subagents get an icon; shells, workflows and ambient
+ *  watchers are activity of another kind. Older CLIs omit task_type, so a
+ *  named subagent there still counts. */
+function isSubagentTask(taskType: unknown, subagentType: unknown,
+  ambient: unknown, skipTranscript: unknown): boolean {
+  if (ambient === true || skipTranscript === true) return false
+  if (taskType === 'local_agent') return true
+  return (taskType === undefined || taskType === null) && typeof subagentType === 'string' && subagentType.length > 0
+}
+
+function subagentStatus(value: unknown): SubagentStatus | null {
+  switch (value) {
+    case 'running': case 'pending': case 'paused': return 'running'
+    case 'completed': return 'completed'
+    case 'failed': return 'failed'
+    case 'killed': return 'stopped'
+    default: return null
+  }
+}
+
+function applySubagentUsage(task: SubagentTask,
+  usage: { total_tokens?: unknown; tool_uses?: unknown; duration_ms?: unknown } | undefined): void {
+  if (!usage) return
+  if (Number.isSafeInteger(usage.total_tokens) && Number(usage.total_tokens) >= 0) task.totalTokens = Number(usage.total_tokens)
+  if (Number.isSafeInteger(usage.tool_uses) && Number(usage.tool_uses) >= 0) task.toolUses = Number(usage.tool_uses)
+  if (Number.isFinite(usage.duration_ms) && Number(usage.duration_ms) >= 0) task.durationMs = Number(usage.duration_ms)
 }
 
 /** Both the built-in and the DeepSeek relay tools count as web access. */

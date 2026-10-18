@@ -33,6 +33,8 @@ export interface AgentGoal {
   iterations?: number
   startedAt: string
   statusMessage?: string
+  /** Why the goal's own stop hook did not consider it met last round. */
+  lastReason?: string
 }
 
 export type GrowthStatus = 'proposed' | 'running' | 'ready' | 'failed' | 'stale' | 'adopted' | 'published' | 'discarded'
@@ -70,6 +72,9 @@ export interface TimelineEntry {
   time: string
   kind: 'user' | 'assistant' | 'system' | 'tool' | 'thinking'
   text: string
+  /** System notices only: `error` renders as a warning, apart from the
+   *  ordinary muted notice line. */
+  tone?: 'error'
   endedAt?: string
   /** Settled usage and price of the task this user message started. Kept with
    *  the turn so past footers survive switching conversations or restarting. */
@@ -81,6 +86,9 @@ export interface TimelineEntry {
   /** Image attachments the message carried, so the panel can show the pictures
    *  themselves instead of a file list. */
   images?: Array<{ name: string; path: string }>
+  /** Present when another local conversation/agent injected this message.
+   *  The badge is shown where the user's avatar normally sits. */
+  sender?: { name: string; badge: string }
   tool?: {
     toolUseId: string
     name: string
@@ -90,6 +98,38 @@ export interface TimelineEntry {
     /** Image files returned by the tool, opened with the system viewer on demand. */
     images?: Array<{ name: string; path: string }>
   }
+}
+
+export type SubagentStatus = 'running' | 'completed' | 'failed' | 'stopped'
+
+/**
+ * One Task-tool subagent as the SDK reports it. Read-only: the panel draws a
+ * robot head per task and expands the row into these fields plus the child's
+ * own timeline. `timeline` is capped by the main process; it is a snapshot,
+ * not a second full transcript.
+ */
+export interface SubagentTask {
+  taskId: string
+  /** The Task tool_use block that started this subagent. */
+  toolUseId?: string
+  description: string
+  subagentType?: string
+  status: SubagentStatus
+  /** Progress and notification usage, as the SDK counted them. */
+  toolUses?: number
+  totalTokens?: number
+  durationMs?: number
+  lastToolName?: string
+  /** One-line progress summary, when the SDK supplies one. */
+  summary?: string
+  /** True once the task runs without blocking the main turn. */
+  isBackgrounded?: boolean
+  /** Set when this subagent was spawned from inside another one. */
+  parentTaskId?: string
+  /** Local receive time, used for the live elapsed label and retention. */
+  startedAt?: string
+  endedAt?: string
+  timeline?: TimelineEntry[]
 }
 
 export interface ProposedAction {
@@ -405,6 +445,12 @@ export interface AppSnapshot {
   permission?: ToolPermissionRequest | null
   /** The conversation's permission mode; absent matches the old auto-approve. */
   approvalMode?: ApprovalMode
+  /** Live Task-tool subagents; absent or empty means none. */
+  subagents?: SubagentTask[]
+  /** The last approved plan, kept after plan mode ends for the task strip. */
+  approvedPlan?: string
+  /** Why the queued messages stopped draining (goal budget, stop, persona). */
+  queuePauseReason?: string
 }
 
 /** An in-memory side conversation attached to the currently displayed chat.
@@ -538,6 +584,15 @@ export interface PetAPI {
   /** Aborts what the running turn is executing (a stuck command) while the
    *  session and any queued messages survive. */
   interruptTurn(conversationId?: string): Promise<void>
+  /** Moves a blocking foreground subagent into the background so the main turn
+   *  continues; false when the SDK matched no foreground task. */
+  backgroundTask(toolUseId: string, conversationId?: string): Promise<boolean>
+  /** Stops one subagent; the SDK emits task_notification with status stopped. */
+  stopTask(taskId: string, conversationId?: string): Promise<void>
+  /** Sends a message into one running subagent's own stream. */
+  messageSubagent(toolUseId: string, text: string, conversationId?: string): Promise<boolean>
+  /** Resumes a queue paused by a stop, a goal budget or a persona switch. */
+  resumeQueue(conversationId?: string): Promise<void>
   showPanel(): Promise<void>
   hidePanel(): Promise<void>
   getPanelOpen(): Promise<boolean>

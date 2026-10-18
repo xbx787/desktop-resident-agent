@@ -106,6 +106,7 @@ export class SideChatController {
     const profile = settings.modelProfiles.find((item) => item.id === settings.activeModelProfileId) ?? null
     runtime.setModelProfile(profile)
     runtime.setIdentity({ userName: settings.userName, assistantName: settings.assistantName })
+    runtime.setPersona(settings.personaId ?? 'xiaojing')
     runtime.setEffort(settings.effort)
     runtime.setGoalBudget(settings.goalMaxIterations, settings.goalMaxMinutes)
     runtime.setMemoryContextProvider(this.memoryContext)

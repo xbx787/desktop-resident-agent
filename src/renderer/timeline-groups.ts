@@ -72,6 +72,14 @@ export function groupTimeline(entries: TimelineEntry[], liveTurnStartMs?: number
   let current: TurnGroup | undefined
   let currentMs = Number.NEGATIVE_INFINITY
   for (const entry of entries) {
+    // A system notice is not part of the dialogue: it keeps its own row and
+    // never becomes a turn's final answer. Context compaction used to ride
+    // inside the turn as the last note, so folding the process left only the
+    // compaction line where the reply should be.
+    if (entry.kind === 'system') {
+      groups.push({ kind: 'single', entry })
+      continue
+    }
     if (entry.kind === 'user') {
       if (current && isSteered(entry)) {
         current.items.push(entry)
@@ -182,7 +190,11 @@ export function splitTurnTail<T extends TurnSegment>(segments: T[], live: boolea
   if (live) return { head: [], tail: segments }
   let lastNote = -1
   for (let index = segments.length - 1; index >= 0; index -= 1) {
-    if (segments[index].kind === 'note') { lastNote = index; break }
+    const segment = segments[index]
+    // Only the model's own sentence can be the answer. System notices that
+    // slipped into a stored turn keep their place in the flow instead of
+    // replacing it.
+    if (segment.kind === 'note' && segment.entry.kind === 'assistant') { lastNote = index; break }
   }
   return lastNote > 0 ? { head: segments.slice(0, lastNote), tail: segments.slice(lastNote) } : { head: [], tail: segments }
 }

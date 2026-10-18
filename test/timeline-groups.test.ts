@@ -134,6 +134,33 @@ describe('steered messages', () => {
   })
 })
 
+describe('system notices', () => {
+  it('keeps a notice out of the turn, so it cannot replace the answer', () => {
+    const groups = groupTimeline([
+      entry('user', 'one'),
+      entry('assistant', 'answer'),
+      entry('system', '上下文已压缩，可以继续当前对话。')
+    ])
+    expect(groups.map((group) => group.kind)).toEqual(['turn', 'single'])
+    const turn = groups[0]
+    if (turn.kind !== 'turn') throw new Error('expected a turn group')
+    expect(turn.items.map((item) => item.text)).toEqual(['answer'])
+    const notice = groups[1]
+    if (notice.kind !== 'single') throw new Error('expected a single group')
+    expect(notice.entry.text).toBe('上下文已压缩，可以继续当前对话。')
+  })
+
+  it('never lets a notice stand in for the final answer', () => {
+    const { head, tail } = splitTurnTail(segmentTurn([
+      at('thinking', 'work', 1),
+      at('assistant', 'answer', 2),
+      at('system', '上下文已压缩', 3)
+    ]), false)
+    expect(head.map((segment) => segment.kind)).toEqual(['work'])
+    expect(tail.map((segment) => segment.kind === 'note' ? segment.entry.text : '')).toEqual(['answer', '上下文已压缩'])
+  })
+})
+
 describe('segmentTurn', () => {
   it('lifts a steered user line out as a segment of its own', () => {
     const segments = segmentTurn([at('thinking', 't1', 1), at('user', 'steer', 2), at('assistant', 'reply', 3)])

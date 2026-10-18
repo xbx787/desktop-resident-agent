@@ -90,7 +90,7 @@ describe('a steered line inside a finished turn', () => {
     expect(process!.textContent).not.toContain('插话：用另一种方案')
     // 折叠块默认是收起来的：插话前后的工作都在里面，链整条可收。
     expect(process!.hasAttribute('open')).toBe(false)
-    expect(process!.textContent).toContain('已工作')
+    expect(process!.textContent).toContain('思维链')
   })
 
   it('keeps the steered line inside the process while the turn still runs', async () => {

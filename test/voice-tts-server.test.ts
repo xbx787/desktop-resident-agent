@@ -22,7 +22,7 @@ describe('SiliconFlow TTS client', () => {
     const result = await synthesizeSpeech(base)
     expect(result.bytes.length).toBe(256)
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
-    expect(url).toBe('https://api.siliconflow.com/v1/audio/speech')
+    expect(url).toBe('https://api.siliconflow.cn/v1/audio/speech')
     expect(init.headers).toMatchObject({ Authorization: 'Bearer secret-key' })
     const body = JSON.parse(String(init.body))
     expect(body).toMatchObject({

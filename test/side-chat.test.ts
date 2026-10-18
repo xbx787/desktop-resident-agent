@@ -20,7 +20,8 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   return { promise, resolve }
 }
 
-function harness(model: ModelClient & { steer?: (text: string) => Promise<boolean> | boolean }) {
+function harness(model: ModelClient & { steer?: (text: string) => Promise<boolean> | boolean },
+  currentSettings: ConversationSettings = settings) {
   let parentConversationId = 'parent-a'
   const runtimes: AgentRuntime[] = []
   const persistFlags: Array<boolean | undefined> = []
@@ -37,10 +38,10 @@ function harness(model: ModelClient & { steer?: (text: string) => Promise<boolea
       runtimes.push(runtime)
       return runtime
     },
-    () => ({ parentConversationId, mode: 'claude_code', settings, history }),
+    () => ({ parentConversationId, mode: 'claude_code', settings: currentSettings, history }),
     async () => '', visibleEvents, undefined,
     () => parentConversationId,
-    () => settings,
+    () => currentSettings,
     statusEvents
   )
   return { side, runtimes, persistFlags, history, visibleEvents, statusEvents,
@@ -48,6 +49,31 @@ function harness(model: ModelClient & { steer?: (text: string) => Promise<boolea
 }
 
 describe('temporary side chat', () => {
+  it('applies the current persona to an existing child before its next queued turn', async () => {
+    const sideSettings: ConversationSettings = { ...settings, personaId: 'rin' }
+    const selected: string[] = []
+    const sdkSessions: Array<string | null | undefined> = []
+    const model: ModelClient = {
+      setPersonaId: (id) => { selected.push(id) },
+      respond: async (_history, _signal, _progress, sdkSessionId) => {
+        sdkSessions.push(sdkSessionId)
+        return { text: '完成', sdkSessionId: 'side-sdk' }
+      }
+    }
+    const { side, runtimes } = harness(model, sideSettings)
+    const id = side.open().sessionId!
+    await side.send(id, '第一轮')
+    await vi.waitFor(() => expect(side.getSnapshot().snapshot?.taskStatus).toBe('done'))
+    expect(selected).toContain('rin')
+    expect(runtimes[0].exportConversationState().sdkSessionId).toBe('side-sdk')
+    sideSettings.personaId = 'rem'
+    await side.send(id, '第二轮')
+    await vi.waitFor(() => expect(side.getSnapshot().snapshot?.timeline.filter(({ text }) => text === '完成')).toHaveLength(2))
+    expect(selected).toContain('rem')
+    expect(sdkSessions).toEqual([null, null])
+    await side.discard(id)
+  })
+
   it('seeds a separate runtime from settled dialogue and keeps its SDK client ephemeral', async () => {
     const seen: DialogueLine[][] = []
     const { side, runtimes, persistFlags, history } = harness({

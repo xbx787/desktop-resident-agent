@@ -134,7 +134,6 @@ export function SettingsVoiceSection({ api }: { api: SettingsAPI }) {
         {settings?.keyConfigured ? '已配置' : settings?.envKeyAvailable ? '环境变量可用' : '未配置'}
       </span>
     </div>
-    {settings?.needsKeyReentry && <p className="settings-voice-warning" role="alert">这台电脑无法解密原来的 Key，请重新输入。</p>}
     {settings?.protectionUnavailable && <p className="settings-voice-warning" role="alert">Windows 密钥保护暂不可用，Key 无法保存。</p>}
     {settings?.loadError && <p className="settings-voice-warning" role="alert">语音配置损坏，已使用默认值；保存后会重建。</p>}
     <div className="settings-voice-form">

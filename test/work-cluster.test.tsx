@@ -56,14 +56,17 @@ describe('WorkCluster', () => {
   it('shows the folded summary header with the facts, and no restated request', () => {
     const items = [thought('t1', 0, 12), tool('x1', 'Bash', 12)]
     const html = render(<WorkCluster items={items} running={false} renderEntry={entry} />)
-    // The row carries the operation count, never a per-second clock.
+    // The row carries the operation count and the elapsed clock.
     expect(html).not.toContain('<span>思考 00:12</span>')
-    expect(html).not.toContain('<span>00:12</span>')
-    // The header says what state the stretch is in.
+    expect(html).toContain('1 项操作')
+    expect(html).toContain('<span>00:12</span>')
+    // A finished work stretch keeps its own label; the outer fold is the
+    // thinking-chain row.
     expect(html).toContain('已工作')
+    expect(html).not.toContain('思维链')
     // The tool breakdown moved off the row: it is the hover title now.
     expect(html).not.toContain('title="思考 00:12')
-    expect(html).toContain('<span>执行了命令</span>')
+    expect(html).not.toContain('<span>执行了命令</span>')
     expect(html).not.toContain('panel-cluster-purpose')
     expect(html).not.toMatch(/<details[^>]*\sopen/)
   })
@@ -75,7 +78,7 @@ describe('WorkCluster', () => {
     expect(html).toContain('is-running')
     // The state word follows the same live/settled pair as a thinking row.
     expect(html).toContain('正在工作')
-    expect(html).not.toContain('已工作')
+    expect(html).not.toContain('思维链')
   })
 })
 
@@ -113,8 +116,8 @@ describe('TurnProcess', () => {
     expect(html).not.toMatch(/<details[^>]*\sopen/)
     // The row states the whole stretch: the settled state word plus the
     // operation count; no clock on the bar.
-    expect(html).toContain('已工作')
-    expect(html).toContain('<span>执行了命令</span>')
+    expect(html).toContain('思维链')
+    expect(html).not.toContain('<span>执行了命令</span>')
     expect(html).not.toContain('<span>00:52</span>')
     expect(html).not.toContain('title="思考 00:24')
     // Opening it lays the same pieces back out: the work cluster and the note.

@@ -1,5 +1,6 @@
-import { buildXiaojingPersona } from './persona'
-import type { AgentGoal, ApprovalMode, AskAnswers, AskQuestionRequest, CompactionState, EffortLevel, PlanApprovalRequest, TaskUsage, ToolPermissionRequest } from '../shared/contracts'
+import { buildPersona } from './persona'
+import type { ConversationBridge } from './conversation-tools'
+import type { AgentGoal, ApprovalMode, AskAnswers, AskQuestionRequest, CompactionState, EffortLevel, PlanApprovalRequest, SubagentTask, TaskUsage, ToolPermissionRequest } from '../shared/contracts'
 
 export interface DialogueLine {
   role: 'user' | 'assistant'
@@ -86,6 +87,15 @@ export interface ModelClient {
   setPlanListener?(listener: (plan: PlanApprovalRequest | null) => void): void
   /** Resolves a parked plan; returns false when the id is stale. */
   answerPlan?(id: string, approved: boolean): boolean
+  /** Clients that surface Task-tool subagents implement this. The listener
+   *  receives the current set whenever it changes, already throttled. */
+  setSubagentTasksListener?(listener: (tasks: SubagentTask[]) => void): void
+  /** Moves one foreground subagent to the background; false when unmatched. */
+  backgroundTask?(toolUseId?: string): Promise<boolean>
+  /** Stops one subagent by task id. */
+  stopTask?(taskId: string): Promise<void>
+  /** Clients that expose conversation-to-conversation messaging implement this. */
+  setConversationBridge?(bridge?: ConversationBridge): void
 }
 
 interface ApiContent {
@@ -118,7 +128,12 @@ export class DeepSeekClient implements ModelClient {
   constructor(private readonly apiKey: string) {}
 
   private effort: EffortLevel = 'max'
+  private personaId = 'xiaojing'
   private identity?: { userName?: string; assistantName?: string }
+
+  setPersonaId(id: string): void {
+    this.personaId = id
+  }
 
   /** The names the persona addresses. */
   setIdentity(identity?: { userName?: string; assistantName?: string }): void {
@@ -145,7 +160,7 @@ export class DeepSeekClient implements ModelClient {
       },
       body: JSON.stringify({
         model: 'deepseek-flash',
-        instructions: [buildXiaojingPersona({ userAddress: this.identity?.userName, assistantName: this.identity?.assistantName }), INSTRUCTIONS_TAIL].join('\n'),
+        instructions: [buildPersona(this.personaId, { userAddress: this.identity?.userName, assistantName: this.identity?.assistantName }), INSTRUCTIONS_TAIL].join('\n'),
         reasoning: { effort: this.effort === 'off' ? 'none' : this.effort },
         input: history.slice(-20).map((line) => ({ role: line.role, content: line.content })),
         max_output_tokens: 1200,

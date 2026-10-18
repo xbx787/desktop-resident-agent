@@ -1,4 +1,4 @@
-import { isApprovalMode, type AgentGoal, type ApprovalMode, type AppSnapshot, type AskAnswers, type ContextUsageSnapshot, type EffortLevel, type ModelMode, type ModelProfile, type ProposedAction, type TimelineEntry, type ToolPermissionRequest, type UserAttachment } from '../shared/contracts'
+import { isApprovalMode, type AgentGoal, type ApprovalMode, type AppSnapshot, type AskAnswers, type ContextUsageSnapshot, type EffortLevel, type ModelMode, type ModelProfile, type ProposedAction, type SubagentTask, type TimelineEntry, type ToolPermissionRequest, type UserAttachment } from '../shared/contracts'
 import { isImageAttachmentName } from '../shared/image-preview'
 import { publicErrorText } from '../shared/error-copy'
 import { getPeakStatus, usageSpendYuan } from '../shared/deepseek-pricing'
@@ -8,6 +8,7 @@ import type { DialogueLine, ModelClient, ModelReply, ModelToolEvent } from './de
 import type { ConversationRecord } from './conversation-store'
 import { NoteStore, type NoteDraft } from './note-store'
 import { attachmentContext, expandFileMentions, validAttachmentList } from './local-context'
+import type { ConversationBridge, ConversationTarget } from './conversation-tools'
 
 const DEMO_HINT = '演示模式仅支持「记录：内容」的测试笔记流程。'
 
@@ -53,11 +54,16 @@ export class AgentRuntime {
   private generation = 0
   private contextGeneration = 0
   private sdkSessionId: string | null = null
+  private personaId = 'xiaojing'
+  private personaRevision = 0
   private thinkingOpen = false
   private goalMaxIterations = 30
   private goalMaxMinutes = 180
   private goalTimer?: ReturnType<typeof setTimeout>
   private queuePauseReason: string | null = null
+  private goalSessionInvalidated = false
+  /** The controller's own goal-clear path (interrupt + /goal clear turn). */
+  private goalClearHandler?: () => void
   private memoryContextProvider?: () => Promise<string>
   /** Remembers which asking mode to return to when plan mode ends. */
   private lastNonPlanApproval: ApprovalMode = 'bypassPermissions'
@@ -89,9 +95,11 @@ export class AgentRuntime {
       this.state.planMode = mode === 'plan'
       this.emit()
     })
-    // A tool call parked in default/acceptEdits mode.
+    // A tool call parked in default/acceptEdits mode. While any interaction
+    // waits on the user the task is awaiting approval, not executing.
     claudeCodeModel?.setPermissionListener?.((permission) => {
       this.state.permission = permission
+      this.syncApprovalWait()
       this.emit()
     })
     // Automatic compaction: the CLI decides by itself at the threshold. Only
@@ -105,11 +113,19 @@ export class AgentRuntime {
     // A parked AskUserQuestion lives in the snapshot while the panel shows it.
     claudeCodeModel?.setQuestionListener?.((question) => {
       this.state.question = question;
+      this.syncApprovalWait();
       this.emit();
     });
     // A parked ExitPlanMode lives there too until the plan is approved or sent back.
     claudeCodeModel?.setPlanListener?.((plan) => {
       this.state.plan = plan;
+      if (plan) this.state.approvedPlan = undefined;
+      this.syncApprovalWait();
+      this.emit();
+    });
+    // Task-tool subagents; the SDK client throttles progress to 2 s.
+    claudeCodeModel?.setSubagentTasksListener?.((tasks) => {
+      this.state.subagents = tasks;
       this.emit();
     });
     this.state = {
@@ -123,6 +139,7 @@ export class AgentRuntime {
       permission: null,
       contextCompactingAuto: false,
       timeline: [],
+      subagents: [],
       timelineRevision: 0
     }
   }
@@ -186,7 +203,7 @@ export class AgentRuntime {
         return
       }
     } catch {
-      this.add('system', '审批模式切换失败，SDK 未确认。')
+      this.addSystem('审批模式切换失败，SDK 未确认。', 'error')
       throw new Error('审批模式切换失败，SDK 未确认。')
     }
     // Switch silently: the button already shows the new mode, and a system
@@ -202,6 +219,69 @@ export class AgentRuntime {
     const model = this.model as (ModelClient & { answerPermission?: (id: string, allow: boolean) => boolean }) | undefined
     if (!model?.answerPermission) throw new Error('当前没有等待批准的操作。')
     if (!model.answerPermission(id, allow)) throw new Error('这次操作已经失效。')
+  }
+
+  /** The controller owns the only path that clears a goal: interrupt the loop
+   *  turn, then send /goal clear as a queued turn of its own. */
+  setGoalClearHandler(handler?: () => void): void {
+    this.goalClearHandler = handler
+  }
+
+  /** Wires the conversations MCP tools; the source id is this runtime's own. */
+  setConversationBridge(bridge?: {
+    list: () => ConversationTarget[]
+    send: (target: string, text: string, sourceConversationId: string) => Promise<{ id: string; title: string }>
+  }): void {
+    const model = this.claudeCodeModel as (ModelClient & { setConversationBridge?: (bridge?: ConversationBridge) => void }) | undefined
+    if (!model?.setConversationBridge) return
+    model.setConversationBridge(bridge ? {
+      list: bridge.list,
+      send: (target, text) => bridge.send(target, text, this.conversationId)
+    } : undefined)
+  }
+
+  /** Moves a blocking subagent to the background so the main turn continues. */
+  async backgroundSubagent(toolUseId: string): Promise<boolean> {
+    const model = this.model as (ModelClient & { backgroundTask?: (toolUseId?: string) => Promise<boolean> }) | undefined
+    if (!model?.backgroundTask) throw new Error('当前模型不支持后台运行子代理。')
+    return model.backgroundTask(toolUseId)
+  }
+
+  /** A foreground subagent blocks the main turn. When the user sends
+   *  anything, move every foreground subagent to the background first so the
+   *  message is handled now instead of waiting for the child to finish. */
+  async releaseForegroundSubagents(): Promise<void> {
+    const blocked = (this.state.subagents ?? []).some((task) => task.status === 'running' && !task.isBackgrounded)
+    if (!blocked) return
+    const model = this.model as (ModelClient & { backgroundTask?: (toolUseId?: string) => Promise<boolean> }) | undefined
+    if (!model?.backgroundTask) return
+    // No tool id means "all foreground tasks", the SDK's Ctrl+B.
+    await model.backgroundTask()
+  }
+
+  /** Stops one Task-tool subagent. */
+  async stopSubagent(taskId: string): Promise<void> {
+    const model = this.model as (ModelClient & { stopTask?: (taskId: string) => Promise<void> }) | undefined
+    if (!model?.stopTask) throw new Error('当前模型不支持停止子代理。')
+    await model.stopTask(taskId)
+  }
+
+  /** The SDK has no host-side send-to-child control (live-tested: a message
+   *  tagged with parent_tool_use_id is consumed by the main turn). The honest
+   *  path is a steer to the main turn: it can relay via SendMessage when the
+   *  tool is available, or act on the information itself. */
+  async messageSubagent(toolUseId: string, text: string): Promise<boolean> {
+    const clean = text.trim()
+    if (!clean) return false
+    const task = (this.state.subagents ?? []).find((item) => item.toolUseId === toolUseId)
+    // A foreground child blocks the turn; release it before the steer.
+    await this.releaseForegroundSubagents().catch(() => undefined)
+    const instruction = [
+      `用户要转达给正在运行的子代理「${task?.description ?? toolUseId}」：`,
+      clean,
+      '如果 SendMessage 工具可用，请把这条内容发给该子代理；否则在当前任务里处理这条信息。'
+    ].join('\n')
+    return this.steerMessage(instruction)
   }
 
   setGoalBudget(maxIterations: number, maxMinutes: number): void {
@@ -227,8 +307,11 @@ export class AgentRuntime {
   /** A requested goal is only a local request until an SDK event confirms it. */
   private trackGoal(text: string): void {
     const match = /^\/goal(?:\s+([\s\S]+))?$/iu.exec(text.trim())
+    if (!match) return
+    // A new explicit goal query belongs to the replacement SDK session.
+    this.goalSessionInvalidated = false
     const condition = match?.[1]?.trim() ?? ''
-    if (!match || !condition) return // Bare /goal just asks the CLI for its state.
+    if (!condition) return // Bare /goal just asks the CLI for its state.
     if (/^clear$/iu.test(condition)) {
       if (this.state.goal) {
         this.state.goal = { ...this.state.goal, phase: 'stopping', statusMessage: '已请求清除目标，等待 CLI 确认。' }
@@ -241,6 +324,7 @@ export class AgentRuntime {
   }
 
   private observeGoal(goal: AgentGoal | null): void {
+    if (this.goalSessionInvalidated) return
     if (goal === null) {
       this.state.goal = null
       this.clearGoalTimer()
@@ -251,6 +335,7 @@ export class AgentRuntime {
     const startedAt = previous?.condition === goal.condition ? previous.startedAt : goal.startedAt
     this.state.goal = { condition: goal.condition, phase: 'confirmed', startedAt,
       ...(goal.iterations !== undefined ? { iterations: goal.iterations } : {}),
+      ...(goal.lastReason ? { lastReason: goal.lastReason } : {}),
       ...(goal.iterations === undefined ? { statusMessage: 'CLI 未提供轮数，仍按时间上限保护。' } : {}) }
     this.armGoalTimer()
     this.emit()
@@ -276,10 +361,18 @@ export class AgentRuntime {
     const goal = this.state.goal
     if (!goal || this.queuePauseReason) return
     if (goal.iterations !== undefined && goal.iterations >= this.goalMaxIterations) {
-      this.stop(`目标达到 ${this.goalMaxIterations} 轮上限，已停止；待发送消息仍保留。`)
+      this.exceedGoalBudget(`目标达到 ${this.goalMaxIterations} 轮上限，已停止；待发送消息仍保留。`)
     } else if (Date.now() - Date.parse(goal.startedAt) >= this.goalMaxMinutes * 60_000) {
-      this.stop(`目标达到 ${this.goalMaxMinutes} 分钟上限，已停止；待发送消息仍保留。`)
+      this.exceedGoalBudget(`目标达到 ${this.goalMaxMinutes} 分钟上限，已停止；待发送消息仍保留。`)
     }
+  }
+
+  /** Stop alone leaves the CLI's goal armed, so the next message would resume
+   *  the same loop. Budget exhaustion also clears the goal through the
+   *  controller's own /goal clear path. */
+  private exceedGoalBudget(reason: string): void {
+    this.stop(reason)
+    try { this.goalClearHandler?.() } catch { /* stop already paused the queue */ }
   }
 
   /** Thinking depth is a plain model-layer knob: it goes to every client and
@@ -300,7 +393,13 @@ export class AgentRuntime {
     // what lets callers observe intermediate states like a running task's
     // metrics without them mutating underfoot.
     const { timeline, ...rest } = this.state
-    return { ...structuredClone(rest), timeline }
+    return {
+      ...structuredClone(rest),
+      timeline,
+      // Pause state lives outside the cloned snapshot: it changes with the
+      // controller's queue, not with the conversation record.
+      ...(this.queuePauseReason ? { queuePauseReason: this.queuePauseReason } : {})
+    }
   }
 
   async getContextUsage(): Promise<ContextUsageSnapshot> {
@@ -389,6 +488,8 @@ export class AgentRuntime {
     this.state.proposal = undefined
     this.state.question = null
     this.state.plan = null
+    this.state.subagents = []
+    this.state.approvedPlan = undefined
     this.state.contextUsage = { status: 'unavailable' }
     this.state.contextCompacting = false
     this.state.contextCompactingAuto = false
@@ -450,18 +551,18 @@ export class AgentRuntime {
   async sendMessage(rawText: string, attachments: UserAttachment[] = [], sessionContext = ''): Promise<void> {
     const text = rawText.trim()
     if (!validAttachmentList(attachments)) {
-      this.add('system', '附件数量或大小超过限制。')
+      this.addSystem('附件数量或大小超过限制。', 'error')
       return
     }
     if (this.state.mode !== 'claude_code' && attachments.some((item) => item.path && !item.content)) {
-      this.add('system', '当前模型没有本地文件读取工具。请切换到小鲸引擎模式后再发送此文件。')
+      this.addSystem('当前模型没有本地文件读取工具。请切换到小鲸引擎模式后再发送此文件。', 'error')
       return
     }
     const context = attachmentContext(attachments)
     const prompt = [text, context].filter(Boolean).join('\n\n')
     if (!prompt) return
     if (prompt.length > 8_000) {
-      this.add('system', '单条消息目前最多 8000 字。')
+      this.addSystem('单条消息目前最多 8000 字。', 'error')
       return
     }
     if (this.isRunning()) {
@@ -469,11 +570,16 @@ export class AgentRuntime {
       return
     }
 
+    const goalBeforeRef = this.state.goal
+    const goalBefore = goalBeforeRef ? structuredClone(goalBeforeRef) : null
     if (this.state.mode === 'claude_code') this.trackGoal(text)
+    const goalChanged = this.state.goal !== goalBeforeRef
+    const goalTracked = this.state.goal
     this.generation += 1
     const currentGeneration = this.generation
     this.draft = undefined
     this.state.proposal = undefined
+    this.state.approvedPlan = undefined
     this.state.currentTask = (text || `阅读附件：${attachments.map(({ name }) => name).join('、')}`).slice(0, 140)
     this.state.taskMetrics = { startedAt: new Date().toISOString() }
     this.state.taskStatus = 'planning'
@@ -521,6 +627,7 @@ export class AgentRuntime {
         }
       }
       if (abort.signal.aborted || currentGeneration !== this.generation) return
+      const personaRevision = this.personaRevision
       const reply = await this.model.respond(modelHistory, abort.signal, (partial, segment) => {
         if (segment !== undefined && segment !== progressSegment) {
           progressSegment = segment
@@ -574,9 +681,15 @@ export class AgentRuntime {
       })
       if (currentGeneration !== this.generation) return
       this.handleModelReply(reply, progressEntryId)
-      if (this.state.mode === 'claude_code') await this.getContextUsage().catch(() => undefined)
+      // A persona changed during this turn. Its result belongs to the old
+      // query, so never resume that SDK session under the new persona.
+      if (personaRevision !== this.personaRevision) this.sdkSessionId = null
+      else if (this.state.mode === 'claude_code') await this.getContextUsage().catch(() => undefined)
     } catch (error) {
       if (currentGeneration !== this.generation) return
+      // A goal typed into this failed send never reached the CLI: restore the
+      // previous goal instead of leaving a ghost the user never set.
+      if (goalChanged && this.state.goal === goalTracked) this.state.goal = goalBefore
       // A failure that invalidates the resume id must not be remembered for
       // the next turn; the local history replays it into a fresh session.
       const failure = error instanceof AgentTurnError ? error.failure : undefined
@@ -585,7 +698,7 @@ export class AgentRuntime {
       this.state.avatarState = 'error'
       this.closeThinkingEntries()
       this.finishRunningTools('未完成')
-      this.add('system', error instanceof Error ? publicErrorText(error.message) : '模型请求失败。')
+      this.addSystem(error instanceof Error ? publicErrorText(error.message) : '模型请求失败。', 'error')
     } finally {
       if (currentGeneration === this.generation) this.activeRequest = undefined
     }
@@ -593,7 +706,7 @@ export class AgentRuntime {
 
   async approveAction(id: string): Promise<void> {
     if (this.state.taskStatus !== 'awaiting_approval' || !this.draft || this.draft.id !== id) {
-      this.add('system', '这项操作已经失效，未执行写入。')
+      this.addSystem('这项操作已经失效，未执行写入。', 'error')
       return
     }
     const draft = this.draft
@@ -615,7 +728,7 @@ export class AgentRuntime {
     } catch (error) {
       this.state.taskStatus = 'failed'
       this.state.avatarState = 'error'
-      this.add('system', error instanceof Error ? publicErrorText(error.message) : '测试笔记写入失败。')
+      this.addSystem(error instanceof Error ? publicErrorText(error.message) : '测试笔记写入失败。', 'error')
     }
   }
 
@@ -639,7 +752,15 @@ export class AgentRuntime {
   async answerPlan(id: string, approved: boolean): Promise<void> {
     const model = this.model as (ModelClient & { answerPlan?: (id: string, approved: boolean) => boolean }) | undefined
     if (!model?.answerPlan) throw new Error('当前没有等待批准的计划。')
+    const parked = this.state.plan
     if (!model.answerPlan(id, approved)) throw new Error('这个计划已经失效。')
+    // Keep the approved plan for the task strip: the SDK's task list is the
+    // live view, but a plan approved without TaskCreate still has steps worth
+    // showing while it is implemented.
+    if (approved && parked?.id === id) {
+      this.state.approvedPlan = parked.plan.slice(0, 4_000)
+      this.emit()
+    }
   }
 
   /** Ask the current model to abort what this turn is doing — the panel's
@@ -674,9 +795,26 @@ export class AgentRuntime {
     this.claudeCodeModel?.setLibraries?.(mcpServers, plugins)
   }
 
-  /** 切换人设预设：人设文字随下一次 query 生效。 */
+  /** Switch the instructions on both model paths. An old SDK transcript also
+   * carries its old system prompt, so the next turn must start a fresh query
+   * with bounded dialogue replay instead of resuming that transcript. */
   setPersona(id: string): void {
+    if (this.personaId === id) return
+    this.personaId = id
+    this.personaRevision += 1
     this.claudeCodeModel?.setPersonaId?.(id)
+    this.configuredModel?.setPersonaId?.(id)
+    this.contextGeneration += 1
+    this.sdkSessionId = null
+    this.state.contextUsage = { status: 'unavailable' }
+    if (this.state.goal) {
+      this.goalSessionInvalidated = true
+      this.state.goal = { ...this.state.goal, phase: 'unverified',
+        statusMessage: '已切换人设；原模型会话的目标状态无法继承，请重新设定目标。' }
+      this.clearGoalTimer()
+      this.queuePauseReason = '已切换人设；待发送消息保留，请重新设定目标后继续。'
+    }
+    this.emit()
   }
 
   setIdentity(identity: { userName: string; assistantName: string }): void {
@@ -684,9 +822,12 @@ export class AgentRuntime {
     this.configuredModel?.setIdentity?.(identity)
   }
 
-  stop(reason?: string): void {
+  /** `silent` is for app quit/restart: it stops the turn and keeps the
+   *  transcript, but writes no "已停止思考" notice — closing the app should
+   *  not look like the user stopped the task. */
+  stop(reason?: string, silent = false): void {
     if (this.state.mode !== 'claude_code' && (this.state.taskStatus === 'executing' || this.state.taskStatus === 'verifying')) {
-      this.add('system', '写入已经开始，当前步骤会完成读回验证；不会继续执行其他动作。')
+      if (!silent) this.add('system', '写入已经开始，当前步骤会完成读回验证；不会继续执行其他动作。')
       return
     }
     if (!this.isBusy() && !this.state.goal) return
@@ -694,10 +835,10 @@ export class AgentRuntime {
       this.state.goal = { ...this.state.goal, phase: 'unverified',
         statusMessage: reason ?? '已请求停止，但 CLI 尚未确认目标清除；可用 /goal 查询。' }
       this.clearGoalTimer()
-      this.queuePauseReason = reason ?? '任务已停止；待发送消息仍保留，发送新消息可继续。'
+      if (!silent) this.queuePauseReason = reason ?? '任务已停止；待发送消息仍保留，发送新消息可继续。'
     }
     if (!this.isBusy()) {
-      this.add('system', reason ?? '已请求停止目标；CLI 状态尚未确认。')
+      if (!silent) this.add('system', reason ?? '已请求停止目标；CLI 状态尚未确认。')
       return
     }
     this.generation += 1
@@ -709,11 +850,12 @@ export class AgentRuntime {
     this.state.proposal = undefined
     this.state.question = null
     this.state.plan = null
-    this.state.taskStatus = 'cancelled'
+    this.state.taskStatus = silent ? 'idle' : 'cancelled'
     this.state.avatarState = 'idle'
     this.closeThinkingEntries()
-    this.finishRunningTools('已停止')
-    this.add('system', reason ?? (this.state.mode === 'claude_code' ? '已停止思考；正在执行的外部动作可能仍会完成。' : '任务已停止，待批准的操作已取消。'))
+    if (silent) this.dropRunningTools()
+    else this.finishRunningTools('已停止')
+    if (!silent) this.add('system', reason ?? (this.state.mode === 'claude_code' ? '已停止思考；正在执行的外部动作可能仍会完成。' : '任务已停止，待批准的操作已取消。'))
   }
 
   /** Releases the SDK query as well as cancelling the current turn. Closing a
@@ -751,6 +893,25 @@ export class AgentRuntime {
 
   private isBusy(): boolean {
     return ['planning', 'awaiting_approval', 'executing', 'verifying'].includes(this.state.taskStatus)
+  }
+
+  private hasRunningTool(): boolean {
+    return this.state.timeline.some((entry) => entry.kind === 'tool' && entry.tool?.status === 'running')
+  }
+
+  /**
+   * A parked question, plan or permission means the turn is waiting on the
+   * user, not executing. Once the last one settles, fall back to what the
+   * turn was doing: a running tool, or planning the next move.
+   */
+  private syncApprovalWait(): void {
+    if (this.state.proposal || this.state.question || this.state.plan || this.state.permission) {
+      this.state.taskStatus = 'awaiting_approval'
+      return
+    }
+    if (this.state.taskStatus !== 'awaiting_approval' || this.state.mode !== 'claude_code' || !this.isBusy()) return
+    this.state.taskStatus = this.hasRunningTool() ? 'executing' : 'planning'
+    this.state.avatarState = this.state.taskStatus === 'executing' ? 'acting' : 'thinking'
   }
 
   private disposeClaudeQuery(): void {
@@ -808,7 +969,13 @@ export class AgentRuntime {
     if (event.phase === 'start') this.closeThinkingEntries()
     const existing = this.state.timeline.find((entry) => entry.tool?.toolUseId === event.toolUseId)
     const status = event.phase === 'start' ? 'running' : event.isError ? 'error' : 'done'
-    const text = `${toolLabel(event.toolName)}${status === 'running' ? '（执行中）' : status === 'error' ? '（失败）' : '（已完成）'}`
+    // A result whose start was missed (resumed session, late background task)
+    // keeps the name if the row already knows it; otherwise it is honestly a
+    // generic tool result, never the old literal "未知工具".
+    const toolName = event.toolName === 'unknown_tool' && existing?.tool?.name
+      ? existing.tool.name
+      : event.toolName
+    const text = `${toolLabel(toolName)}${status === 'running' ? '（执行中）' : status === 'error' ? '（失败）' : '（已完成）'}`
     if (existing) {
       existing.text = text
       existing.tool = { ...existing.tool!, status, input: event.input ?? existing.tool?.input, output: event.output ?? existing.tool?.output,
@@ -817,7 +984,7 @@ export class AgentRuntime {
     } else {
       const entry: TimelineEntry = {
         id: crypto.randomUUID(), time: new Date().toISOString(), kind: 'tool', text,
-        tool: { toolUseId: event.toolUseId, name: event.toolName, status, input: event.input, output: event.output,
+        tool: { toolUseId: event.toolUseId, name: toolName, status, input: event.input, output: event.output,
           ...(event.images?.length ? { images: event.images } : {}) }
       }
       this.state.timeline.push(entry)
@@ -826,10 +993,13 @@ export class AgentRuntime {
     if (event.phase === 'start') {
       this.state.taskStatus = 'executing'
       this.state.avatarState = 'acting'
-    } else if (!this.state.timeline.some((entry) => entry.kind === 'tool' && entry.tool?.status === 'running')) {
+    } else if (!this.hasRunningTool()) {
       this.state.taskStatus = 'planning'
       this.state.avatarState = 'thinking'
     }
+    // A parked question/permission keeps the turn in awaiting_approval even
+    // while tool results trickle in.
+    this.syncApprovalWait()
     this.emit()
   }
 
@@ -843,6 +1013,18 @@ export class AgentRuntime {
         this.markTimelineDirty(entry)
       }
     }
+  }
+
+  /** Quit/restart has no result for a tool that was still running. Drop those
+   *  rows instead of leaving a red "interrupted" failure in the transcript. */
+  private dropRunningTools(): void {
+    const before = this.state.timeline.length
+    this.state.timeline = this.state.timeline.filter((entry) =>
+      !(entry.kind === 'tool' && entry.tool?.status === 'running'))
+    if (this.state.timeline.length === before) return
+    this.state.timelineRevision += 1
+    this.timelineDirty.clear()
+    this.timelineSentRevision = -1
   }
 
   private finishRunningTools(reason: string): void {
@@ -874,7 +1056,7 @@ export class AgentRuntime {
     } catch (error) {
       this.state.taskStatus = 'failed'
       this.state.avatarState = 'error'
-      this.add('system', error instanceof Error ? publicErrorText(error.message) : '无法准备笔记草稿。')
+      this.addSystem(error instanceof Error ? publicErrorText(error.message) : '无法准备笔记草稿。', 'error')
     }
   }
 
@@ -885,18 +1067,34 @@ export class AgentRuntime {
     this.add('assistant', text)
   }
 
-  private add(kind: TimelineEntry['kind'], text: string, images?: TimelineEntry['images']): TimelineEntry {
+  private add(kind: TimelineEntry['kind'], text: string, images?: TimelineEntry['images'],
+    sender?: TimelineEntry['sender'], tone?: TimelineEntry['tone']): TimelineEntry {
     const entry: TimelineEntry = {
       id: crypto.randomUUID(),
       time: new Date().toISOString(),
       kind,
       text,
-      ...(images?.length ? { images } : {})
+      ...(images?.length ? { images } : {}),
+      ...(sender ? { sender } : {}),
+      ...(tone ? { tone } : {})
     }
     this.state.timeline.push(entry)
     this.markTimelineDirty(entry)
     this.emit()
     return entry
+  }
+
+  /** A notice occupies its own row in the panel; `error` switches it to the
+   *  warning treatment instead of the quiet centered line. */
+  private addSystem(text: string, tone?: TimelineEntry['tone']): TimelineEntry {
+    return this.add('system', text, undefined, undefined, tone)
+  }
+
+  /** Shows a message from another local conversation/agent without starting a
+   *  model turn. It is a visible notice, not part of the dialogue history. */
+  appendExternalMessage(from: { name: string; badge: string }, text: string): void {
+    if (!text.trim()) return
+    this.add('user', text.trim().slice(0, 8_000), undefined, from)
   }
 
   /** Records that an entry changed since the last publisher take; the id-keyed
