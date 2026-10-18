@@ -248,7 +248,7 @@ const RunParagraph = memo(function RunParagraph({ entry, onOpenImage }: { entry:
   return <div className="panel-run-item"><MessageBody entry={entry} onOpenImage={onOpenImage} /></div>;
 });
 
-export const TimelineItem = memo(function TimelineItem({ entry, running = false, onOpenImage, onAvatarMenu, display }: { entry: TimelineEntry; running?: boolean; onOpenImage?: (name: string, url: string) => void; onAvatarMenu?: (event: MouseEvent<HTMLElement>) => void; display: RowDisplay }) {
+export const TimelineItem = memo(function TimelineItem({ entry, running = false, onOpenImage, onAvatarMenu, onKill, display }: { entry: TimelineEntry; running?: boolean; onOpenImage?: (name: string, url: string) => void; onAvatarMenu?: (event: MouseEvent<HTMLElement>) => void; onKill?: () => void; display: RowDisplay }) {
   const timeLabel = timeText(entry.time);
   const toolPreview = entry.kind === 'tool' ? (entry.text.trim().split(/\r?\n/, 1)[0] || '工具活动') : '';
   const legacyToolDetail = entry.kind === 'tool' ? entry.text.trim().split(/\r?\n/).slice(1).join('\n').trim() : '';
@@ -305,7 +305,7 @@ export const TimelineItem = memo(function TimelineItem({ entry, running = false,
         </span>}
         <span className={`panel-tool-result is-${status}`} aria-hidden="true">{status === 'error' ? '×' : status === 'running' ? '…' : '✓'}</span>
         {killable && <button type="button" className="panel-tool-kill" aria-label="中断当前任务" title="中断当前任务"
-          onClick={(event) => { event.preventDefault(); event.stopPropagation(); void petBridge().interruptTurn(); }}>×</button>}
+          onClick={(event) => { event.preventDefault(); event.stopPropagation(); onKill?.(); }}>×</button>}
       </summary>
       {toolOpened && body}
       {toolOpened && <ToolInputDetails input={entry.tool?.input} />}
@@ -1549,6 +1549,13 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
     setBusy(null);
   }
 
+  // The tool row's kill switch stops the whole turn (the same action as the
+  // composer's stop button), not just the running command. Keep the callback
+  // stable so the memoized timeline rows do not all repaint.
+  const stopRef = useRef<() => void>(() => undefined);
+  stopRef.current = () => { void stop(); };
+  const killTurn = useCallback(() => stopRef.current(), []);
+
   async function setSideExpanded(expanded: boolean): Promise<void> {
     const sessionId = sideChatRef.current?.sessionId;
     if (!sessionId) return;
@@ -2495,11 +2502,11 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
               // "Latest reply" is the turn's final entry itself: a mid-turn
               const runAnchor = group.items[0];
               return <div className="panel-turn" key={group.user.id}>
-                <TimelineItem entry={group.user} display={rowDisplay} onOpenImage={openImageViewer} onAvatarMenu={sideExpanded ? undefined : (event) => showTurnMenu(event, group.user.id, turnMenuTitle(group.user), isLiveTurn)} />
+                <TimelineItem entry={group.user} display={rowDisplay} onOpenImage={openImageViewer} onKill={killTurn} onAvatarMenu={sideExpanded ? undefined : (event) => showTurnMenu(event, group.user.id, turnMenuTitle(group.user), isLiveTurn)} />
                 {/* 插话夹在自己的消息和这条回复之间，按条数叠成一列——它们是
                     消息，不是小鲸气泡里的东西；过程依旧整条可折叠。 */}
                 {asides.length > 0 && <div className="panel-turn-asides">
-                  {asides.map((segment) => <TimelineItem key={segment.entry.id} entry={segment.entry} display={rowDisplay} onOpenImage={openImageViewer} />)}
+                  {asides.map((segment) => <TimelineItem key={segment.entry.id} entry={segment.entry} display={rowDisplay} onKill={killTurn} onOpenImage={openImageViewer} />)}
                 </div>}
                 {runAnchor && <article className="panel-event panel-event-assistant is-run" data-entry-id={firstReplyId ?? runAnchor.id}
                   aria-label={`${kindLabels.assistant}，${timeText(runAnchor.time)}`}>
@@ -2512,7 +2519,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                     {tail.map((segment, segmentIndex) => segment.kind === 'note'
                       ? <RunParagraph key={segment.entry.id} entry={segment.entry} onOpenImage={openImageViewer} />
                       : segment.kind === 'user'
-                      ? <TimelineItem key={segment.entry.id} entry={segment.entry} display={rowDisplay} onOpenImage={openImageViewer} />
+                      ? <TimelineItem key={segment.entry.id} entry={segment.entry} display={rowDisplay} onKill={killTurn} onOpenImage={openImageViewer} />
                       : <WorkCluster
                           key={segment.id}
                           items={segment.items}

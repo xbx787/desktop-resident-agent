@@ -77,4 +77,17 @@ describe('the tool-kill switch', () => {
     // The row itself was never remounted by the toggles.
     expect(container.querySelector('summary')).toBe(summary)
   })
+
+  it('hands the kill switch to the whole-turn stop handler', async () => {
+    now = START + 70_000
+    const onKill = vi.fn()
+    await act(async () => {
+      root.render(<TimelineItem entry={runningTool()} running display={display} onKill={onKill} />)
+    })
+    const button = container.querySelector<HTMLButtonElement>('.panel-tool-kill')!
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    expect(onKill).toHaveBeenCalledTimes(1)
+  })
 })
