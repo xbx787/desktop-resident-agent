@@ -800,7 +800,7 @@ body.is-resizing-panel, body.is-resizing-panel * { cursor: nwse-resize !importan
 
 /* The parked ExitPlanMode shares the question slot: the plan verbatim (message
    typography — it is a document to read), with approve / send-back actions. */
-.panel-plan { display: flex; flex-direction: column; gap: 9px; width: 100%; min-width: 0; max-height: 226px; padding: 10px 12px; border: 1px solid rgba(240, 196, 123, .42); border-radius: 13px; background: rgba(9, 21, 53, .55); }
+.panel-plan { display: flex; flex-direction: column; gap: 9px; width: 100%; min-width: 0; max-height: min(72vh, 520px); padding: 10px 12px; border: 1px solid rgba(240, 196, 123, .42); border-radius: 13px; background: rgba(9, 21, 53, .55); }
 .panel-plan-block { display: flex; flex-direction: column; gap: 6px; min-height: 0; overflow: hidden; }
 .panel-plan-header { align-self: flex-start; flex: none; padding: 1px 7px; border-radius: 6px; color: #f2cd92; background: rgba(240, 196, 123, .13); font-size: var(--text-2xs); }
 .panel-plan-text { min-height: 0; overflow-y: auto; padding-right: 2px; scrollbar-width: thin; }

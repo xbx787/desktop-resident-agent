@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { AppSnapshot, PetAPI, SideChatSnapshot, SlashUiAction } from '../shared/contracts'
+import type { AppSnapshot, PetAPI, SideChatSnapshot, SlashUiAction, VoiceConfig } from '../shared/contracts'
 
 const api: PetAPI = {
   getSnapshot: () => ipcRenderer.invoke('pet:get-snapshot'),
@@ -106,6 +106,12 @@ const api: PetAPI = {
   setAvatarState: (state) => ipcRenderer.invoke('pet:set-avatar-state', state),
   getVoiceConfig: () => ipcRenderer.invoke('pet:get-voice-config'),
   transcribeAudio: (request) => ipcRenderer.invoke('pet:transcribe-audio', request),
+  synthesizeSpeech: (request) => ipcRenderer.invoke('pet:voice:synthesize', request),
+  onVoiceConfigChanged: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, config: VoiceConfig): void => callback(config)
+    ipcRenderer.on('pet:voice-config-changed', listener)
+    return () => ipcRenderer.removeListener('pet:voice-config-changed', listener)
+  },
   voiceLog: (level, message, data) => ipcRenderer.invoke('pet:voice-log', level, message, data),
   quit: () => ipcRenderer.invoke('pet:quit'),
   beginDrag: (position) => ipcRenderer.invoke('pet:begin-drag', position),

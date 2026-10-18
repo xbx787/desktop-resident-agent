@@ -4,6 +4,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { SettingsPage } from '../src/renderer/settings'
 import type { SettingsAPI } from '../src/preload/settings'
+import { voiceApiDefaults } from './voice-api-defaults'
 import type { ConversationSettings } from '../src/shared/contracts'
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -42,6 +43,7 @@ function bridge(overrides: Partial<SettingsAPI> = {}): SettingsAPI {
     migrateWorkspace: async (next) => ({ path: next }),
     readAvatar: async () => null, saveModelProfile: async () => {},
     deleteModelProfile: async () => {}, testModelProfile: async () => ({ ok: true, message: '' }),
+    ...voiceApiDefaults,
     libraries: async () => ({ items: [], busy: false }),
     searchLibraryMarket: async () => [], installLibrary: async () => ({ items: [], busy: false }),
     removeLibrary: async () => ({ items: [], busy: false }),

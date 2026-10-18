@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type AnimationEvent, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import type { AppSnapshot, ApprovalMode, BubbleLayout, ClaudeWorkflowOption, ContextUsageSnapshot, ConversationSummary, EffortLevel, ModelMode, ModelProfile, PendingMessage, PetAPI, ProposedAction, SideChatSnapshot, TaskMetrics, TaskStatus, TimelineEntry, UserAttachment } from '../shared/contracts';
+import type { AppSnapshot, ApprovalMode, BubbleLayout, ClaudeWorkflowOption, ContextUsageSnapshot, ConversationSummary, EffortLevel, ModelMode, ModelProfile, PendingMessage, PetAPI, ProposedAction, SideChatSnapshot, TaskMetrics, TaskStatus, TimelineEntry, UserAttachment, VoiceConfig } from '../shared/contracts';
 import { AUTO_COMPACT_DEFAULT_PERCENT, AUTO_COMPACT_MAX_PERCENT, AUTO_COMPACT_MIN_PERCENT, PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH } from '../shared/contracts';
 import { isImageAttachmentName } from '../shared/image-preview';
 import { EFFORT_LABELS } from '../shared/effort';
@@ -38,7 +38,9 @@ import { WorkingIndicator } from './working-indicator';
 import { TurnProcess, WorkCluster } from './work-cluster';
 import { petBridge } from './pet-state';
 import { personaAvatarUrl } from './avatar-art';
-import { VoiceManager } from './voice-manager';
+import { VoiceManager, type VoiceManagerPhase } from './voice-manager';
+import { VoiceButton } from './voice-button';
+import './voice.css';
 import './panel.css';
 
 // 审批菜单只放权限相关的三档；计划模式是工作方式，不在这里。顺序从
@@ -624,6 +626,10 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
   const [goalPrompting, setGoalPrompting] = useState(false);
   const [imageViewer, setImageViewer] = useState<{ name: string; url: string } | null>(null);
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [voicePhase, setVoicePhase] = useState<VoiceManagerPhase>('idle');
+  const [voicePartial, setVoicePartial] = useState('');
+  const [voiceConfig, setVoiceConfig] = useState<VoiceConfig | null>(null);
+  const [voiceReady, setVoiceReady] = useState(false);
   const [feedAtBottom, setFeedAtBottom] = useState(true);
   const feedRef = useRef<HTMLDivElement>(null);
   const sessionHeaderRef = useRef<HTMLElement>(null);
@@ -1144,15 +1150,17 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
 
   useEffect(() => {
     let active = true;
+    let unsubscribe: () => void = () => undefined;
     void (async () => {
       try {
         const bridge = petBridge();
-        const voiceConfig = await bridge.getVoiceConfig();
+        const config = await bridge.getVoiceConfig();
         if (!active) return;
+        setVoiceConfig(config);
         const manager = new VoiceManager(bridge, {
-          onPhaseChange: () => undefined,
-          onPartial: () => undefined,
-          onFinal: () => undefined,
+          onPhaseChange: (phase) => { if (active) setVoicePhase(phase); },
+          onPartial: (text) => { if (active) setVoicePartial(text); },
+          onFinal: (text) => { if (active) setVoicePartial(text); },
           onError: (message) => { if (active) setVoiceError(message); },
           onRequestText: async (text) => {
             if (!active) return;
@@ -1160,21 +1168,32 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
             if (sideId) await bridge.sendSideChatMessage(sideId, text);
             else await bridge.sendMessage(text);
           },
-        }, voiceConfig);
+        }, config);
         voiceManagerRef.current = manager;
+        setVoiceReady(true);
+        try {
+          unsubscribe = bridge.onVoiceConfigChanged((next) => {
+            if (!active) return;
+            setVoiceConfig(next);
+            voiceManagerRef.current?.updateConfig(next);
+          });
+        } catch {
+          // A static preview has no bridge event.
+        }
       } catch {
         // ignore
       }
     })();
     return () => {
       active = false;
+      unsubscribe();
       voiceManagerRef.current?.destroy();
       voiceManagerRef.current = null;
     };
   }, []);
 
   useEffect(() => {
-    voiceManagerRef.current?.updateFromSnapshot(mainSnapshot ?? {
+    voiceManagerRef.current?.updateFromSnapshot(snapshot ?? {
       mode: 'demo',
       modelReady: false,
       claudeCodeReady: false,
@@ -1183,7 +1202,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
       timeline: [],
       timelineRevision: 0,
     });
-  }, [mainSnapshot]);
+  }, [snapshot]);
 
   useEffect(() => {
     if (!composerOpen) return;
@@ -1372,6 +1391,8 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
       endSubmission(originId);
     }
     if (!accepted) restoreRejectedSubmission(originId, sentDraft, sentAttachments);
+    // Let the new row render, then settle at the newest message.
+    window.setTimeout(scrollToBottom, 300);
   }
 
   function acceptSuggestion(item: ComposerSuggestion) {
@@ -1658,6 +1679,21 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
     setFeedAtBottom(true);
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
     feed.scrollTo({ top: feed.scrollHeight, behavior: reduceMotion ? 'auto' : 'smooth' });
+  }
+
+  function toggleVoice(): void {
+    const manager = voiceManagerRef.current;
+    if (!manager) {
+      setVoiceError('语音功能尚未就绪。');
+      return;
+    }
+    if (!manager.available) {
+      setVoiceError('还没有配置语音服务。请在设置 → 语音里填写 SiliconFlow API Key。');
+      void run((bridge) => bridge.openSettings());
+      return;
+    }
+    setVoiceError(null);
+    manager.toggle();
   }
 
   function openLibrary() {
@@ -2758,6 +2794,8 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                   }}
                 />
               </div>
+              {voicePartial && (voicePhase === 'listening' || voicePhase === 'processing') &&
+                <div className="panel-voice-caption" role="status">{voicePartial}</div>}
               <div className="panel-composer-toolbar">
                 {compactEmpty && (library?.conversations.length ?? 0) > 1 && <button type="button" className="panel-tool-button panel-conversations-button" aria-label="会话库" title="会话库" onClick={openLibrary}><ConversationsIcon /></button>}
                 <div className="panel-model-picker-wrap" ref={modelPickerRef}>
@@ -2864,6 +2902,9 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                     <button type="button" className="panel-compact-button" disabled={contextCompacting || !snapshot || snapshot.mode === 'demo'} onClick={() => { void compactContext(); }}>{contextCompacting ? '压缩中…' : '压缩上下文'}</button>
                   </div>
                 </div>
+                <VoiceButton phase={voicePhase}
+                  canListen={voiceReady && Boolean(voiceManagerRef.current?.available ?? voiceConfig?.siliconFlowAvailable)}
+                  disabled={Boolean(busy)} onToggle={toggleVoice} />
                 <button type={active && !draft.trim() && !attachments.length ? 'button' : 'submit'} className={`panel-send${sendingCurrent ? ' is-sending' : ''}`} disabled={(!active && !draft.trim() && !attachments.length) || Boolean(busy) || sendingCurrent || !snapshot || (contextCompacting && !(active && !draft.trim() && !attachments.length))} aria-label={goalPrompting ? '设定目标' : sendingCurrent ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务' : active ? '排队发送消息' : '发送消息'} title={goalPrompting ? '回车设定目标' : sendingCurrent ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务' : active ? snapshot?.mode === 'claude_code' ? 'Enter 排队发送，Ctrl+Enter 插队发送' : 'Enter 排队发送，Ctrl+Enter 优先排队' : '发送消息'} onClick={active && !draft.trim() && !attachments.length ? () => { void stop(); } : undefined}>
                   {sendingCurrent ? <span className="panel-send-spinner" aria-hidden="true" /> : active && !draft.trim() && !attachments.length ? <span className="panel-stop-square" /> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11m-5-5 5 5-5 5" /></svg>}
                 </button>

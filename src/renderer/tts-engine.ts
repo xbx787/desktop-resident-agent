@@ -7,7 +7,8 @@ export interface TtsEvents {
 export interface TtsEngine {
   readonly available: boolean
   readonly speaking: boolean
-  speak(text: string): void
+  /** Returns false when there is nothing to say or no engine is available. */
+  speak(text: string): boolean
   stopSpeaking(): void
   destroy(): void
 }
@@ -46,11 +47,11 @@ export class BrowserTtsEngine implements TtsEngine {
     return this._speaking
   }
 
-  speak(text: string): void {
-    if (!text.trim()) return
+  speak(text: string): boolean {
+    if (!text.trim()) return false
     if (!this.available) {
       this.events.onError('本机不支持语音合成。')
-      return
+      return false
     }
     this.stopSpeaking()
 
@@ -60,7 +61,7 @@ export class BrowserTtsEngine implements TtsEngine {
       .map((s) => s.trim())
       .filter(Boolean)
 
-    if (sentences.length === 0) return
+    if (sentences.length === 0) return false
 
     this._speaking = true
     this.events.onSpeakStart()
@@ -95,6 +96,7 @@ export class BrowserTtsEngine implements TtsEngine {
     }
 
     speakNext()
+    return true
   }
 
   stopSpeaking(): void {

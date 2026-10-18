@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { ConversationSettings, GrowthProposal, ModelProfile } from '../shared/contracts'
+import type { ConversationSettings, GrowthProposal, ModelProfile, VoiceJobProgress, VoiceSettingsPatch, VoiceSettingsPublic } from '../shared/contracts'
 import type { LibraryItem, LibraryKind, LibrarySnapshot } from '../shared/libraries'
 import type { MemoryItem } from '../main/memory-service'
 
@@ -34,6 +34,16 @@ export interface SettingsAPI {
   deleteModelProfile(id: string): Promise<void>
   /** Sends one tiny request to the endpoint and reports what came back. */
   testModelProfile(profile: ModelProfile): Promise<{ ok: boolean; message: string }>
+  voiceGet(): Promise<VoiceSettingsPublic>
+  voiceSave(patch: VoiceSettingsPatch): Promise<VoiceSettingsPublic>
+  voiceTest(input?: { apiKey?: string; voice?: string; speed?: number }): Promise<{ ok: boolean; message: string }>
+  voicePickDocument(): Promise<{ path: string; name: string; size: number } | null>
+  voiceConvert(path: string): Promise<{ jobId: string; total: number }>
+  voiceCancel(jobId: string): Promise<void>
+  voiceOpenOutput(jobId: string): Promise<void>
+  voiceOpenAudioRoot(): Promise<void>
+  voiceOpenKeyPage(): Promise<void>
+  onVoiceJobProgress(callback: (progress: VoiceJobProgress) => void): () => void
   /** Installed entries across the MCP, skill, and plugin libraries. */
   libraries(): Promise<LibrarySnapshot>
   /** Searches the market that matches the library kind. */
@@ -66,6 +76,20 @@ const api: SettingsAPI = {
   saveModelProfile: (profile) => ipcRenderer.invoke('pet:save-model-profile', profile),
   deleteModelProfile: (id) => ipcRenderer.invoke('pet:delete-model-profile', id),
   testModelProfile: (profile) => ipcRenderer.invoke('pet:test-model-profile', profile),
+  voiceGet: () => ipcRenderer.invoke('pet:settings:voice:get'),
+  voiceSave: (patch) => ipcRenderer.invoke('pet:settings:voice:save', patch),
+  voiceTest: (input) => ipcRenderer.invoke('pet:settings:voice:test', input),
+  voicePickDocument: () => ipcRenderer.invoke('pet:settings:voice:pick-document'),
+  voiceConvert: (path) => ipcRenderer.invoke('pet:settings:voice:convert', path),
+  voiceCancel: (jobId) => ipcRenderer.invoke('pet:settings:voice:cancel', jobId),
+  voiceOpenOutput: (jobId) => ipcRenderer.invoke('pet:settings:voice:open-output', jobId),
+  voiceOpenAudioRoot: () => ipcRenderer.invoke('pet:settings:voice:open-audio-root'),
+  voiceOpenKeyPage: () => ipcRenderer.invoke('pet:settings:voice:open-key-page'),
+  onVoiceJobProgress: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, progress: VoiceJobProgress): void => callback(progress)
+    ipcRenderer.on('pet:voice:job-progress', listener)
+    return () => ipcRenderer.removeListener('pet:voice:job-progress', listener)
+  },
   libraries: () => ipcRenderer.invoke('pet:libraries:list'),
   searchLibraryMarket: (kind, query) => ipcRenderer.invoke('pet:libraries:search', kind, query),
   installLibrary: (item) => ipcRenderer.invoke('pet:libraries:install', item),

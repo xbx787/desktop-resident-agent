@@ -8,7 +8,9 @@ import { PROVIDER_CATALOG } from '../shared/provider-catalog'
 import { publicErrorText } from '../shared/error-copy'
 import type { GrowthOverview, SettingsAPI } from '../preload/settings'
 import type { MemoryItem } from '../main/memory-service'
+import { SettingsVoiceSection } from './settings-voice'
 import './settings.css'
+import './voice.css'
 
 declare global {
   interface Window {
@@ -40,6 +42,7 @@ const BASE_SETTINGS_TABS = [
   { id: 'appearance', label: '外观' },
   { id: 'libraries', label: '库' },
   { id: 'models', label: '模型' },
+  { id: 'voice', label: '语音' },
   { id: 'memory', label: '记忆' },
   { id: 'identity', label: '称呼' },
   { id: 'avatar', label: '人设' }
@@ -740,6 +743,7 @@ export function SettingsPage() {
           </div>
         </div>}
       </section>}
+      {tab === 'voice' && <SettingsVoiceSection api={window.whaleSettings} />}
       {tab === 'memory' && <section className="settings-section" role="tabpanel" id="settings-panel-memory" aria-labelledby="settings-tab-memory">
         <div className="settings-row">
           <div className="settings-copy"><label id="memory-switch-label">长期记忆</label><p>从完成的对话提取少量稳定事实；关闭后保留现有条目，但不会用于新对话。</p></div>

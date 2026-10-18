@@ -423,6 +423,47 @@ export interface VoiceConfig {
   siliconFlowAvailable?: boolean
   siliconFlowModel?: string
   siliconFlowBaseUrl?: string
+  ttsAvailable?: boolean
+  ttsModel?: string
+  voice?: string
+  speed?: number
+  autoSpeak?: boolean
+  needsKeyReentry?: boolean
+}
+
+/** Renderer-facing voice settings. It never carries the API key itself. */
+export interface VoiceSettingsPublic {
+  keyConfigured: boolean
+  envKeyAvailable: boolean
+  needsKeyReentry: boolean
+  protectionUnavailable: boolean
+  loadError: boolean
+  voice: string
+  speed: number
+  autoSpeak: boolean
+  baseUrl: string
+  sttModel: string
+  ttsModel: string
+  lastDocumentJob?: VoiceJobProgress
+}
+
+export interface VoiceSettingsPatch {
+  apiKey?: string
+  clearKey?: boolean
+  importEnvKey?: boolean
+  voice?: string
+  speed?: number
+  autoSpeak?: boolean
+  baseUrl?: string
+}
+
+export interface VoiceJobProgress {
+  jobId: string
+  phase: 'preparing' | 'synthesizing' | 'finalizing' | 'done' | 'cancelled' | 'failed'
+  completed: number
+  total: number
+  outputDir?: string
+  message?: string
 }
 
 export interface PetAPI {
@@ -549,6 +590,13 @@ export interface PetAPI {
   setAvatarState(state: AvatarState): Promise<void>
   getVoiceConfig(): Promise<VoiceConfig>
   transcribeAudio(request: { bytes: number[]; mimeType: string }): Promise<{ text: string }>
+  /** Synthesizes one short segment; cached audio returns without a request. */
+  synthesizeSpeech(request: { text: string; voice?: string; speed?: number }): Promise<{
+    audioBase64: string
+    mimeType: string
+    cached: boolean
+  }>
+  onVoiceConfigChanged(callback: (config: VoiceConfig) => void): () => void
   voiceLog(level: 'info' | 'error', message: string, data?: unknown): Promise<void>
   quit(): Promise<void>
   beginDrag(position: { x: number; y: number }): Promise<void>

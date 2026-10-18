@@ -10,6 +10,8 @@ export interface AsrEngine {
   readonly listening: boolean
   start(): void
   stop(): void
+  /** Drops the recording without transcribing it. */
+  cancel(): void
   destroy(): void
 }
 
@@ -33,6 +35,7 @@ export class WebSpeechAsrEngine implements AsrEngine {
   private recognition: SpeechRecognition | undefined
   private pendingFinal = ''
   private _listening = false
+  private cancelled = false
   private destroyed = false
   private readonly events: Required<AsrEvents>
 
@@ -64,6 +67,7 @@ export class WebSpeechAsrEngine implements AsrEngine {
     }
     if (this._listening) return
     this.stop()
+    this.cancelled = false
 
     try {
       this.recognition = new this.Recognition()
@@ -80,7 +84,7 @@ export class WebSpeechAsrEngine implements AsrEngine {
       })
 
       this.recognition.addEventListener('result', (event: Event) => {
-        if (this.destroyed) return
+        if (this.destroyed || this.cancelled) return
         const resultEvent = event as SpeechRecognitionEvent
         let interim = ''
         let final = ''
@@ -148,6 +152,20 @@ export class WebSpeechAsrEngine implements AsrEngine {
     this.recognition = undefined
   }
 
+  cancel(): void {
+    this.cancelled = true
+    this.pendingFinal = ''
+    try {
+      const recognition = this.recognition
+      if (recognition && typeof recognition.abort === 'function') recognition.abort()
+    } catch {
+      // ignore
+    }
+    this._listening = false
+    this.recognition = undefined
+    this.events.onStateChange(false)
+  }
+
   destroy(): void {
     this.destroyed = true
     this.stop()
@@ -170,6 +188,7 @@ export class SiliconFlowAsrEngine implements AsrEngine {
   private chunks: Blob[] = []
   private stream: MediaStream | undefined
   private _listening = false
+  private cancelled = false
   private destroyed = false
   private readonly events: Required<AsrEvents>
 
@@ -206,6 +225,7 @@ export class SiliconFlowAsrEngine implements AsrEngine {
     }
 
     this.stop()
+    this.cancelled = false
     this.chunks = []
     navigator.mediaDevices
       .getUserMedia({ audio: true })
@@ -223,6 +243,7 @@ export class SiliconFlowAsrEngine implements AsrEngine {
         this.mediaRecorder.addEventListener('stop', () => {
           const total = this.chunks.reduce((s, c) => s + c.size, 0)
           void this.bridge.voiceLog('info', '[asr] mediaRecorder stop', { chunks: this.chunks.length, totalSize: total })
+          if (this.cancelled) return
           void this.transcribe()
         })
         this.mediaRecorder.addEventListener('error', (event) => {
@@ -255,13 +276,21 @@ export class SiliconFlowAsrEngine implements AsrEngine {
     this._listening = false
   }
 
+  cancel(): void {
+    this.cancelled = true
+    this.chunks = []
+    this.stop()
+    this._listening = false
+    this.events.onStateChange(false)
+  }
+
   destroy(): void {
     this.destroyed = true
     this.stop()
   }
 
   private async transcribe(): Promise<void> {
-    if (this.destroyed || this.chunks.length === 0) {
+    if (this.destroyed || this.cancelled || this.chunks.length === 0) {
       this.events.onStateChange(false)
       return
     }

@@ -16,11 +16,14 @@ export interface VoiceEngineEvents {
 
 export interface VoiceEngine {
   readonly available: boolean
+  readonly listeningAvailable: boolean
+  readonly speakingAvailable: boolean
   readonly listening: boolean
   readonly speaking: boolean
   startListen(): void
   stopListen(): void
-  speak(text: string): void
+  cancelListen(): void
+  speak(text: string): boolean
   stopSpeaking(): void
   destroy(): void
 }
@@ -41,14 +44,15 @@ function createAsrEngine(events: AsrEvents, siliconFlow: SiliconFlowAsrConfig | 
 export class BrowserVoiceEngine implements VoiceEngine {
   private asr: AsrEngine
   private tts: TtsEngine
-  private _speaking = false
   private destroyed = false
   private readonly events: Required<VoiceEngineEvents>
 
   constructor(
     events: VoiceEngineEvents = {},
     private readonly siliconFlow: SiliconFlowAsrConfig | undefined,
-    private readonly bridge: TranscribeBridge
+    private readonly bridge: TranscribeBridge,
+    /** An externally built TTS engine (already wired to its own events). */
+    externalTts?: TtsEngine
   ) {
     this.events = {
       onStateChange: events.onStateChange ?? (() => {}),
@@ -56,14 +60,14 @@ export class BrowserVoiceEngine implements VoiceEngine {
       onFinal: events.onFinal ?? (() => {}),
       onError: events.onError ?? (() => {}),
       onSpeakStart: events.onSpeakStart ?? (() => {}),
-      onSpeakEnd: events.onSpeakEnd ?? (() => {}),
+      onSpeakEnd: events.onSpeakEnd ?? (() => {})
     }
 
     this.asr = createAsrEngine(
       {
         onStateChange: (listening) => {
           if (this.destroyed) return
-          this.events.onStateChange(listening ? 'listening' : this._speaking ? 'speaking' : 'idle')
+          this.events.onStateChange(listening ? 'listening' : this.tts.speaking ? 'speaking' : 'idle')
         },
         onPartial: (text) => {
           if (this.destroyed) return
@@ -76,34 +80,45 @@ export class BrowserVoiceEngine implements VoiceEngine {
         onError: (message) => {
           if (this.destroyed) return
           this.events.onError(message)
-        },
+        }
       },
       this.siliconFlow,
       this.bridge
     )
 
-    this.tts = new BrowserTtsEngine({
-      onSpeakStart: () => {
-        if (this.destroyed) return
-        this._speaking = true
-        this.events.onSpeakStart()
-        this.events.onStateChange('speaking')
-      },
-      onSpeakEnd: () => {
-        if (this.destroyed) return
-        this._speaking = false
-        this.events.onSpeakEnd()
-        this.events.onStateChange('idle')
-      },
-      onError: (message) => {
-        if (this.destroyed) return
-        this.events.onError(message)
-      },
-    })
+    if (externalTts) {
+      this.tts = externalTts
+    } else {
+      const ttsEvents: TtsEvents = {
+        onSpeakStart: () => {
+          if (this.destroyed) return
+          this.events.onSpeakStart()
+          this.events.onStateChange('speaking')
+        },
+        onSpeakEnd: () => {
+          if (this.destroyed) return
+          this.events.onSpeakEnd()
+          this.events.onStateChange('idle')
+        },
+        onError: (message) => {
+          if (this.destroyed) return
+          this.events.onError(message)
+        }
+      }
+      this.tts = new BrowserTtsEngine(ttsEvents)
+    }
   }
 
   get available(): boolean {
-    return this.asr.available && this.tts.available
+    return this.listeningAvailable
+  }
+
+  get listeningAvailable(): boolean {
+    return this.asr.available
+  }
+
+  get speakingAvailable(): boolean {
+    return this.tts.available
   }
 
   get listening(): boolean {
@@ -124,10 +139,14 @@ export class BrowserVoiceEngine implements VoiceEngine {
     this.asr.stop()
   }
 
-  speak(text: string): void {
-    if (this.destroyed || !text.trim()) return
-    this.stopListen()
-    this.tts.speak(text)
+  cancelListen(): void {
+    this.asr.cancel()
+  }
+
+  speak(text: string): boolean {
+    if (this.destroyed || !text.trim()) return false
+    this.asr.cancel()
+    return this.tts.speak(text)
   }
 
   stopSpeaking(): void {

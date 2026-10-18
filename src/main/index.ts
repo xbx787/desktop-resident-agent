@@ -27,6 +27,8 @@ import { getDeepSeekBalanceKey, getEnabledDeepSeekKey } from './model-config'
 import { loadWindowsMcpConfig } from './mcp-config'
 import { LibraryStore } from './library-store'
 import { searchMarket } from './marketplace'
+import { VoiceService } from './voice-service'
+import { registerVoiceIpc } from './voice-ipc'
 import { isLibraryItem, isLibraryKind } from '../shared/libraries'
 import { generateConversationTitle } from './title-generation'
 import { APP_SLASH_COMMANDS, listClaudeWorkflows, parseAppSlashCommand } from './claude-workflows'
@@ -246,6 +248,15 @@ const claudeKey = process.env.DEEPSEEK_API_KEY?.trim()
 const claudeExecutable = findClaudeExecutable(process.env)
 const windowsMcpServers = loadWindowsMcpConfig(path.join(userHome, '.claude.json'))
 const libraryStore = new LibraryStore(dataRoot)
+const voiceService = new VoiceService({
+  dataRoot,
+  codec: electronSecretCodec(),
+  onJobProgress: (progress) => {
+    if (settingsWindow && !settingsWindow.isDestroyed()) {
+      settingsWindow.webContents.send('pet:voice:job-progress', progress)
+    }
+  }
+})
 
 function libraryServerName(id: string): string {
   let hash = 0x811c9dc5
@@ -1622,34 +1633,40 @@ function registerIpc(): void {
     rendererAvatarState = state === 'idle' ? undefined : state
     publishSnapshot()
   })
-  ipcMain.handle('pet:get-voice-config', (event) => {
-    if (!trusted(event)) return {}
-    return {
-      siliconFlowAvailable: Boolean(process.env.SILICONFLOW_API_KEY),
-    }
-  })
-  ipcMain.handle('pet:transcribe-audio', async (event, request: unknown) => {
-    voiceLog('[ipc] transcribe-audio called', { hasRequest: !!request, senderId: event.sender.id })
-    if (!trusted(event)) throw new Error('无效的界面请求。')
-    if (!request || typeof request !== 'object') throw new Error('转写请求无效。')
-    const req = request as { bytes?: number[]; mimeType?: string }
-    voiceLog('[ipc] request', { bytesLen: req.bytes?.length, mimeType: req.mimeType })
-    if (!Array.isArray(req.bytes) || req.bytes.length === 0) throw new Error('音频数据无效。')
-    const voiceKey = process.env.SILICONFLOW_API_KEY
-    if (!voiceKey) throw new Error('未配置 SiliconFlow API Key。')
-    try {
-      const result = await transcribeAudio({
-        bytes: req.bytes,
-        mimeType: req.mimeType ?? 'audio/webm',
-        apiKey: voiceKey,
-        model: process.env.SILICONFLOW_MODEL,
-        baseUrl: process.env.SILICONFLOW_BASE_URL,
+  registerVoiceIpc({
+    ipcMain,
+    service: voiceService,
+    trusted,
+    settingsTrusted,
+    broadcastConfig: async () => {
+      const config = await voiceService.getVoiceConfig()
+      for (const win of [avatarWindow, panelWindow]) {
+        if (win && !win.isDestroyed()) win.webContents.send('pet:voice-config-changed', config)
+      }
+    },
+    sendJobProgress: (progress) => {
+      if (settingsWindow && !settingsWindow.isDestroyed()) {
+        settingsWindow.webContents.send('pet:voice:job-progress', progress)
+      }
+    },
+    pickDocument: async () => {
+      if (!settingsWindow) throw new Error('设置窗口不可用。')
+      const result = await dialog.showOpenDialog(settingsWindow, {
+        title: '选择要转成音频的文档',
+        properties: ['openFile'],
+        filters: [{ name: '文档', extensions: ['md', 'txt'] }]
       })
-      voiceLog('[ipc] transcribe success', { textLength: result.text?.length ?? 0 })
-      return result
-    } catch (error) {
-      voiceLog('[ipc] transcribe failed', { kind: error instanceof Error ? error.name : 'UnknownError' })
-      throw error
+      const filePath = result.filePaths[0]
+      if (result.canceled || !filePath) return null
+      const info = await fsp.stat(filePath)
+      if (!info.isFile()) throw new Error('请选择一个文档文件。')
+      return { path: filePath, name: path.basename(filePath), size: info.size }
+    },
+    openExternal: async (url) => { await shell.openExternal(url) },
+    openPath: async (target) => {
+      await fsp.mkdir(target, { recursive: true }).catch(() => undefined)
+      const error = await shell.openPath(target)
+      if (error) throw new Error('无法打开目录。')
     }
   })
   ipcMain.handle('pet:voice-log', (event, level: unknown, message: unknown, data: unknown) => {
@@ -1792,6 +1809,7 @@ app.on('before-quit', (event) => {
   // the last save, which looked like the last work block disappearing.
   event.preventDefault()
   controller?.stopAll()
+  voiceService.dispose()
   void sideChat.discardAll()
   if (balanceWindow && !balanceWindow.isDestroyed()) balanceWindow.destroy()
   balanceWindow = undefined

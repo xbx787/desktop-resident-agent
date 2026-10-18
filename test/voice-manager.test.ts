@@ -143,10 +143,13 @@ describe('VoiceManager', () => {
       mode: 'demo',
       modelReady: false,
       claudeCodeReady: false,
-      timelineRevision: 0,
+      timelineRevision: 1,
       avatarState: 'idle',
       taskStatus: 'done',
-      timeline: [{ id: '1', time: new Date().toISOString(), kind: 'assistant', text: '这是回复' }],
+      timeline: [
+        { id: '0', time: new Date().toISOString(), kind: 'user', text: '测试' },
+        { id: '1', time: new Date().toISOString(), kind: 'assistant', text: '这是回复' }
+      ],
     })
     expect(globalThis.speechSynthesis.speak).toHaveBeenCalled()
     manager.destroy()
