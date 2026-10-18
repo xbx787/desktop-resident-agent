@@ -1,26 +1,42 @@
 import { describe, expect, it } from 'vitest'
-import { workAction } from '../src/renderer/work-cluster'
+import type { TimelineEntry } from '../src/shared/contracts'
+import { workAction, workFacts, workFactsParts } from '../src/renderer/work-cluster'
 
 describe('work header action', () => {
-  it('names what the latest call did, with its object as the tail', () => {
-    expect(workAction({ name: 'Edit', detail: 'src/renderer/panel.tsx' }))
-      .toBe('编辑了文件 · src/renderer/panel.tsx')
-    expect(workAction({ name: 'Write', detail: 'README.md' })).toBe('写入了文件 · README.md')
-    expect(workAction({ name: 'Bash', detail: '列出目录' })).toBe('执行了命令 · 列出目录')
+  it('keeps the description only for a command', () => {
+    expect(workAction({ name: 'Bash', detail: '列出目录' })).toBe('执行了命令：列出目录')
+    expect(workAction({ name: 'Edit', detail: 'src/renderer/panel.tsx' })).toBe('编辑了文件')
+    expect(workAction({ name: 'Write', detail: 'README.md' })).toBe('写入了文件')
+    expect(workAction({ name: 'Read', detail: 'D:\\a\\very\\long\\file.tsx' })).toBe('读取了文件')
   })
 
-  it('keeps a phrase-only line when the call carries no input', () => {
-    expect(workAction({ name: 'Read', detail: '' })).toBe('读取了文件')
+  it('keeps a phrase-only line when the command carries no input', () => {
+    expect(workAction({ name: 'Bash', detail: '' })).toBe('执行了命令')
   })
 
   it('falls back to the Chinese tool label for tools it does not know', () => {
     expect(workAction({ name: 'TodoWrite', detail: '' })).toBe('执行了更新任务')
-    expect(workAction({ name: 'mcp__windows__click', detail: '按钮' })).toBe('执行了mcp__windows__click · 按钮')
+    expect(workAction({ name: 'mcp__windows__click', detail: '按钮' })).toBe('执行了mcp__windows__click')
   })
 
   it('truncates a very long command into one readable line', () => {
     const text = workAction({ name: 'Bash', detail: 'x'.repeat(200) })
-    expect(text.length).toBeLessThan(100)
+    expect(text.length).toBeLessThan(60)
     expect(text.endsWith('…')).toBe(true)
+  })
+
+  it('lists only the action names once the stretch has finished', () => {
+    const tool = (id: string, name: string, input?: string): TimelineEntry => ({
+      id, time: '2026-10-18T00:00:00.000Z', kind: 'tool', text: '',
+      tool: { toolUseId: id, name, status: 'done', input }
+    })
+    const items = [
+      tool('a', 'Bash', JSON.stringify({ description: '列出目录' })),
+      tool('b', 'Edit', JSON.stringify({ file_path: 'src/renderer/panel.tsx' })),
+      tool('c', 'Bash', JSON.stringify({ description: '跑测试' }))
+    ]
+    const facts = workFacts(items, Date.parse('2026-10-18T00:00:10.000Z'), false)
+    expect(workFactsParts(facts, false)).toEqual(['执行了命令、编辑了文件'])
+    expect(workFactsParts(facts, true)).toEqual(['执行了命令：跑测试'])
   })
 })

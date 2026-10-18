@@ -611,8 +611,8 @@ body.is-resizing-panel, body.is-resizing-panel * { cursor: nwse-resize !importan
 .panel-cluster-summary::-webkit-details-marker { display: none; }
 .panel-cluster-chevron { flex: none; width: 12px; height: 12px; fill: none; stroke: #90aad8; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; transition: transform .18s ease; }
 .panel-cluster[open] .panel-cluster-chevron { transform: rotate(90deg); }
-.panel-cluster-label { color: #cddcf8; }
-.panel-cluster-facts { display: flex; gap: 12px; min-width: 0; overflow: hidden; color: #7f93bd; font-size: var(--text-xs); }
+.panel-cluster-label { flex: none; color: #cddcf8; white-space: nowrap; }
+.panel-cluster-facts { display: flex; flex: 1 1 auto; gap: 12px; min-width: 0; overflow: hidden; color: #7f93bd; font-size: var(--text-xs); }
 .panel-cluster-facts > span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .panel-cluster-state { margin-left: auto; flex: none; color: #9bd8ad; font-size: var(--glyph-sm); line-height: 1; }
 .panel-cluster-state.is-running { color: #f0c47b; opacity: calc(1 - .45 * var(--panel-pulse-p, 0)); transform: scale(calc(1 - .15 * var(--panel-pulse-p, 0))); }

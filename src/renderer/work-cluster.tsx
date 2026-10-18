@@ -14,26 +14,36 @@ export interface WorkFacts {
   elapsedSeconds: number | null
   /** The latest call, for the one-line "what is it doing" header. */
   lastTool?: { name: string; detail: string }
+  /** What the stretch did, in order and without repeats — the finished header
+   *  shows only these. */
+  actions: string[]
 }
 
-/** Past-tense, one sentence. Unknown tools fall back to their Chinese label so
- *  a future tool still reads as an action instead of a raw identifier. */
+/** Past-tense, one sentence. Only a command keeps its description — file
+ *  names and tool arguments were noise, and a long one squeezed the label
+ *  onto a second line. Unknown tools fall back to their Chinese label so a
+ *  future tool still reads as an action instead of a raw identifier. */
+export function workPhrase(name: string): string {
+  const key = name.trim().toLowerCase()
+  return key === 'read' || key === 'notebookread' ? '读取了文件'
+    : key === 'write' ? '写入了文件'
+      : key === 'edit' || key === 'multiedit' || key === 'notebookedit' ? '编辑了文件'
+        : key === 'bash' ? '执行了命令'
+          : key === 'glob' || key === 'grep' || key === 'search' ? '搜索了文件'
+            : key === 'websearch' || key === 'mcp__deepseek__search' ? '搜索了网页'
+              : key === 'webfetch' || key === 'mcp__deepseek__fetch' ? '抓取了网页'
+                : key === 'task' || key === 'agent' ? '启动了子任务'
+                  : key === 'askuserquestion' ? '询问了你'
+                    : key === 'exitplanmode' ? '提交了计划'
+                      : key === 'skill' ? '调用了技能'
+                        : `执行了${toolLabel(name)}`
+}
+
 export function workAction(tool: { name: string; detail: string }): string {
-  const name = tool.name.trim().toLowerCase()
-  const phrase = name === 'read' || name === 'notebookread' ? '读取了文件'
-    : name === 'write' ? '写入了文件'
-      : name === 'edit' || name === 'multiedit' || name === 'notebookedit' ? '编辑了文件'
-        : name === 'bash' ? '执行了命令'
-          : name === 'glob' || name === 'grep' || name === 'search' ? '搜索了文件'
-            : name === 'websearch' || name === 'mcp__deepseek__search' ? '搜索了网页'
-              : name === 'webfetch' || name === 'mcp__deepseek__fetch' ? '抓取了网页'
-                : name === 'task' || name === 'agent' ? '启动了子任务'
-                  : name === 'askuserquestion' ? '询问了你'
-                    : name === 'exitplanmode' ? '提交了计划'
-                      : name === 'skill' ? '调用了技能'
-                        : `执行了${toolLabel(tool.name)}`
+  const phrase = workPhrase(tool.name)
+  if (tool.name.trim().toLowerCase() !== 'bash') return phrase
   const detail = tool.detail.replace(/\s+/gu, ' ').trim()
-  return detail ? `${phrase} · ${detail.length > 72 ? `${detail.slice(0, 72)}…` : detail}` : phrase
+  return detail ? `${phrase}：${detail.length > 40 ? `${detail.slice(0, 40)}…` : detail}` : phrase
 }
 
 function toolSummaryOf(names: string[]): string {
@@ -47,9 +57,11 @@ function toolSummaryOf(names: string[]): string {
 /** Everything the collapsed header has to answer: how long it thought, what it
  *  ran, how many commands, how long the whole stretch took. */
 export function workFacts(items: TimelineEntry[], nowMs: number, running: boolean): WorkFacts {
-  const tools = items
+  const toolNames = items
     .filter((entry) => entry.kind === 'tool')
-    .map((entry) => toolLabel(entry.tool?.name ?? (entry.text.trim().split(/\r?\n/, 1)[0].split(' · ')[0] || '工具')))
+    .map((entry) => entry.tool?.name ?? (entry.text.trim().split(/\r?\n/, 1)[0].split(' · ')[0] || '工具'))
+  const tools = toolNames.map(toolLabel)
+  const actions = [...new Set(toolNames.map(workPhrase))]
   const thinkingSeconds = items
     .filter((entry) => entry.kind === 'thinking')
     .reduce((sum, entry) => sum + (thinkingElapsedSeconds(entry, nowMs) ?? 0), 0)
@@ -61,15 +73,15 @@ export function workFacts(items: TimelineEntry[], nowMs: number, running: boolea
   const lastTool = lastEntry?.tool
     ? { name: lastEntry.tool.name, detail: toolArgumentPreview(lastEntry.tool.input) }
     : undefined
-  return { steps: items.length, toolCount: tools.length, toolSummary: toolSummaryOf(tools), thinkingSeconds, elapsedSeconds, lastTool }
+  return { steps: items.length, toolCount: tools.length, toolSummary: toolSummaryOf(tools), thinkingSeconds, elapsedSeconds, lastTool, actions }
 }
 
-/** The header's extra fact: what the assistant is doing right now (or last
- *  did). One sentence, with the file/command as its tail — a count said
- *  nothing about the work itself. The hover title still carries the full
- *  breakdown. */
-export function workFactsParts(facts: WorkFacts): string[] {
-  return facts.lastTool ? [workAction(facts.lastTool)] : []
+/** While running: the latest action; a command also keeps its one-line
+ *  description. Once finished: just the action names, in order, with nothing
+ *  else — "执行了命令、编辑了文件". */
+export function workFactsParts(facts: WorkFacts, running: boolean): string[] {
+  if (running) return facts.lastTool ? [workAction(facts.lastTool)] : []
+  return facts.actions.length ? [facts.actions.join('、')] : []
 }
 
 /** Everything the header knows, tool breakdown included — the hover title and
@@ -115,7 +127,7 @@ export const WorkCluster = memo(function WorkCluster({ items, running, renderEnt
     if (!foldedByHandRef.current) setOpen(true)
   }, [running])
   const facts = workFacts(items, Date.now(), running)
-  const parts = workFactsParts(facts)
+  const parts = workFactsParts(facts, running)
   const fullText = workFactsText(facts)
   const fold = () => {
     foldedByHandRef.current = true
@@ -168,7 +180,7 @@ export const TurnProcess = memo(function TurnProcess({ segments, renderEntry, re
   const items = segments.flatMap((segment) => segment.kind === 'work' ? segment.items : [segment.entry])
   // A finished stretch: every span is closed, so the clock never reads nowMs.
   const facts = workFacts(items, 0, false)
-  const parts = workFactsParts(facts)
+  const parts = workFactsParts(facts, false)
   const fullText = workFactsText(facts)
   return <details className="panel-cluster is-turn-process" open={open}
     onToggle={(event) => setOpen(event.currentTarget.open)}>
