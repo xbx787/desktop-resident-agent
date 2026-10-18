@@ -842,9 +842,9 @@ body.panel-window .panel-bubble.is-expanded {
 .panel-tool-button.panel-approval-button.is-default { color: #93a9cc; }
 .panel-tool-button.panel-approval-button.is-edits { color: #93b7a2; }
 .panel-tool-button.panel-approval-button.is-bypass { color: #b87781; border-color: rgba(184, 119, 129, .35); background: rgba(184, 119, 129, .08); }
-.panel-approval-menu { position: absolute; z-index: 10; bottom: calc(100% + 8px); left: 0; display: grid; width: 248px; padding: 5px 6px; border: 1px solid rgba(190, 212, 255, .32); border-radius: 12px; background: rgba(23, 43, 87, .98); box-shadow: 0 6px 20px rgba(5, 14, 38, .3); opacity: 0; visibility: hidden; pointer-events: none; filter: blur(3px); transform: translateY(6px); transition: opacity .14s ease, visibility .18s ease, filter .18s ease, transform .18s ease; }
+.panel-approval-menu { position: absolute; z-index: 10; bottom: calc(100% + 4px); left: 0; display: grid; width: 248px; padding: 5px 6px; border: 1px solid rgba(190, 212, 255, .32); border-radius: 12px; background: rgba(23, 43, 87, .98); box-shadow: 0 6px 20px rgba(5, 14, 38, .3); opacity: 0; visibility: hidden; pointer-events: none; filter: blur(3px); transform: translateY(6px); transition: opacity .14s ease, visibility .18s ease, filter .18s ease, transform .18s ease; }
 .panel-approval-menu.is-open { opacity: 1; visibility: visible; pointer-events: auto; filter: none; transform: none; }
-.panel-approval-pick { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px; border: 0; border-radius: 7px; color: #e7f0ff; background: transparent; text-align: left; font-family: inherit; }
+.panel-approval-pick { display: flex; align-items: center; justify-content: flex-start; gap: 8px; padding: 6px 8px; border: 0; border-radius: 7px; color: #e7f0ff; background: transparent; text-align: left; font-family: inherit; }
 /* 每个选项最左边放它自己的图标，颜色和三档按钮保持一致。 */
 .panel-approval-pick-icon { display: grid; place-items: center; flex: none; width: 16px; height: 16px; color: #93a9cc; }
 .panel-approval-pick-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
@@ -852,10 +852,10 @@ body.panel-window .panel-bubble.is-expanded {
 .panel-approval-pick-icon.is-bypassPermissions { color: #b87781; }
 .panel-approval-pick.is-active .panel-approval-pick-icon { filter: brightness(1.18); }
 .panel-approval-pick:hover, .panel-approval-pick.is-active { background: rgba(181, 205, 255, .14); }
-.panel-approval-pick-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.panel-approval-pick-text { display: flex; flex: 1; flex-direction: column; gap: 1px; min-width: 0; }
 .panel-approval-pick-text > span { font-size: var(--text-sm); }
 .panel-approval-pick-text small { color: #93aad4; font-size: var(--text-xs); line-height: 1.4; }
-.panel-approval-pick .panel-model-check { color: #9bd8ad; font-size: var(--text-sm); }
+.panel-approval-pick .panel-model-check { margin-left: auto; color: #9bd8ad; font-size: var(--text-sm); }
 
 /* Full access gets one deliberate stop: a plain-language warning over the
    panel, not a checkbox buried in a menu. */
