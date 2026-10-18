@@ -59,7 +59,7 @@ function bridge(overrides: Partial<SettingsAPI> = {}): SettingsAPI {
     installLibrary: async () => ({ items: [installed], busy: false }),
     removeLibrary: async () => ({ items: [], busy: false }),
     memoryList: async () => [], memorySetEnabled: async (enabled) => enabled,
-    memoryUpdate: async (id, text) => ({ id, text, sourceConversationId: null, sourceAt: null, createdAt: '', updatedAt: '' }),
+    memoryUpdate: async (id, text) => ({ id, text, sourceConversationId: 'conversation-1', sourceAt: '2026-10-18T00:00:00.000Z', createdAt: '', updatedAt: '' }),
     memoryDelete: async () => {},
     growthStatus: async () => ({ available: false, proposals: [] }), growthPropose: async () => { throw new Error('unused') },
     growthExperiment: async () => { throw new Error('unused') }, growthAdopt: async () => { throw new Error('unused') },

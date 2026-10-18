@@ -126,7 +126,7 @@ export const WorkCluster = memo(function WorkCluster({ items, running, renderEnt
       foldedByHandRef.current = !event.currentTarget.open
       setOpen(event.currentTarget.open)
     }}>
-    <summary className="panel-cluster-summary" title={fullText} aria-label={`${fullText || '工作记录'}，单击${open ? '收起' : '展开'}`}>
+    <summary className="panel-cluster-summary" aria-label={`${fullText || '工作记录'}，单击${open ? '收起' : '展开'}`}>
       <Chevron />
       <ClusterLabel running={running} />
       {parts.length > 0 && <span className="panel-cluster-facts">{parts.map((part) => <span key={part}>{part}</span>)}</span>}
@@ -172,7 +172,7 @@ export const TurnProcess = memo(function TurnProcess({ segments, renderEntry, re
   const fullText = workFactsText(facts)
   return <details className="panel-cluster is-turn-process" open={open}
     onToggle={(event) => setOpen(event.currentTarget.open)}>
-    <summary className="panel-cluster-summary" title={fullText} aria-label={`过程：${fullText || '工作记录'}，单击${open ? '收起' : '展开'}`}>
+    <summary className="panel-cluster-summary" aria-label={`过程：${fullText || '工作记录'}，单击${open ? '收起' : '展开'}`}>
       <Chevron />
       <ClusterLabel running={false} />
       {parts.length > 0 && <span className="panel-cluster-facts">{parts.map((part) => <span key={part}>{part}</span>)}</span>}
