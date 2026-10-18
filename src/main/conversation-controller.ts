@@ -530,7 +530,7 @@ export class ConversationController {
       if (target.archivedAt !== null) throw new ConversationStoreError('ARCHIVED_CONVERSATION', '请先恢复归档会话。')
       const runtime = await this.ensureRuntime(id, target)
       if (runtime.getSnapshot().mode !== 'claude_code' && attachments.some((item) => item.path && !item.content)) {
-        throw new ConversationStoreError('INVALID_INPUT', '当前模型没有本地文件读取工具。请切换到 Claude Code 模式后再发送此文件。')
+        throw new ConversationStoreError('INVALID_INPUT', '当前模型没有本地文件读取工具。请切换到小鲸引擎模式后再发送此文件。')
       }
       const queue = this.queueOf(id)
       if (this.pausedQueues.has(id) || runtime.getQueuePauseReason()) {

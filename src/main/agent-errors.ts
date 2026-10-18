@@ -1,3 +1,5 @@
+import { publicErrorText } from '../shared/error-copy'
+
 /** Why a native turn failed, and what the host should do about it. */
 export type AgentFailureKind = 'authentication' | 'configuration' | 'transport' | 'process-exited' | 'session-missing' | 'unknown'
 
@@ -46,10 +48,10 @@ export function classifyAgentFailure(error: unknown): AgentFailure {
     return { kind: 'transport', message: '连接 DeepSeek 失败（网络或代理不可达）。检查网络后重试即可。', invalidatesSession: true }
   }
   if (/process exited|epipe|terminated|sigkill|sigterm|killed|会话意外结束/.test(text)) {
-    return { kind: 'process-exited', message: 'Claude Code 进程意外退出；下一条消息会自动重新启动它。', invalidatesSession: true }
+    return { kind: 'process-exited', message: '小鲸引擎进程意外退出；下一条消息会自动重新启动它。', invalidatesSession: true }
   }
   if (/enoent|eacces|spawn|not found|permission denied/.test(text)) {
-    return { kind: 'configuration', message: raw || 'Claude Code 启动失败。', invalidatesSession: false }
+    return { kind: 'configuration', message: publicErrorText(raw) || '小鲸引擎启动失败。', invalidatesSession: false }
   }
-  return { kind: 'unknown', message: raw || 'Claude Agent 运行失败。', invalidatesSession: false }
+  return { kind: 'unknown', message: publicErrorText(raw) || '小鲸运行失败。', invalidatesSession: false }
 }

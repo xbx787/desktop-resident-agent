@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AppSnapshot, PetAPI, TimelineEntry } from '../shared/contracts';
+import { publicErrorText } from '../shared/error-copy';
 
 export function petBridge(): PetAPI {
   const bridge = window.pet;
@@ -10,7 +11,7 @@ export function petBridge(): PetAPI {
 }
 
 function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return publicErrorText(error instanceof Error ? error.message : String(error));
 }
 
 /**

@@ -7,7 +7,7 @@ export class AgentMessageChannel implements AsyncIterable<SDKUserMessage> {
   private closed = false
 
   enqueue(message: SDKUserMessage): void {
-    if (this.closed) throw new Error('Claude Agent 输入通道已经关闭。')
+    if (this.closed) throw new Error('小鲸引擎输入通道已经关闭。')
     const waiter = this.waiter
     if (waiter) {
       this.waiter = undefined

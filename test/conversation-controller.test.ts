@@ -443,7 +443,7 @@ describe('conversation controller', () => {
     await controller.initialize()
     await expect(controller.sendMessage('分析文档', [
       { name: 'draft.docx', content: '', path: path.join(testRoot, 'draft.docx') }
-    ])).rejects.toThrow('请切换到 Claude Code 模式')
+    ])).rejects.toThrow('请切换到小鲸引擎模式')
   })
 
   it('uses native steer inside the current turn and preserves the queued follow-up', async () => {

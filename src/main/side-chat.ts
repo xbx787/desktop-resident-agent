@@ -52,7 +52,7 @@ export function validateSideChatMessage(text: string, attachments: UserAttachmen
     throw new Error(`/${slash?.name ?? 'goal'} 仅适用于主会话。`)
   }
   if (mode !== 'claude_code' && attachments.some((item) => item.path && !item.content)) {
-    throw new Error('当前模型没有本地文件读取工具，请切换到 Claude Code 模式。')
+    throw new Error('当前模型没有本地文件读取工具，请切换到小鲸引擎模式。')
   }
   return clean
 }

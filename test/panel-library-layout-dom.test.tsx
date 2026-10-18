@@ -122,7 +122,7 @@ describe('conversation library layout', () => {
     await renderAtWidth(554)
     const meta = host.querySelector('.panel-session-meta')
     expect(meta).not.toBeNull()
-    expect(meta?.textContent).toContain('Claude Code + DeepSeek')
+    expect(meta?.textContent).toContain('小鲸引擎 + DeepSeek')
     expect(meta?.textContent).toContain('创建')
     expect(meta?.textContent).toContain('活动')
     expect(meta?.textContent).toContain('条消息')

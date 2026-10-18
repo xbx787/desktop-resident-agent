@@ -307,7 +307,7 @@ export class ClaudeAgentClient implements ModelClient {
     onThinking?: (text: string, segment?: number) => void
   ): Promise<ModelReply> {
     if (signal.aborted) throw abortError()
-    if (!existsSync(this.executable)) throw new Error('未找到 Claude Code 引擎（包内与系统均缺失）。')
+    if (!existsSync(this.executable)) throw new Error('未找到小鲸引擎（包内与系统均缺失）。')
     const latestUser = [...history].reverse().find((line) => line.role === 'user')?.content
     if (!latestUser) throw new Error('没有可发送的用户消息。')
     // An ephemeral side session has no transcript on disk. If its SDK query
@@ -847,7 +847,7 @@ export class ClaudeAgentClient implements ModelClient {
     if (signal.aborted) return Promise.reject(abortError())
     if (this.activeTurn) return Promise.reject(new Error('当前任务尚未完成。'))
     const channel = this.messageChannel
-    if (!channel || !this.agentQuery) return Promise.reject(new Error('Claude Agent 会话未启动。'))
+    if (!channel || !this.agentQuery) return Promise.reject(new Error('小鲸引擎会话未启动。'))
     const message = userMessage(prompt)
     return new Promise<ModelReply>((resolve, reject) => {
       const onAbort = (): void => {
@@ -877,10 +877,10 @@ export class ClaudeAgentClient implements ModelClient {
         if (active !== this.agentQuery) return
         this.handleMessage(message)
       }
-      if (active === this.agentQuery) this.failQuery(new Error('Claude Agent 会话意外结束。'))
+      if (active === this.agentQuery) this.failQuery(new Error('小鲸引擎会话意外结束。'))
     } catch (error) {
       if (active === this.agentQuery) {
-        const message = error instanceof Error ? error.message : 'Claude Agent 会话失败。'
+        const message = error instanceof Error ? error.message : '小鲸引擎会话失败。'
         this.failQuery(new Error(this.redact(message)))
       }
     }
@@ -940,7 +940,7 @@ export class ClaudeAgentClient implements ModelClient {
       if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
         turn.partial += event.delta.text
         if (turn.partial.length > MAX_REPLY_LENGTH) {
-          this.finishTurn(turn, new Error('Claude Agent 回复超过限制。'))
+          this.finishTurn(turn, new Error('小鲸引擎回复超过限制。'))
           void this.closeQuery()
           return
         }
@@ -976,8 +976,8 @@ export class ClaudeAgentClient implements ModelClient {
       const detail = message.subtype === 'success' ? message.result?.trim() : undefined
       const reason = detail ? (detail.length > 300 ? `${detail.slice(0, 300)}…` : detail) : null
       this.finishTurn(turn, new Error(reason
-        ? `Claude Agent 运行失败：${reason}`
-        : `Claude Agent 运行失败（${message.subtype}）。`))
+        ? `小鲸运行失败：${reason}`
+        : `小鲸运行失败（${message.subtype}）。`))
       return
     }
     const finalText = message.result?.trim() || turn.partial.trim() || '这次没有生成文字回复。'

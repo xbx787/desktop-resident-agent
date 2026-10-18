@@ -4,6 +4,7 @@ import type { ConversationSettings, GrowthProposal, ModelProfile } from '../shar
 import { PERSONA_PRESETS } from '../shared/personas'
 import { personaAvatarUrl } from './avatar-art'
 import { PROVIDER_CATALOG } from '../shared/provider-catalog'
+import { publicErrorText } from '../shared/error-copy'
 import type { GrowthOverview, SettingsAPI } from '../preload/settings'
 import type { MemoryItem } from '../main/memory-service'
 import './settings.css'
@@ -15,7 +16,7 @@ declare global {
 }
 
 function errorMessage(cause: unknown): string {
-  return cause instanceof Error ? cause.message : String(cause)
+  return publicErrorText(cause instanceof Error ? cause.message : String(cause))
 }
 
 /** The model form's local draft; a catalog pick fills the fields, a custom

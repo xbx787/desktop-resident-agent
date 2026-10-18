@@ -1,5 +1,6 @@
 import { isApprovalMode, type AgentGoal, type ApprovalMode, type AppSnapshot, type AskAnswers, type ContextUsageSnapshot, type EffortLevel, type ModelMode, type ModelProfile, type ProposedAction, type TimelineEntry, type ToolPermissionRequest, type UserAttachment } from '../shared/contracts'
 import { isImageAttachmentName } from '../shared/image-preview'
+import { publicErrorText } from '../shared/error-copy'
 import { getPeakStatus, usageSpendYuan } from '../shared/deepseek-pricing'
 import { toolLabel } from '../shared/tool-labels'
 import { AgentTurnError } from './agent-errors'
@@ -129,7 +130,7 @@ export class AgentRuntime {
   setModelMode(mode: ModelMode, silent = false): void {
     if (this.isRunning()) throw new Error('任务进行中时不能切换模型。')
     if (mode === 'live' && !this.configuredModel) throw new Error('尚未配置 DeepSeek API Key。')
-    if (mode === 'claude_code' && !this.claudeCodeModel) throw new Error('Claude Code 或 DeepSeek API Key 尚未就绪。')
+    if (mode === 'claude_code' && !this.claudeCodeModel) throw new Error('小鲸引擎或 DeepSeek API Key 尚未就绪。')
     if (this.state.mode === mode) return
     this.contextGeneration += 1
     if (this.state.mode === 'claude_code') this.disposeClaudeQuery()
@@ -144,7 +145,7 @@ export class AgentRuntime {
     this.state.taskMetrics = undefined
     this.state.modelReady = Boolean(this.configuredModel)
     if (silent) this.emit()
-    else this.add('system', mode === 'claude_code' ? '已切换到 Claude Code + DeepSeek。' : mode === 'live' ? '已切换到 DeepSeek Flash。' : '已切换到演示模式。')
+    else this.add('system', mode === 'claude_code' ? '已切换到小鲸引擎 + DeepSeek。' : mode === 'live' ? '已切换到 DeepSeek Flash。' : '已切换到演示模式。')
   }
 
   /** Memory is added only to the model request copy, never to the visible or saved history. */
@@ -453,7 +454,7 @@ export class AgentRuntime {
       return
     }
     if (this.state.mode !== 'claude_code' && attachments.some((item) => item.path && !item.content)) {
-      this.add('system', '当前模型没有本地文件读取工具。请切换到 Claude Code 模式后再发送此文件。')
+      this.add('system', '当前模型没有本地文件读取工具。请切换到小鲸引擎模式后再发送此文件。')
       return
     }
     const context = attachmentContext(attachments)
@@ -584,7 +585,7 @@ export class AgentRuntime {
       this.state.avatarState = 'error'
       this.closeThinkingEntries()
       this.finishRunningTools('未完成')
-      this.add('system', error instanceof Error ? error.message : '模型请求失败。')
+      this.add('system', error instanceof Error ? publicErrorText(error.message) : '模型请求失败。')
     } finally {
       if (currentGeneration === this.generation) this.activeRequest = undefined
     }
@@ -614,7 +615,7 @@ export class AgentRuntime {
     } catch (error) {
       this.state.taskStatus = 'failed'
       this.state.avatarState = 'error'
-      this.add('system', error instanceof Error ? error.message : '测试笔记写入失败。')
+      this.add('system', error instanceof Error ? publicErrorText(error.message) : '测试笔记写入失败。')
     }
   }
 
@@ -866,7 +867,7 @@ export class AgentRuntime {
     } catch (error) {
       this.state.taskStatus = 'failed'
       this.state.avatarState = 'error'
-      this.add('system', error instanceof Error ? error.message : '无法准备笔记草稿。')
+      this.add('system', error instanceof Error ? publicErrorText(error.message) : '无法准备笔记草稿。')
     }
   }
 

@@ -225,7 +225,7 @@ export class GrowthExperiments {
   }
 
   private async restrictedAgent(worktree: string, proposal: GrowthProposal, provider: GrowthProvider): Promise<void> {
-    if (!this.options.claudeExecutable) throw new Error('Claude Code 引擎不可用。')
+    if (!this.options.claudeExecutable) throw new Error('小鲸引擎不可用。')
     const instruction = [
       '你正在小鲸项目的独立 Git worktree 中做一项已获用户批准的实验。只修改此 worktree 内的项目文件。',
       '你只有 Read、Grep、Glob、Edit、Write 工具；所有文件路径和搜索目录都必须显式指定且位于 src、test 或 docs。不要请求 Bash、MCP、子代理、网络或修改系统配置。',

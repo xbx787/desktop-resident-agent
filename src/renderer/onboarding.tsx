@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { PROVIDER_CATALOG } from '../shared/provider-catalog';
 import { apiKeyHint, normalizeApiKey } from '../shared/onboarding';
+import { publicErrorText } from '../shared/error-copy';
 import { canAdvance, nextStep, ONBOARDING_STEPS, previousStep, stepIndex, type OnboardingStep } from './onboarding-flow';
 import './onboarding.css';
 
@@ -28,7 +29,7 @@ const DEEPSEEK = PROVIDER_CATALOG.find((provider) => provider.id === 'deepseek')
 const DEFAULT_MODEL = DEEPSEEK.models[0]?.id ?? 'deepseek-flash[1m]';
 
 function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return publicErrorText(error instanceof Error ? error.message : String(error));
 }
 
 /** Turns a failed probe into one actionable line. */

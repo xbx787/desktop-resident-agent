@@ -210,7 +210,7 @@ function stampText(iso: string): string {
   return `${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
 }
 
-const modeLabels: Record<ModelMode, string> = { demo: '演示模式', live: 'DeepSeek 直连', claude_code: 'Claude Code + DeepSeek' };
+const modeLabels: Record<ModelMode, string> = { demo: '演示模式', live: 'DeepSeek 直连', claude_code: '小鲸引擎 + DeepSeek' };
 
 /** First line of a user message, trimmed for the turn menu's title. */
 function turnMenuTitle(entry: TimelineEntry): string {
@@ -397,7 +397,7 @@ function ApprovalCard({ proposal, busy, onApprove, onReject }: {
       </div>
       <p className="panel-approval-description">{proposal.description}</p>
       <dl className="panel-approval-detail">
-        <div><dt>操作</dt><dd>{note ? '写入测试笔记' : 'Claude Code 工具请求'}</dd></div>
+        <div><dt>操作</dt><dd>{note ? '写入测试笔记' : '小鲸工具请求'}</dd></div>
         <div><dt>目标</dt><dd className="panel-path">{proposal.target}</dd></div>
       </dl>
       <div className="panel-preview-label">{note ? '将写入的内容' : '完整参数'}</div>

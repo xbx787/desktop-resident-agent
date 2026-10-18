@@ -458,9 +458,9 @@ describe('Claude Agent SDK persistent streaming session', () => {
     try {
       const events: Array<{ phase: string; isError?: boolean; output?: string }> = []
       await expect(client.respond([{ role: 'user', content: '测试命令' }], new AbortController().signal,
-        undefined, undefined, (event) => events.push(event))).rejects.toThrow('Claude Agent 运行失败')
+        undefined, undefined, (event) => events.push(event))).rejects.toThrow('小鲸运行失败')
       expect(events).toHaveLength(2)
-      expect(events[1]).toMatchObject({ phase: 'result', isError: true, output: 'Claude Agent 运行失败（error_during_execution）。' })
+      expect(events[1]).toMatchObject({ phase: 'result', isError: true, output: '小鲸运行失败（error_during_execution）。' })
     } finally { await client.dispose() }
   })
 
