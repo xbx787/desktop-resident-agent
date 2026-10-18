@@ -55,7 +55,7 @@ async function mount(api: SettingsAPI): Promise<void> {
 function bridge(overrides: Partial<SettingsAPI> = {}): SettingsAPI {
   return {
     get: async () => settings, update: async (patch) => ({ ...settings, ...patch }),
-    version: async () => '0.0.47', close: async () => {}, quit: async () => {}, setAvatar: async () => {},
+    version: async () => '0.0.47', close: async () => {}, quit: async () => {}, restart: async () => {}, setAvatar: async () => {},
     workspace: async () => ({ path: 'D:\\project', saved: false }),
     pickWorkspace: async () => null,
     migrateWorkspace: async (next) => ({ path: next }),

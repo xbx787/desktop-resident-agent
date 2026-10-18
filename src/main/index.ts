@@ -1002,6 +1002,11 @@ function registerIpc(): void {
     if (!settingsTrusted(event)) return
     app.quit()
   })
+  ipcMain.handle('pet:settings:restart', (event) => {
+    if (!settingsTrusted(event)) return
+    relaunchOnQuit = true
+    app.quit()
+  })
   ipcMain.handle('pet:libraries:list', async (event) => {
     if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
     return libraryStore.snapshot()
@@ -1777,6 +1782,8 @@ if (ownsSingleInstance) void app.whenReady().then(async () => {
 })
 
 let quitting = false
+/** Set by the settings restart button; consumed once the turn is saved. */
+let relaunchOnQuit = false
 app.on('before-quit', (event) => {
   if (quitting) return
   quitting = true
@@ -1795,7 +1802,10 @@ app.on('before-quit', (event) => {
     new Promise<void>((resolve) => setTimeout(resolve, 2_000))
   ]).catch((error: unknown) => {
     console.error('Final conversation save failed:', error)
-  }).finally(() => app.quit())
+  }).finally(() => {
+    if (relaunchOnQuit) app.relaunch()
+    app.quit()
+  })
 })
 
 app.on('window-all-closed', () => app.quit())

@@ -49,7 +49,7 @@ function click(label: string): void {
 function bridge(overrides: Partial<SettingsAPI> = {}): SettingsAPI {
   return {
     get: async () => settings, update: async (patch) => ({ ...settings, ...patch }),
-    version: async () => '0.0.75', close: async () => {}, quit: async () => {}, setAvatar: async () => {},
+    version: async () => '0.0.75', close: async () => {}, quit: async () => {}, restart: async () => {}, setAvatar: async () => {},
     workspace: async () => ({ path: 'D:\\project', saved: false }),
     pickWorkspace: async () => null, migrateWorkspace: async (next) => ({ path: next }),
     readAvatar: async () => null, saveModelProfile: async () => {},

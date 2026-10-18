@@ -196,6 +196,7 @@ button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55
 
 /* 退出整个小鲸：放着不显眼，点开才确认。 */
 .settings-quit { display: flex; justify-content: flex-end; padding: 14px 2px 0; }
+.settings-quit-actions-row { display: flex; gap: 8px; }
 .settings-quit-button { height: 30px; padding: 0 12px; border: 1px solid rgba(240, 126, 144, .26); border-radius: 8px; color: #ffc4ca; background: transparent; font-size: var(--text-sm); }
 .settings-quit-button:hover { background: rgba(240, 126, 144, .1); }
 .settings-quit-confirm { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; padding: 10px 12px; border: 1px solid rgba(240, 196, 123, .4); border-radius: 10px; background: rgba(240, 196, 123, .07); }

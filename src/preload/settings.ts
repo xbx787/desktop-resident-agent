@@ -23,6 +23,8 @@ export interface SettingsAPI {
   close(): Promise<void>
   /** Quits the whole app; the conversation store is already on disk. */
   quit(): Promise<void>
+  /** Saves, closes, and launches the same executable again. */
+  restart(): Promise<void>
   /** Stores an avatar image (PNG/JPEG bytes) for `user` or `assistant`. */
   setAvatar(kind: 'user' | 'assistant', bytes: number[]): Promise<void>
   /** Data URL of the stored avatar, or null when none is set. */
@@ -80,7 +82,8 @@ const api: SettingsAPI = {
   growthDiscard: (id) => ipcRenderer.invoke('pet:growth:discard', id),
   growthUpdateNotes: (id, notes) => ipcRenderer.invoke('pet:growth:update-notes', id, notes),
   close: () => ipcRenderer.invoke('pet:settings:close'),
-  quit: () => ipcRenderer.invoke('pet:settings:quit')
+  quit: () => ipcRenderer.invoke('pet:settings:quit'),
+  restart: () => ipcRenderer.invoke('pet:settings:restart')
 }
 
 // 与 pet preload 相同：字号档只写 <html data-ui-size>，CSS 自己派生。
