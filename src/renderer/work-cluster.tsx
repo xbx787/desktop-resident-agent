@@ -23,24 +23,39 @@ export interface WorkFacts {
  *  names and tool arguments were noise, and a long one squeezed the label
  *  onto a second line. Unknown tools fall back to their Chinese label so a
  *  future tool still reads as an action instead of a raw identifier. */
-export function workPhrase(name: string): string {
-  const key = name.trim().toLowerCase()
-  return key === 'read' || key === 'notebookread' ? '读取了文件'
-    : key === 'write' ? '写入了文件'
-      : key === 'edit' || key === 'multiedit' || key === 'notebookedit' ? '编辑了文件'
-        : key === 'bash' ? '执行了命令'
-          : key === 'glob' || key === 'grep' || key === 'search' ? '搜索了文件'
-            : key === 'websearch' || key === 'mcp__deepseek__search' ? '搜索了网页'
-              : key === 'webfetch' || key === 'mcp__deepseek__fetch' ? '抓取了网页'
-                : key === 'task' || key === 'agent' ? '启动了子任务'
-                  : key === 'askuserquestion' ? '询问了你'
-                    : key === 'exitplanmode' ? '提交了计划'
-                      : key === 'skill' ? '调用了技能'
-                        : `执行了${toolLabel(name)}`
+const ACTION_WORDS: Record<string, { doing: string; done: string }> = {
+  read: { doing: '读取文件', done: '读取了文件' },
+  notebookread: { doing: '读取笔记本', done: '读取了笔记本' },
+  write: { doing: '写入文件', done: '写入了文件' },
+  edit: { doing: '编辑文件', done: '编辑了文件' },
+  multiedit: { doing: '批量编辑文件', done: '批量编辑了文件' },
+  notebookedit: { doing: '编辑笔记本', done: '编辑了笔记本' },
+  bash: { doing: '执行命令', done: '执行了命令' },
+  glob: { doing: '搜索文件', done: '搜索了文件' },
+  grep: { doing: '搜索文件', done: '搜索了文件' },
+  search: { doing: '搜索文件', done: '搜索了文件' },
+  websearch: { doing: '搜索网页', done: '搜索了网页' },
+  'mcp__deepseek__search': { doing: '搜索网页', done: '搜索了网页' },
+  webfetch: { doing: '抓取网页', done: '抓取了网页' },
+  'mcp__deepseek__fetch': { doing: '抓取网页', done: '抓取了网页' },
+  task: { doing: '启动子任务', done: '启动了子任务' },
+  agent: { doing: '启动子任务', done: '启动了子任务' },
+  askuserquestion: { doing: '询问你', done: '询问了你' },
+  exitplanmode: { doing: '提交计划', done: '提交了计划' },
+  skill: { doing: '调用技能', done: '调用了技能' }
+}
+
+/** `done` distinguishes a live call from a finished stretch: 正在工作 says
+ *  「执行命令」/「读取文件」, 已工作 says 「执行了命令」/「读取了文件」. */
+export function workPhrase(name: string, done = true): string {
+  const words = ACTION_WORDS[name.trim().toLowerCase()]
+  if (words) return done ? words.done : words.doing
+  const label = toolLabel(name)
+  return done ? `执行了${label}` : `执行${label}`
 }
 
 export function workAction(tool: { name: string; detail: string }): string {
-  const phrase = workPhrase(tool.name)
+  const phrase = workPhrase(tool.name, false)
   if (tool.name.trim().toLowerCase() !== 'bash') return phrase
   const detail = tool.detail.replace(/\s+/gu, ' ').trim()
   return detail ? `${phrase}：${detail.length > 40 ? `${detail.slice(0, 40)}…` : detail}` : phrase
@@ -61,7 +76,7 @@ export function workFacts(items: TimelineEntry[], nowMs: number, running: boolea
     .filter((entry) => entry.kind === 'tool')
     .map((entry) => entry.tool?.name ?? (entry.text.trim().split(/\r?\n/, 1)[0].split(' · ')[0] || '工具'))
   const tools = toolNames.map(toolLabel)
-  const actions = [...new Set(toolNames.map(workPhrase))]
+  const actions = [...new Set(toolNames.map((name) => workPhrase(name)))]
   const thinkingSeconds = items
     .filter((entry) => entry.kind === 'thinking')
     .reduce((sum, entry) => sum + (thinkingElapsedSeconds(entry, nowMs) ?? 0), 0)
