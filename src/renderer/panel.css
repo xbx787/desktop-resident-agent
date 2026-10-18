@@ -573,6 +573,14 @@ body.panel-window .panel-bubble.is-expanded {
 .panel-tool-kill:hover { color: #fff; background: rgba(240, 126, 144, .38); }
 .panel-tool-activity pre { margin: 0 0 8px; max-height: 180px; padding: 7px; overflow: auto; border-radius: 6px; color: #dfebff; background: rgba(5, 17, 43, .25); font: var(--text-sm)/1.5 var(--font-mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .panel-tool-empty { padding: 8px 1px 2px; color: #9bb0d7; }
+/* Image tool results stay a compact line; the button hands the original file
+   to the system viewer instead of embedding it in the panel. */
+.panel-tool-image-output { display: grid; gap: 6px; margin: 0 0 8px; }
+.panel-tool-image-prompt { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 9px; border: 1px dashed rgba(185, 210, 255, .24); border-radius: 8px; color: #a9bee4; font-size: var(--text-xs); }
+.panel-tool-image-prompt button { flex: none; padding: 3px 9px; border: 1px solid rgba(190, 213, 253, .35); border-radius: 7px; color: #dbe8ff; background: rgba(160, 191, 251, .14); font-family: inherit; font-size: var(--text-xs) !important; }
+.panel-tool-image-prompt button:hover:not(:disabled) { color: #fff; background: rgba(160, 191, 251, .26); }
+.panel-tool-image-prompt button:disabled { opacity: .55; cursor: default; }
+.panel-tool-image-error { margin: 0; color: #f0a0aa; font-size: var(--text-xs); }
 /* An expanded tool shows its result first; the full input stays one quiet row
    until requested. Native details/summary supplies keyboard activation. */
 .panel-tool-input-details { margin: 2px 3px 6px 13px; border-top: 1px solid rgba(185, 210, 255, .11); }

@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, screen, shell, Tray } from 'electron'
-import { mkdirSync, promises as fsp } from 'node:fs'
+import { existsSync, mkdirSync, promises as fsp } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { AgentRuntime } from './agent-runtime'
@@ -1430,6 +1430,16 @@ function registerIpc(): void {
     const url = new URL(value)
     if (!['http:', 'https:', 'mailto:'].includes(url.protocol)) throw new Error('不支持的链接。')
     await shell.openExternal(url.href)
+  })
+  ipcMain.handle('pet:open-path', async (event, value: unknown) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    if (typeof value !== 'string' || value.length > 2_000 || !path.isAbsolute(value)) throw new Error('文件路径无效。')
+    const target = path.resolve(value)
+    const root = path.resolve(dataRoot)
+    if (!target.startsWith(root + path.sep)) throw new Error('只能打开应用数据目录里的文件。')
+    if (!existsSync(target)) throw new Error('文件已经不存在。')
+    const failure = await shell.openPath(target)
+    if (failure) throw new Error(`无法打开原图：${failure}`)
   })
   ipcMain.handle('pet:set-bubble-layout', (event, layout: unknown, height: unknown) => {
     if (!trusted(event)) return

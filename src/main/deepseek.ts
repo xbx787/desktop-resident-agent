@@ -29,6 +29,8 @@ export interface ModelToolEvent {
   phase: 'start' | 'result'
   input?: string
   output?: string
+  /** Images returned by a tool; the panel opens them on demand. */
+  images?: Array<{ name: string; path: string }>
   isError?: boolean
 }
 

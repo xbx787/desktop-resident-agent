@@ -85,6 +85,8 @@ export interface TimelineEntry {
     status: 'running' | 'done' | 'error'
     input?: string
     output?: string
+    /** Image files returned by the tool, opened with the system viewer on demand. */
+    images?: Array<{ name: string; path: string }>
   }
 }
 
@@ -502,6 +504,8 @@ export interface PetAPI {
   onBalanceOpen(callback: (open: boolean) => void): () => void
   getBalance(): Promise<BalanceSnapshot>
   openExternal(url: string): Promise<void>
+  /** Opens an app-owned file (such as a tool's image result) in the system viewer. */
+  openPath(path: string): Promise<void>
   setBubbleLayout(layout: BubbleLayout, height?: number): Promise<void>
   setBubbleExpanded(expanded: boolean): Promise<void>
   /** Resizes the expanded panel (the window follows on the main process). */

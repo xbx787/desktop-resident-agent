@@ -91,6 +91,7 @@ const api: PetAPI = {
   },
   getBalance: () => ipcRenderer.invoke('pet:get-balance'),
   openExternal: (url) => ipcRenderer.invoke('pet:open-external', url),
+  openPath: (target) => ipcRenderer.invoke('pet:open-path', target),
   setBubbleLayout: (layout, height) => ipcRenderer.invoke('pet:set-bubble-layout', layout, height),
   setBubbleExpanded: (expanded) => ipcRenderer.invoke('pet:set-bubble-expanded', expanded),
   setPanelSize: (width, height) => ipcRenderer.invoke('pet:set-panel-size', width, height),

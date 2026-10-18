@@ -1,6 +1,7 @@
 import { query, type McpServerConfig, type PermissionResult, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
 import { AgentMessageChannel } from './agent-message-channel'
 import { AgentTurnError, classifyAgentFailure } from './agent-errors'
 import { parseAskQuestions } from './ask-questions'
@@ -1032,14 +1033,53 @@ export class ClaudeAgentClient implements ModelClient {
     if (message.type === 'user' && Array.isArray(message.message.content)) {
       for (const block of message.message.content) {
         if (block.type !== 'tool_result' || message.parent_tool_use_id != null) continue
+        const images = this.toolImages(block.content)
         turn.onToolEvent?.({
           toolUseId: block.tool_use_id, toolName: this.toolNames.get(block.tool_use_id) ?? '未知工具', phase: 'result',
-          output: this.summary(block.content), isError: block.is_error === true
+          output: this.summary(block.content), ...(images.length ? { images } : {}), isError: block.is_error === true
         })
         turn.activeToolIds.delete(block.tool_use_id)
         this.toolNames.delete(block.tool_use_id)
       }
     }
+  }
+
+  /** Image blocks in a tool result are copied out of the event stream so the
+   *  panel can open them with the system viewer instead of embedding a large
+   *  data URL in every timeline snapshot. */
+  private toolImages(value: unknown): Array<{ name: string; path: string }> {
+    if (!this.configDir) return []
+    const blocks = Array.isArray(value) ? value : [value]
+    const images: Array<{ name: string; path: string }> = []
+    for (const block of blocks) {
+      if (!block || typeof block !== 'object') continue
+      const candidate = block as {
+        type?: unknown
+        file?: { base64?: unknown; type?: unknown }
+        source?: { data?: unknown; media_type?: unknown }
+      }
+      if (candidate.type !== 'image') continue
+      const base64 = typeof candidate.file?.base64 === 'string' ? candidate.file.base64
+        : typeof candidate.source?.data === 'string' ? candidate.source.data : ''
+      const mime = typeof candidate.file?.type === 'string' ? candidate.file.type
+        : typeof candidate.source?.media_type === 'string' ? candidate.source.media_type : ''
+      const extension = /^image\/(png|jpe?g|gif|webp)$/i.exec(mime)?.[1]?.toLowerCase()
+      if (!base64 || !extension) continue
+      const bytes = Buffer.from(base64, 'base64')
+      if (bytes.length === 0 || bytes.length > 12 * 1024 * 1024) continue
+      const directory = path.join(path.dirname(this.configDir), 'tool-images')
+      const name = `tool-${randomUUID()}.${extension === 'jpeg' ? 'jpg' : extension}`
+      try {
+        mkdirSync(directory, { recursive: true })
+        const target = path.join(directory, name)
+        writeFileSync(target, bytes)
+        images.push({ name, path: target })
+      } catch {
+        // A failed image copy must not fail the tool result itself.
+      }
+      if (images.length >= 4) break
+    }
+    return images
   }
 
   private summary(value: unknown, pretty = false): string {

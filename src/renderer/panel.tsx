@@ -27,6 +27,7 @@ import { ThinkingItem } from './thinking-item';
 import { groupTimeline, liftAsides, sameTimelineEntry, segmentTurn, splitTurnTail, tailWindow, type TurnSegment } from './timeline-groups';
 import { navMarks, NAV_WINDOW_COMPACT, NAV_WINDOW_WIDE, TimelineNav } from './timeline-nav';
 import { ToolDiffBody } from './tool-diff-body';
+import { ToolImageOutput } from './tool-images';
 import { ToolIcon } from './tool-icons';
 import { toolArgumentPreview, toolPlanText } from './tool-arguments';
 import { toolDiffPreview } from './tool-diff';
@@ -285,9 +286,15 @@ export const TimelineItem = memo(function TimelineItem({ entry, running = false,
     // the plan itself is the whole point of plan mode.
     const plan = toolPlanText(name, entry.tool?.input);
     const detail = entry.tool?.output?.trim() ? entry.tool.output : legacyToolDetail;
+    const images = entry.tool?.images ?? [];
+    const imageDetail = images.length && detail
+      ? stripAnsi(detail).replace(/^\[图片结果\]\s*$/gm, '').trim()
+      : '';
     // A failed edit never touched the file, so the error is the only honest body
     // to show; a successful one answers "what actually changed" with its lines.
-    const body = plan
+    const body = images.length
+      ? <ToolImageOutput images={images} detail={imageDetail || undefined} />
+      : plan
       ? <pre className="panel-tool-output panel-tool-plan">{plan}</pre>
       : diff && status !== 'error'
       ? <ToolDiffBody preview={diff} />

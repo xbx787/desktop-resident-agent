@@ -12,8 +12,11 @@ export function sameTimelineEntry(a: TimelineEntry, b: TimelineEntry): boolean {
   const left = a.tool
   const right = b.tool
   if (!left || !right) return !left && !right
+  const leftImages = left.images ?? []
+  const rightImages = right.images ?? []
   return left.toolUseId === right.toolUseId && left.name === right.name && left.status === right.status &&
-    left.input === right.input && left.output === right.output
+    left.input === right.input && left.output === right.output &&
+    leftImages.length === rightImages.length && leftImages.every((image, index) => image.path === rightImages[index]?.path)
 }
 
 export type TimelineGroup =

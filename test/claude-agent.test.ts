@@ -1,5 +1,6 @@
 import path from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { existsSync, promises as fsp, readFileSync } from 'node:fs'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 
@@ -415,6 +416,33 @@ describe('Claude Agent SDK persistent streaming session', () => {
       ])
       expect((queryMock.mock.calls[0][0] as Request).options.mcpServers).toHaveProperty('windows-mcp')
     } finally { await client.dispose() }
+  })
+
+  it('copies image tool results to disk and exposes their paths', async () => {
+    const root = path.join(process.cwd(), '.cache', 'tests', `tool-images-${randomUUID()}`)
+    const tempConfig = path.join(root, 'claude')
+    const imageBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    queryMock.mockImplementation((request: Request) => fakeQuery(request, async function* (message) {
+      yield { type: 'assistant', message: { content: [{ type: 'tool_use', id: 'image-1', name: 'Read', input: { file_path: 'photo.png' } }] } }
+      yield { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'image-1',
+        content: [{ type: 'image', file: { base64: imageBytes.toString('base64'), type: 'image/png', originalSize: imageBytes.length } }] }] } }
+      yield { type: 'result', subtype: 'success', is_error: false, result: '图片已读取', session_id: sessionId,
+        user_message_uuids: [message.uuid], queued_turn_count: 0 }
+    }))
+    const client = new ClaudeAgentClient(executable, 'test-key', process.cwd(), tempConfig)
+    try {
+      const events: ModelToolEvent[] = []
+      await client.respond([{ role: 'user', content: '看看这张图' }], new AbortController().signal,
+        undefined, undefined, (event) => events.push(event))
+      const result = events.find((event) => event.phase === 'result' && event.toolUseId === 'image-1')!
+      expect(result.output).toContain('[图片结果]')
+      expect(result.images).toHaveLength(1)
+      expect(existsSync(result.images![0].path)).toBe(true)
+      expect(readFileSync(result.images![0].path)).toEqual(imageBytes)
+    } finally {
+      await client.dispose()
+      await fsp.rm(root, { recursive: true, force: true })
+    }
   })
 
   it('streams separate text segments around tool use and exposes the actual tool result', async () => {

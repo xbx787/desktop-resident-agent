@@ -806,12 +806,14 @@ export class AgentRuntime {
     const text = `${toolLabel(event.toolName)}${status === 'running' ? '（执行中）' : status === 'error' ? '（失败）' : '（已完成）'}`
     if (existing) {
       existing.text = text
-      existing.tool = { ...existing.tool!, status, input: event.input ?? existing.tool?.input, output: event.output ?? existing.tool?.output }
+      existing.tool = { ...existing.tool!, status, input: event.input ?? existing.tool?.input, output: event.output ?? existing.tool?.output,
+        ...(event.images?.length ? { images: event.images } : {}) }
       this.markTimelineDirty(existing)
     } else {
       const entry: TimelineEntry = {
         id: crypto.randomUUID(), time: new Date().toISOString(), kind: 'tool', text,
-        tool: { toolUseId: event.toolUseId, name: event.toolName, status, input: event.input, output: event.output }
+        tool: { toolUseId: event.toolUseId, name: event.toolName, status, input: event.input, output: event.output,
+          ...(event.images?.length ? { images: event.images } : {}) }
       }
       this.state.timeline.push(entry)
       this.markTimelineDirty(entry)
