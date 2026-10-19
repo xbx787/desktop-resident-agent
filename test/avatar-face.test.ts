@@ -33,7 +33,7 @@ describe('resolved avatar presentation', () => {
     expect(resolveAvatarPresentation({ taskStatus: 'done', settled: 'done' }))
       .toEqual({ activity: 'completed', face: 'smile', idleAllowed: false })
     expect(resolveAvatarPresentation({ taskStatus: 'failed', settled: 'failed' }))
-      .toEqual({ activity: 'failed', face: 'shy', idleAllowed: false })
+      .toEqual({ activity: 'failed', face: 'failed', idleAllowed: false })
     expect(resolveAvatarPresentation({ taskStatus: 'done' }))
       .toEqual({ activity: 'idle', face: null, idleAllowed: true })
   })

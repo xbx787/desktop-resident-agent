@@ -65,5 +65,10 @@ describe('avatar motion geometry', () => {
     expect(css).not.toMatch(/\.avatar-hit-target:active\s*\{[^}]*transform/);
     expect(css).not.toContain('var(--panel-pulse-p');
     expect(css).toMatch(/\.avatar-task-dot\.is-pulsing\s*\{\s*animation:\s*avatar-task-pulse/);
+    for (const state of ['working', 'waiting', 'listening', 'speaking', 'completed', 'failed']) {
+      expect(css).toMatch(new RegExp(`\\.avatar-stage\\.is-${state} \\.avatar-breath \\{[^}]*animation:`));
+    }
+    const stateMotionRule = css.match(/@media \(prefers-reduced-motion: no-preference\) \{([\s\S]*?\.avatar-stage\.is-working \.avatar-breath[\s\S]*?)\n\}/)?.[1] ?? '';
+    expect(stateMotionRule).toContain('.avatar-stage.is-working .avatar-breath');
   });
 });

@@ -98,7 +98,7 @@ describe('actual avatar asset gate', () => {
   it('discovers all render-linked bodies, avatars and poses without staging files', () => {
     const assets = assetInventory()
     expect(assets.filter((a: { role: string }) => a.role === 'persona-body')).toHaveLength(4)
-    expect(assets.filter((a: { role: string }) => a.role === 'pose')).toHaveLength(5)
+    expect(assets.filter((a: { role: string }) => a.role === 'pose')).toHaveLength(6)
     expect(assets.filter((a: { role: string }) => a.role === 'reference')).toHaveLength(1)
     expect(audit().results).toHaveLength(assets.length)
   })

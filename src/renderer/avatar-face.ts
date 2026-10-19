@@ -48,7 +48,7 @@ export function resolveAvatarPresentation(input: {
     return { activity: 'working', face: 'focus', idleAllowed: false }
   }
   if (settled === 'done') return { activity: 'completed', face: 'smile', idleAllowed: false }
-  if (settled === 'failed') return { activity: 'failed', face: 'shy', idleAllowed: false }
+  if (settled === 'failed') return { activity: 'failed', face: 'failed', idleAllowed: false }
   return { activity: 'idle', face: null, idleAllowed: true }
 }
 

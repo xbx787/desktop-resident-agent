@@ -74,8 +74,41 @@ body.avatar-window { -webkit-user-select: none; user-select: none; }
   0%, 100% { opacity: .38; transform: scale(.96); }
   50% { opacity: .72; transform: scale(1.03); }
 }
+@keyframes avatar-focus {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  45% { transform: translateY(-.8px) rotate(-.22deg); }
+}
+@keyframes avatar-wait {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-.5px) rotate(.45deg); }
+}
+@keyframes avatar-listen {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-1px) scale(1.004); }
+}
+@keyframes avatar-speak {
+  0%, 100% { transform: translateY(0) scaleY(1); }
+  50% { transform: translateY(-1.2px) scaleY(1.006); }
+}
+@keyframes avatar-finish {
+  0% { transform: translateY(0) scale(1); }
+  42% { transform: translateY(-3px) scale(1.012); }
+  72% { transform: translateY(.6px) scale(.998); }
+  100% { transform: translateY(0) scale(1); }
+}
+@keyframes avatar-fail {
+  0% { transform: translateY(0) rotate(0deg); }
+  45% { transform: translateY(1.8px) rotate(-.55deg); }
+  100% { transform: translateY(1px) rotate(-.25deg); }
+}
 @media (prefers-reduced-motion: no-preference) {
   .avatar-stage.is-idle .avatar-breath { transform-origin: 50% 100%; animation: whale-breath 4.4s ease-in-out infinite; }
+  .avatar-stage.is-working .avatar-breath { transform-origin: 50% 100%; animation: avatar-focus 2.35s ease-in-out infinite; }
+  .avatar-stage.is-waiting .avatar-breath { transform-origin: 50% 100%; animation: avatar-wait 2.8s ease-in-out infinite; }
+  .avatar-stage.is-listening .avatar-breath { transform-origin: 50% 100%; animation: avatar-listen 1.6s ease-in-out infinite; }
+  .avatar-stage.is-speaking .avatar-breath { transform-origin: 50% 100%; animation: avatar-speak .82s ease-in-out infinite; }
+  .avatar-stage.is-completed .avatar-breath { transform-origin: 50% 100%; animation: avatar-finish .72s cubic-bezier(.22, 1, .36, 1) 1; }
+  .avatar-stage.is-failed .avatar-breath { transform-origin: 50% 100%; animation: avatar-fail .55s ease-out 1 both; }
   .avatar-stage.is-listening .avatar-gesture::before,
   .avatar-stage.is-speaking .avatar-gesture::before { animation: avatar-voice-halo 2.2s ease-in-out infinite; }
 }

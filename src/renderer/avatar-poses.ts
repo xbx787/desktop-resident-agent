@@ -18,7 +18,8 @@ const SOURCES: Record<string, string> = {
   surprise: new URL('./assets/poses/surprise.png', import.meta.url).href,
   focus: new URL('./assets/poses/focus.png', import.meta.url).href,
   sleepy: new URL('./assets/poses/sleepy.png', import.meta.url).href,
-  shy: new URL('./assets/poses/shy.png', import.meta.url).href
+  shy: new URL('./assets/poses/shy.png', import.meta.url).href,
+  failed: new URL('./assets/poses/failed.png', import.meta.url).href
 };
 
 export function poseSrc(id: string): string | null {
@@ -85,7 +86,7 @@ let warmed = false;
 export function preloadPoses(): void {
   if (warmed || typeof Image === 'undefined') return;
   warmed = true;
-  for (const id of [...POSES.map((pose) => pose.id), 'focus', 'smile']) {
+  for (const id of [...POSES.map((pose) => pose.id), 'focus', 'smile', 'failed']) {
     const image = new Image();
     image.src = SOURCES[id];
   }

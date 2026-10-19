@@ -13,10 +13,11 @@ describe('pose library', () => {
     expect(poseSrc('nope')).toBeNull()
   })
 
-  it('reserves focus and smile for the state faces, out of the random rotation', () => {
-    expect(POSES.some((pose) => pose.id === 'focus' || pose.id === 'smile')).toBe(false)
+  it('reserves focus, smile and failure for state faces, out of the random rotation', () => {
+    expect(POSES.some((pose) => ['focus', 'smile', 'failed'].includes(pose.id))).toBe(false)
     expect(poseSrc('focus')).toBeTruthy()
     expect(poseSrc('smile')).toBeTruthy()
+    expect(poseSrc('failed')).toBeTruthy()
   })
 })
 
