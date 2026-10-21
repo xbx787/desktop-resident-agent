@@ -1005,6 +1005,10 @@ body.panel-theme-light .panel-approval-pick .panel-model-check{ margin-left: aut
 /* Full access gets one deliberate stop: a plain-language warning over the
    panel, not a checkbox buried in a menu. */
 body.panel-theme-light .panel-bypass-backdrop{ position: absolute; inset: 0; z-index: 30; display: grid; place-items: center; padding: 18px; border-radius: inherit; background: rgba(225, 233, 251, 0.6); }
+body.panel-theme-light .panel-bypass-full{ border-color: rgba(136, 71, 81, 0.55); }
+body.panel-theme-light .panel-bypass-full h3{ color: #3c0f14; }
+body.panel-theme-light .panel-bypass-full .panel-bypass-confirm{ border-color: rgba(136, 71, 81, 0.75); color: #eed2d7; background: #5c262d; }
+body.panel-theme-light .panel-bypass-full .panel-bypass-confirm:hover{ background: #4c1920; }
 body.panel-theme-light .panel-bypass{ display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 370px; padding: 14px 15px 12px; border: 1px solid rgba(132, 88, 15, 0.5); border-radius: 14px; background: linear-gradient(155deg, rgba(163, 175, 215, 0.99), rgba(189, 203, 238, 0.99)); box-shadow: 0 16px 40px rgba(227, 234, 252, 0.55); }
 body.panel-theme-light .panel-bypass h3{ margin: 0; color: #382200; font-size: var(--text-md); font-weight: 650; }
 body.panel-theme-light .panel-bypass p{ margin: 0; color: #101e37; font-size: var(--text-sm); line-height: 1.6; }
@@ -1014,15 +1018,15 @@ body.panel-theme-light .panel-bypass-cancel:hover{ background: rgba(4, 32, 83, 0
 body.panel-theme-light .panel-bypass-confirm{ padding: 4px 12px; border: 1px solid rgba(132, 88, 15, 0.7); border-radius: 8px; color: #a7bde8; background: #6d480d; font-family: inherit; font-size: var(--text-xs) !important; font-weight: 600; }
 body.panel-theme-light .panel-bypass-confirm:hover{ background: #543608; }
 /* 自我进化是最高权限：红色边框、必须手输授权短语才能确认。 */
-body.panel-theme-light .panel-evolve-confirm{ border-color: rgba(129, 15, 33, 0.5); }
-body.panel-theme-light .panel-evolve-confirm h3{ color: #280005; }
-body.panel-theme-light .panel-evolve-confirm p strong{ color: #3d0007; font-weight: 650; }
-body.panel-theme-light .panel-evolve-authorize{ display: grid; gap: 7px; margin: 10px 0 2px; color: #2d0c10; font-size: var(--text-sm); line-height: 1.5; }
-body.panel-theme-light .panel-evolve-authorize code{ padding: 1px 5px; border-radius: 4px; color: #000000; background: rgba(129, 15, 33, 0.2); font-family: var(--font-mono); }
-body.panel-theme-light .panel-evolve-authorize input{ width: 100%; height: 34px; padding: 0 10px; border: 1px solid rgba(129, 15, 33, 0.45); border-radius: 8px; color: #000000; background: rgba(245, 225, 233, 0.35); outline: none; font: inherit; }
-body.panel-theme-light .panel-evolve-authorize input:focus-visible{ outline: 2px solid rgba(120, 11, 20, 0.6); outline-offset: 1px; }
-body.panel-theme-light .panel-evolve-confirm .panel-bypass-confirm{ color: #eec5cc; background: #5c0b15; border-color: rgba(129, 15, 33, 0.7); }
-body.panel-theme-light .panel-evolve-confirm .panel-bypass-confirm:hover:not(:disabled){ background: #480009; }
+body.panel-theme-light .panel-evolve-confirm{ border-color: rgba(37, 0, 115, 0.5); }
+body.panel-theme-light .panel-evolve-confirm h3{ color: #0b0024; }
+body.panel-theme-light .panel-evolve-confirm p strong{ color: #100037; font-weight: 650; }
+body.panel-theme-light .panel-evolve-authorize{ display: grid; gap: 7px; margin: 10px 0 2px; color: #0d002f; font-size: var(--text-sm); line-height: 1.5; }
+body.panel-theme-light .panel-evolve-authorize code{ padding: 1px 5px; border-radius: 4px; color: #000000; background: rgba(37, 0, 115, 0.2); font-family: var(--font-mono); }
+body.panel-theme-light .panel-evolve-authorize input{ width: 100%; height: 34px; padding: 0 10px; border: 1px solid rgba(37, 0, 115, 0.45); border-radius: 8px; color: #000000; background: rgba(225, 217, 243, 0.35); outline: none; font: inherit; }
+body.panel-theme-light .panel-evolve-authorize input:focus-visible{ outline: 2px solid rgba(30, 0, 95, 0.6); outline-offset: 1px; }
+body.panel-theme-light .panel-evolve-confirm .panel-bypass-confirm{ color: #d8cfeb; background: #19004f; border-color: rgba(37, 0, 115, 0.7); }
+body.panel-theme-light .panel-evolve-confirm .panel-bypass-confirm:hover:not(:disabled){ background: #130039; }
 body.panel-theme-light .panel-evolve-confirm .panel-bypass-confirm:disabled{ opacity: .4; cursor: not-allowed; }
 
 body.panel-theme-light .panel-tool-button{ display: grid; place-items: center; flex: none; width: 29px; height: 29px; padding: 0; border: 1px solid rgba(0, 21, 60, 0.18); border-radius: 9px; color: #03102a; background: rgba(27, 60, 123, 0.08); }
