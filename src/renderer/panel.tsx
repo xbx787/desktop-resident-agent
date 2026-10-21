@@ -389,7 +389,7 @@ export const TimelineItem = memo(function TimelineItem({ entry, running = false,
         {openImagePath && <button type="button" className="panel-tool-open-image" title="用系统默认程序打开原图" aria-label="查看原图"
           onClick={(event) => { event.preventDefault(); event.stopPropagation(); void petBridge().openPath(openImagePath); }}>查看原图</button>}
         <span className={`panel-tool-result is-${status}`} aria-hidden="true">{status === 'error' ? '×' : status === 'running' ? '…' : '✓'}</span>
-        {killable && <button type="button" className="panel-tool-kill" aria-label="中断当前任务" title="中断当前任务（ESC）"
+        {killable && <button type="button" className="panel-tool-kill" aria-label="中断当前任务" title="中断当前任务（Esc）"
           onClick={(event) => { event.preventDefault(); event.stopPropagation(); onKill?.(); }}>×</button>}
       </summary>
       {toolOpened && body}
@@ -1703,6 +1703,8 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
     // Full access and self-evolution ask once, in words, before taking effect.
     // The menu closes first so the warning is the only thing left on screen.
     if (mode === 'danger-full-access' && normalizeApprovalMode(snapshot?.approvalMode) !== 'danger-full-access') {
+      // 从自动计划/工作区写入升到完全访问不再二次确认。
+      if (normalizeApprovalMode(snapshot?.approvalMode) === 'workspace-write') { void applyApprovalMode(mode); return; }
       setApprovalMenuOpen(false);
       setBypassConfirmOpen(true);
       return;
@@ -2986,7 +2988,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
               if (event.key === 'Escape' && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
                 event.preventDefault();
                 event.stopPropagation();
-                // ESC 专门用来打断回复；不收起输入框，也不让面板折叠。
+                // Esc 专门用来打断回复；不收起输入框，也不让面板折叠。
                 if (modelPickerOpen) setModelPickerOpen(false);
               }
             }}>
@@ -3014,7 +3016,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
                   maxLength={8000}
                   rows={1}
                   style={{ height: composerHeight }}
-                  placeholder={sideExpanded ? '在临时会话中提问…' : goalPrompting ? '写清目标与可验证的完成标准，回车设定' : '输入消息…（Enter 发送 · Ctrl+Enter 插话 · ESC 打断）'}
+                  placeholder={sideExpanded ? '在临时会话中提问…' : goalPrompting ? '写清目标与可验证的完成标准，回车设定' : '输入消息…（Enter 发送 · Ctrl+Enter 插话 · Esc 打断）'}
                   aria-controls={suggestionOpen ? 'panel-composer-suggestions' : undefined}
                   aria-expanded={suggestionOpen && (suggestionLoading || suggestionItems.length > 0)}
                   aria-activedescendant={suggestionOpen && suggestionItems.length > 0 ? `panel-suggestion-${suggestionSelected}` : undefined}
@@ -3169,7 +3171,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
                 <VoiceButton phase={voicePhase}
                   canListen={voiceReady && Boolean(voiceManagerRef.current?.available ?? voiceConfig?.siliconFlowAvailable)}
                   disabled={Boolean(busy) && voicePhase === 'idle'} onToggle={toggleVoice} />
-                <button type={active && !draft.trim() && !attachments.length ? 'button' : 'submit'} className={`panel-send${sendingCurrent ? ' is-sending' : ''}`} disabled={(!active && !draft.trim() && !attachments.length) || Boolean(busy) || sendingCurrent || !snapshot || (contextCompacting && !(active && !draft.trim() && !attachments.length))} aria-label={goalPrompting ? '设定目标' : sendingCurrent ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务' : active ? '排队发送消息' : '发送消息'} title={goalPrompting ? '回车设定目标' : sendingCurrent ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务（ESC）' : active ? snapshot?.mode === 'claude_code' ? 'Enter 排队发送，Ctrl+Enter 插队发送' : 'Enter 排队发送，Ctrl+Enter 优先排队' : '发送消息（Enter）'} onClick={active && !draft.trim() && !attachments.length ? () => { void stop(); } : undefined}>
+                <button type={active && !draft.trim() && !attachments.length ? 'button' : 'submit'} className={`panel-send${sendingCurrent ? ' is-sending' : ''}`} disabled={(!active && !draft.trim() && !attachments.length) || Boolean(busy) || sendingCurrent || !snapshot || (contextCompacting && !(active && !draft.trim() && !attachments.length))} aria-label={goalPrompting ? '设定目标' : sendingCurrent ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务' : active ? '排队发送消息' : '发送消息'} title={goalPrompting ? '回车设定目标' : sendingCurrent ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务（Esc）' : active ? snapshot?.mode === 'claude_code' ? 'Enter 排队发送，Ctrl+Enter 插队发送' : 'Enter 排队发送，Ctrl+Enter 优先排队' : '发送消息（Enter）'} onClick={active && !draft.trim() && !attachments.length ? () => { void stop(); } : undefined}>
                   {sendingCurrent ? <span className="panel-send-spinner" aria-hidden="true" /> : active && !draft.trim() && !attachments.length ? <span className="panel-stop-square" /> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11m-5-5 5 5-5 5" /></svg>}
                 </button>
               </div>
@@ -3188,7 +3190,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
         <img src={imageViewer.url} alt={imageViewer.name} />
       </button>}
       {bypassConfirmOpen && <div className="panel-bypass-backdrop" onClick={() => setBypassConfirmOpen(false)}>
-        <section className="panel-bypass" role="dialog" aria-modal="true" aria-labelledby="bypass-title" onClick={(event) => event.stopPropagation()}>
+        <section className="panel-bypass panel-bypass-full" role="dialog" aria-modal="true" aria-labelledby="bypass-title" onClick={(event) => event.stopPropagation()}>
           <h3 id="bypass-title">开启「完全访问」？</h3>
           <p>这个模式会跳过所有工具调用的确认——AI 可以直接执行命令、修改文件、访问网络，不再逐条征求你的同意。</p>
           <p>请先充分了解其中的风险，再决定是否开启。另一方面，AI Agent 的顺畅运行依赖宽松的审批；从任务完成效率出发，了解风险后开启是合理的。开启之后，建议在对话中为它设定明确、有效的行为边界与约束。</p>
@@ -3220,3 +3222,5 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
     </section>
   );
 }
+
+

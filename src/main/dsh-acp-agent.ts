@@ -281,6 +281,18 @@ export class DshAcpAgentClient implements ModelClient {
 
     let interrupted = false
     const startedAt = Date.now()
+    // 与 Claude 路径同一口径：只累计真正在流式生成的时间，间隔超过 1.5 秒
+    // （工具执行、等待用户、审批）就不计入。速率 = 输出 token ÷ 这个时长。
+    let generationActiveMs = 0
+    let lastGenerationAt: number | undefined
+    const noteGenerationDelta = (): void => {
+      const now = Date.now()
+      if (lastGenerationAt !== undefined) {
+        const gap = now - lastGenerationAt
+        if (gap >= 0 && gap <= 1_500) generationActiveMs += gap
+      }
+      lastGenerationAt = now
+    }
     const messageTexts = new Map<number, string>()
     let messageSegment = -1
     let currentMessageId = ''
@@ -314,6 +326,7 @@ export class DshAcpAgentClient implements ModelClient {
         if (messageSegment < 0) messageSegment = 0
         const next = (messageTexts.get(messageSegment) ?? '') + chunkText(update.content)
         messageTexts.set(messageSegment, next)
+        noteGenerationDelta()
         if (next) onProgress?.(next, messageSegment)
       } else if (kind === 'agent_thought_chunk') {
         const id = textValue(update.messageId)
@@ -324,6 +337,7 @@ export class DshAcpAgentClient implements ModelClient {
         if (thoughtSegment < 0) thoughtSegment = 0
         const next = (thoughtTexts.get(thoughtSegment) ?? '') + chunkText(update.content)
         thoughtTexts.set(thoughtSegment, next)
+        noteGenerationDelta()
         if (next) onThinking?.(next, thoughtSegment)
       } else if (kind === 'tool_call') {
         const toolCallId = textValue(update.toolCallId)
@@ -420,7 +434,7 @@ export class DshAcpAgentClient implements ModelClient {
       text,
       sdkSessionId: sessionId,
       interrupted,
-      generationMs: Date.now() - startedAt
+      generationMs: generationActiveMs > 0 ? generationActiveMs : Date.now() - startedAt
     }
   }
 

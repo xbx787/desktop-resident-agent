@@ -2,7 +2,14 @@ import { resolve } from 'node:path'
 import { defineConfig } from 'electron-vite'
 
 export default defineConfig({
-  main: {},
+  main: {
+    build: {
+      rollupOptions: {
+        // 原生模块由 node_modules 提供，不能打进 bundle。
+        external: ['uiohook-napi']
+      }
+    }
+  },
   preload: {
     build: {
       rollupOptions: {

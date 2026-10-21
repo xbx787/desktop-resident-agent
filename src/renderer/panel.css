@@ -947,6 +947,39 @@ body.panel-placement-right .panel-bubble::after { display: none; }
 .panel-suggestion-item span { flex: none; max-width: 42%; overflow: hidden; font-size: var(--text-sm); text-overflow: ellipsis; white-space: nowrap; }
 .panel-suggestion-item small { flex: 1; min-width: 0; overflow: hidden; color: #adc1e5; font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
 .panel-composer-inputrow { position: relative; display: flex; flex: none; min-height: 0; padding-right: 23px; }
+/* 输入提示的左右两侧：左边键帽队列，中间两行提示，右边鼠标；整体往上收。 */
+.panel-composer-hintrow { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 8px; min-height: 60px; margin: -4px 2px 0; }
+.panel-composer-hint { flex: none; width: 112px; color: #8fa2c4; font-size: var(--text-xs); line-height: 1.5; text-align: center; }
+.panel-composer-hintrow .panel-input-keys { gap: 2px; }
+.panel-composer-hintrow .panel-input-keys kbd { height: 22px; min-height: 22px; font-size: var(--text-sm); padding: 1px 7px; }
+.panel-composer-hintrow .panel-input-plus { width: 8px; font-size: var(--text-xs); }
+.panel-composer-hintrow .panel-mouse { width: 44px; height: 60px; }
+/* 正在执行时，提示框里实时显示键盘与手绘鼠标。 */
+.panel-input-activity { display: flex; flex: none; align-items: flex-end; justify-content: space-between; gap: 10px; min-height: 76px; padding-bottom: 4px; margin: 0 2px 6px; color: #8fa2c4; font-size: var(--text-md); user-select: none; }
+.panel-input-keys { display: flex; flex-direction: column; justify-content: flex-end; gap: 5px; height: auto; min-width: 0; align-items: flex-start; overflow: visible; }
+.panel-input-keys kbd { display: flex; flex: none; align-items: center; height: 28px; font: inherit; font-weight: 600; font-size: var(--text-lg); line-height: 1.2; padding: 3px 10px; max-width: 100%; overflow: hidden; border: 1px solid rgba(140, 180, 255, .22); border-radius: 7px; background: rgba(140, 180, 255, .10); color: #cfe1ff; text-overflow: ellipsis; white-space: nowrap; }
+.panel-input-idle { opacity: .45; font-size: var(--text-lg); }
+.panel-input-row { display: flex; align-items: center; gap: 4px; max-width: 100%; transform-origin: left center; }
+.panel-input-row.is-fade-1 kbd { color: rgba(207, 225, 255, .42); }
+.panel-input-row.is-fade-1 .panel-input-plus { opacity: .3; }
+.panel-input-row.is-fade-2 kbd { color: rgba(207, 225, 255, .72); }
+.panel-input-row.is-fade-2 .panel-input-plus { opacity: .55; }
+.panel-input-plus { flex: none; width: 10px; opacity: .55; font-size: var(--text-md); font-weight: 600; text-align: center; }
+.panel-input-row.is-new { animation: panel-key-pop .26s ease-out; }
+.panel-mouse { --panel-mouse-face: rgba(58, 138, 250, .46); width: 56px; height: 76px; flex: none; overflow: visible; }
+.panel-mouse-body { fill: rgba(8, 24, 58, .55); stroke: rgba(150, 200, 255, .6); stroke-width: 1.6; }
+.panel-mouse-button { fill: var(--panel-mouse-face); stroke: rgba(150, 200, 255, .34); stroke-width: 1; transition: fill .12s ease, stroke .12s ease, filter .12s ease; }
+.panel-mouse-button.is-down { fill: rgba(120, 190, 255, .66); stroke: #e0f4ff; filter: drop-shadow(0 0 5px rgba(120, 190, 255, .9)); }
+.panel-mouse-middle-fill { fill: var(--panel-mouse-face); }
+.panel-mouse-midline { stroke: rgba(150, 200, 255, .34); stroke-width: 1.2; }
+.panel-mouse-middle-group.is-down { animation: panel-mouse-flash .38s ease-in-out infinite alternate; }
+.panel-mouse-middle-group.is-down .panel-mouse-middle-fill { fill: rgba(120, 190, 255, .5); }
+.panel-mouse-chevron { fill: none; stroke: rgba(160, 210, 255, .6); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: stroke .12s ease, filter .12s ease; }
+.panel-mouse-chevron.is-active { stroke: #eaf8ff; filter: drop-shadow(0 0 5px rgba(140, 210, 255, .95)); animation: panel-mouse-arrow .4s ease-in-out infinite alternate; }
+.panel-mouse.is-drag .panel-mouse-middle-fill { fill: rgba(243, 195, 111, .45); }
+@keyframes panel-key-pop { from { opacity: .35; } to { opacity: 1; } }
+@keyframes panel-mouse-arrow { from { opacity: .4; } to { opacity: 1; } }
+@keyframes panel-mouse-flash { from { opacity: .45; } to { opacity: 1; } }
 .panel-composer textarea { width: 100%; flex: none; min-width: 0; min-height: 0; max-height: 155px; padding: 2px 2px 2px 0; resize: none; overflow-y: auto; border: 0; outline: none; color: #f3f6ff; background: transparent; font-size: var(--text-md); line-height: 1.45; scrollbar-color: rgba(171, 201, 250, .62) transparent; scrollbar-width: auto; }
 .panel-composer textarea::-webkit-scrollbar { width: 8px; }
 .panel-composer textarea::-webkit-scrollbar-thumb { border-radius: 8px; background: rgba(171, 201, 250, .58); }
@@ -982,6 +1015,10 @@ body.panel-placement-right .panel-bubble::after { display: none; }
 /* Full access gets one deliberate stop: a plain-language warning over the
    panel, not a checkbox buried in a menu. */
 .panel-bypass-backdrop { position: absolute; inset: 0; z-index: 30; display: grid; place-items: center; padding: 18px; border-radius: inherit; background: rgba(4, 12, 30, .60); }
+.panel-bypass-full { border-color: rgba(184, 119, 129, .55); }
+.panel-bypass-full h3 { color: #f0c3c8; }
+.panel-bypass-full .panel-bypass-confirm { border-color: rgba(184, 119, 129, .75); color: #2d1116; background: #d9a3aa; }
+.panel-bypass-full .panel-bypass-confirm:hover { background: #e6b3ba; }
 .panel-bypass { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 370px; padding: 14px 15px 12px; border: 1px solid rgba(240, 196, 123, .5); border-radius: 14px; background: linear-gradient(155deg, rgba(40, 52, 92, .99), rgba(17, 31, 66, .99)); box-shadow: 0 16px 40px rgba(3, 10, 28, .55); }
 .panel-bypass h3 { margin: 0; color: #ffe9c7; font-size: var(--text-md); font-weight: 650; }
 .panel-bypass p { margin: 0; color: #c8d6ef; font-size: var(--text-sm); line-height: 1.6; }
@@ -991,15 +1028,15 @@ body.panel-placement-right .panel-bubble::after { display: none; }
 .panel-bypass-confirm { padding: 4px 12px; border: 1px solid rgba(240, 196, 123, .7); border-radius: 8px; color: #172d58; background: #f2cd92; font-family: inherit; font-size: var(--text-xs) !important; font-weight: 600; }
 .panel-bypass-confirm:hover { background: #f7d9ab; }
 /* 自我进化是最高权限：红色边框、必须手输授权短语才能确认。 */
-.panel-evolve-confirm { border-color: rgba(240, 126, 144, .5); }
-.panel-evolve-confirm h3 { color: #ffd7dc; }
-.panel-evolve-confirm p strong { color: #ffc2c9; font-weight: 650; }
-.panel-evolve-authorize { display: grid; gap: 7px; margin: 10px 0 2px; color: #f3d2d6; font-size: var(--text-sm); line-height: 1.5; }
-.panel-evolve-authorize code { padding: 1px 5px; border-radius: 4px; color: #fff; background: rgba(240, 126, 144, .2); font-family: var(--font-mono); }
-.panel-evolve-authorize input { width: 100%; height: 34px; padding: 0 10px; border: 1px solid rgba(240, 126, 144, .45); border-radius: 8px; color: #fff; background: rgba(30, 10, 18, .35); outline: none; font: inherit; }
-.panel-evolve-authorize input:focus-visible { outline: 2px solid rgba(244, 135, 144, .6); outline-offset: 1px; }
-.panel-evolve-confirm .panel-bypass-confirm { color: #3a1118; background: #f4a3ad; border-color: rgba(240, 126, 144, .7); }
-.panel-evolve-confirm .panel-bypass-confirm:hover:not(:disabled) { background: #ffb7c0; }
+.panel-evolve-confirm { border-color: rgba(177, 140, 255, .5); }
+.panel-evolve-confirm h3 { color: #e6dbff; }
+.panel-evolve-confirm p strong { color: #d8c8ff; font-weight: 650; }
+.panel-evolve-authorize { display: grid; gap: 7px; margin: 10px 0 2px; color: #ddd0ff; font-size: var(--text-sm); line-height: 1.5; }
+.panel-evolve-authorize code { padding: 1px 5px; border-radius: 4px; color: #fff; background: rgba(177, 140, 255, .2); font-family: var(--font-mono); }
+.panel-evolve-authorize input { width: 100%; height: 34px; padding: 0 10px; border: 1px solid rgba(177, 140, 255, .45); border-radius: 8px; color: #fff; background: rgba(20, 12, 38, .35); outline: none; font: inherit; }
+.panel-evolve-authorize input:focus-visible { outline: 2px solid rgba(190, 160, 255, .6); outline-offset: 1px; }
+.panel-evolve-confirm .panel-bypass-confirm { color: #1d1430; background: #c9b0ff; border-color: rgba(177, 140, 255, .7); }
+.panel-evolve-confirm .panel-bypass-confirm:hover:not(:disabled) { background: #d9c6ff; }
 .panel-evolve-confirm .panel-bypass-confirm:disabled { opacity: .4; cursor: not-allowed; }
 
 .panel-tool-button { display: grid; place-items: center; flex: none; width: 29px; height: 29px; padding: 0; border: 1px solid rgba(195, 216, 255, .18); border-radius: 9px; color: #d5e2fc; background: rgba(132, 165, 228, .08); }
@@ -1174,4 +1211,20 @@ body.panel-placement-right .panel-bubble::after { display: none; }
 .panel-timeline-divider { display: flex; align-items: center; gap: 10px; margin: 20px 0; color: #9db4d8; font-size: var(--text-xs); }
 .panel-timeline-divider::before, .panel-timeline-divider::after { content: ''; flex: 1; height: 1px; background: rgba(150, 180, 230, .28); }
 .panel-timeline-divider span { flex: none; padding: 0 2px; letter-spacing: .04em; }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

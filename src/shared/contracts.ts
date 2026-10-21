@@ -1,4 +1,5 @@
 import type { LibraryItem } from './libraries'
+import type { InputActivity } from './input-activity'
 
 export type AvatarState = 'idle' | 'thinking' | 'listening' | 'speaking' | 'acting' | 'success' | 'error'
 export type ModelMode = 'demo' | 'live' | 'claude_code'
@@ -688,6 +689,8 @@ export interface PetAPI {
   /** 面板贴在人物的哪一侧（上/下/左/右）。 */
   getPanelPlacement(): Promise<PanelPlacement>
   onPanelPlacement(callback: (placement: PanelPlacement) => void): () => void
+  /** 全局键鼠活动（用于提示框里的实时按键/鼠标指示）。 */
+  onInputActivity(callback: (activity: InputActivity) => void): () => void
   showContextMenu(): Promise<void>
   setBalanceOpen(open: boolean): Promise<void>
   /** Flips the balance card from the main process, where the real state lives. */

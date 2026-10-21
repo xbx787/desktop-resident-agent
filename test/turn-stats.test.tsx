@@ -35,6 +35,20 @@ describe('TurnStats', () => {
     expect(html.indexOf('token')).toBeLessThan(html.indexOf('使用了 4 次工具'))
   })
 
+  it('shows the running dot and token line before any output arrives', () => {
+    const html = renderToStaticMarkup(<TurnStats running entries={[]} />)
+    expect(html).toContain('panel-turn-stats-dot is-running')
+    expect(html).toContain('正在统计 token…')
+  })
+
+  it('shows a live estimated token count while the turn is still running', () => {
+    const html = renderToStaticMarkup(<TurnStats running entries={[
+      { id: 'a1', time: '2026-10-10T10:00:01.000Z', kind: 'assistant', text: '一二三四五六七八九十' }
+    ]} />)
+    expect(html).toContain('≈7 token')
+    expect(html).not.toContain('用量未记录')
+  })
+
   it('reads the output speed beside the token figure', () => {
     const html = renderToStaticMarkup(<TurnStats running={false} entries={[]} metrics={{
       startedAt: '2026-10-10T10:00:00.000Z', finishedAt: '2026-10-10T10:00:08.000Z',

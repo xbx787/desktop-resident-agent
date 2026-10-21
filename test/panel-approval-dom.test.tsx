@@ -115,8 +115,9 @@ describe('the approval-mode control', () => {
   })
 
   it('warns before full access and only switches after the warning is acknowledged', async () => {
+    const strict = { ...snapshot, approvalMode: 'read-only' as const }
     await act(async () => {
-      root.render(<PanelBubble visible snapshot={snapshot} error={null} run={async (action) => { await action(window.pet); return true }} />)
+      root.render(<PanelBubble visible snapshot={strict} error={null} run={async (action) => { await action(window.pet); return true }} />)
     })
     await act(async () => { host.querySelector<HTMLElement>('.panel-compose-trigger')!.click() })
     await act(async () => { host.querySelector<HTMLElement>('.panel-approval-button')!.click() })
@@ -129,6 +130,19 @@ describe('the approval-mode control', () => {
     expect(warning?.textContent).toContain('开启「完全访问」')
     expect(warning?.textContent).toContain('风险')
     await act(async () => { host.querySelector<HTMLElement>('.panel-bypass-confirm')!.click() })
+    expect(calls).toContainEqual(['setApprovalMode', 'danger-full-access'])
+    expect(host.querySelector('.panel-bypass')).toBeNull()
+  })
+
+  it('switches from workspace-write to full access without a warning', async () => {
+    await act(async () => {
+      root.render(<PanelBubble visible snapshot={snapshot} error={null} run={async (action) => { await action(window.pet); return true }} />)
+    })
+    await act(async () => { host.querySelector<HTMLElement>('.panel-compose-trigger')!.click() })
+    await act(async () => { host.querySelector<HTMLElement>('.panel-approval-button')!.click() })
+    const bypass = [...host.querySelectorAll<HTMLElement>('.panel-approval-pick')]
+      .find((item) => item.textContent?.includes('完全访问'))!
+    await act(async () => { bypass.click() })
     expect(calls).toContainEqual(['setApprovalMode', 'danger-full-access'])
     expect(host.querySelector('.panel-bypass')).toBeNull()
   })

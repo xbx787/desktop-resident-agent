@@ -16,6 +16,7 @@ import { CLAUDE_BASE_URL, DEFAULT_CLAUDE_MODEL, findClaudeExecutable, probeAnthr
 import { seedClaudeMemory } from './claude-memory'
 import { BUBBLE_BOTTOM, computeStageBounds, STAGE_HEIGHT, STAGE_WIDTH, TRIANGLE_ROOM } from './stage-bounds'
 import { runSelfTest } from './self-test'
+import { startInputActivity, stopInputActivity } from './input-activity'
 import { EvolveStore } from './evolve-store'
 import type { EvolveBridge } from './evolve-tools'
 import { DshRuntime } from './dsh-runtime'
@@ -148,6 +149,15 @@ function avatarRegion(size: { width: number; height: number }): Electron.Rectang
   return { x: size.width - 168, y: size.height - 186, width: 160, height: 180 }
 }
 
+/** 状态点拱在人物可见矩形右上角之外；形状要把右上角一起圈进来，
+ *  否则拖动后重算形状会把弧线裁成一条竖线。 */
+function avatarShape(size: { width: number; height: number }): Electron.Rectangle[] {
+  return [
+    avatarRegion(size),
+    { x: Math.max(0, size.width - 104), y: 0, width: Math.min(104, size.width), height: 96 }
+  ]
+}
+
 /** 人物可见区的中心点（屏幕坐标）；渲染器还没上报时退回头像窗口中心。 */
 function avatarFocusPoint(bounds: Electron.Rectangle): Electron.Point {
   const centerY = avatarBox
@@ -193,7 +203,7 @@ function applyPointerShape(): void {
   if (!win || win.isDestroyed() || process.platform !== 'win32') return
   // 头像窗口只有 200×220，命中形状取窗口局部坐标；面板窗口本身就是一个
   // 贴合面板的矩形，不需要再裁剪。
-  win.setShape([avatarRegion(win.getBounds())])
+  win.setShape(avatarShape(win.getBounds()))
 }
 
 /** 面板窗口只包住面板矩形（逻辑舞台里的 bubbleRegion）。左/右贴边时直接
@@ -280,6 +290,8 @@ function syncGripWindow(): void {
     win.setBounds({ x: bounds.x, y, width: GRIP_SIZE, height: GRIP_SIZE }, false)
   }
   if (!win.isVisible()) win.showInactive()
+  // 手柄永远压在角色/面板之上；同层窗口靠 moveTop 抢最前。
+  win.moveTop()
 }
 
 /** 告诉面板窗口它贴在人物的哪一侧，小三角据此换方向。 */
@@ -956,7 +968,7 @@ function createAvatarWindow(): BrowserWindow {
       sandbox: false
     }
   })
-  if (process.platform === 'win32') win.setShape([avatarRegion({ width, height })])
+  if (process.platform === 'win32') win.setShape(avatarShape({ width, height }))
   // 人物永远在最上层：连其他置顶窗口（面板、播放器）也不能把她盖住。
   win.setAlwaysOnTop(true, 'screen-saver')
   win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
@@ -980,6 +992,7 @@ function createAvatarWindow(): BrowserWindow {
     }
     syncPanelBounds()
     syncBalancePosition()
+    if (gripWindow && !gripWindow.isDestroyed() && gripWindow.isVisible()) gripWindow.moveTop()
   })
   win.on('resize', () => { syncPanelBounds(); syncBalancePosition() })
   win.on('closed', () => {
@@ -2671,6 +2684,12 @@ if (ownsSingleInstance) void app.whenReady().then(async () => {
   avatarWindow = createAvatarWindow()
   panelWindow = createPanelWindow()
   createTray()
+  // 全局键鼠活动：面板提示框里实时显示按键与鼠标三键。
+  startInputActivity((activity) => {
+    for (const win of [panelWindow, avatarWindow]) {
+      if (win && !win.isDestroyed()) win.webContents.send('pet:input-activity', activity)
+    }
+  })
 
   // First run with no model configured: let the pet appear first, then offer
   // the DeepSeek wizard. The marker file makes "later" a decision we remember.
@@ -2750,6 +2769,7 @@ if (ownsSingleInstance) void app.whenReady().then(async () => {
 let quitting = false
 let inboxWatcher: InboxWatcher | undefined
 app.on('before-quit', (event) => {
+  stopInputActivity()
   if (quitting) return
   quitting = true
   // Hold the quit until the running turn has been written. A turn normally
@@ -2783,3 +2803,5 @@ app.on('before-quit', (event) => {
 app.on('window-all-closed', () => {
   if (!tray) app.quit()
 })
+
+

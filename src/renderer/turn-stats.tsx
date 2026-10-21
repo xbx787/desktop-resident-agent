@@ -136,12 +136,14 @@ export function TurnStats({ entries, metrics, running, showMissingUsage = false 
   // 一句话下面，「一根线断成两节」说的就是它。
   const hasReply = running || entries.some((entry) => entry.kind === 'assistant');
   const missingUsage = showMissingUsage && hasReply && !running && !usage;
-  if (!toolCount && !elapsedLabel && !usage && !missingUsage) return null;
+  // 运行中还没拿到真实用量时，先用已流出的文字估一个下限；真实值一到就切回。
+  const estimating = running && !usage && estimatedOutput > 0;
+  if (!toolCount && !elapsedLabel && !usage && !missingUsage && !running) return null;
   return <div className="panel-turn-stats" role="status">
     {hasReply && <span className={`panel-turn-stats-dot${running ? ' is-running' : ' is-done'}`} aria-hidden="true" />}
     {elapsedLabel && <span>用时 {elapsedLabel}</span>}
-    {(usage || missingUsage) && <span className="panel-turn-usage" tabIndex={0} title={hasTip ? undefined : missingUsage ? '旧会话可能没有保存本轮用量' : '本轮主模型消耗；不含子代理和辅助调用'}>
-      {effectiveUsage ? `${compactTokens(effectiveUsage.total)} token${rateLabel ? `（${rateLabel}）` : ''}` : '用量未记录'}
+    {(usage || missingUsage || running) && <span className="panel-turn-usage" tabIndex={0} title={hasTip ? undefined : estimating ? '生成中按已流出的文字估算，消息完成后校准' : missingUsage ? '旧会话可能没有保存本轮用量' : '本轮主模型消耗；不含子代理和辅助调用'}>
+      {effectiveUsage ? `${compactTokens(effectiveUsage.total)} token${rateLabel ? `（${rateLabel}）` : ''}` : estimating ? `≈${compactTokens(estimatedOutput)} token` : missingUsage ? '用量未记录' : '正在统计 token…'}
       {hasTip && <span className="panel-turn-usage-tip" role="tooltip">
         {formulaRows.length > 0 && <span className="panel-turn-formula">
           {formulaRows.map((row) => (

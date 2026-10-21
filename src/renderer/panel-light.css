@@ -937,6 +937,39 @@ body.panel-theme-light .panel-suggestion-item[aria-selected="true"], body.panel-
 body.panel-theme-light .panel-suggestion-item span{ flex: none; max-width: 42%; overflow: hidden; font-size: var(--text-sm); text-overflow: ellipsis; white-space: nowrap; }
 body.panel-theme-light .panel-suggestion-item small{ flex: 1; min-width: 0; overflow: hidden; color: #1a2e52; font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
 body.panel-theme-light .panel-composer-inputrow{ position: relative; display: flex; flex: none; min-height: 0; padding-right: 23px; }
+/* 输入提示的左右两侧：左边键帽队列，中间两行提示，右边鼠标；整体往上收。 */
+body.panel-theme-light .panel-composer-hintrow{ display: flex; flex: none; align-items: center; justify-content: space-between; gap: 8px; min-height: 60px; margin: -4px 2px 0; }
+body.panel-theme-light .panel-composer-hint{ flex: none; width: 112px; color: #3b4e70; font-size: var(--text-xs); line-height: 1.5; text-align: center; }
+body.panel-theme-light .panel-composer-hintrow .panel-input-keys{ gap: 2px; }
+body.panel-theme-light .panel-composer-hintrow .panel-input-keys kbd{ height: 22px; min-height: 22px; font-size: var(--text-sm); padding: 1px 7px; }
+body.panel-theme-light .panel-composer-hintrow .panel-input-plus{ width: 8px; font-size: var(--text-xs); }
+body.panel-theme-light .panel-composer-hintrow .panel-mouse{ width: 44px; height: 60px; }
+/* 正在执行时，提示框里实时显示键盘与手绘鼠标。 */
+body.panel-theme-light .panel-input-activity{ display: flex; flex: none; align-items: flex-end; justify-content: space-between; gap: 10px; min-height: 76px; padding-bottom: 4px; margin: 0 2px 6px; color: #3b4e70; font-size: var(--text-md); user-select: none; }
+body.panel-theme-light .panel-input-keys{ display: flex; flex-direction: column; justify-content: flex-end; gap: 5px; height: auto; min-width: 0; align-items: flex-start; overflow: visible; }
+body.panel-theme-light .panel-input-keys kbd{ display: flex; flex: none; align-items: center; height: 28px; font: inherit; font-weight: 600; font-size: var(--text-lg); line-height: 1.2; padding: 3px 10px; max-width: 100%; overflow: hidden; border: 1px solid rgba(0, 40, 115, 0.22); border-radius: 7px; background: rgba(0, 40, 115, 0.1); color: #001230; text-overflow: ellipsis; white-space: nowrap; }
+body.panel-theme-light .panel-input-idle{ opacity: .45; font-size: var(--text-lg); }
+body.panel-theme-light .panel-input-row{ display: flex; align-items: center; gap: 4px; max-width: 100%; transform-origin: left center; }
+body.panel-theme-light .panel-input-row.is-fade-1 kbd{ color: rgba(0, 18, 48, 0.42); }
+body.panel-theme-light .panel-input-row.is-fade-1 .panel-input-plus{ opacity: .3; }
+body.panel-theme-light .panel-input-row.is-fade-2 kbd{ color: rgba(0, 18, 48, 0.72); }
+body.panel-theme-light .panel-input-row.is-fade-2 .panel-input-plus{ opacity: .55; }
+body.panel-theme-light .panel-input-plus{ flex: none; width: 10px; opacity: .55; font-size: var(--text-md); font-weight: 600; text-align: center; }
+body.panel-theme-light .panel-input-row.is-new{ animation: panel-key-pop .26s ease-out; }
+body.panel-theme-light .panel-mouse{ --panel-mouse-face: rgba(5, 85, 197, 0.46); width: 56px; height: 76px; flex: none; overflow: visible; }
+body.panel-theme-light .panel-mouse-body{ fill: rgba(197, 213, 247, 0.55); stroke: rgba(0, 50, 105, 0.6); stroke-width: 1.6; }
+body.panel-theme-light .panel-mouse-button{ fill: var(--panel-mouse-face); stroke: rgba(0, 50, 105, 0.34); stroke-width: 1; transition: fill .12s ease, stroke .12s ease, filter .12s ease; }
+body.panel-theme-light .panel-mouse-button.is-down{ fill: rgba(0, 70, 135, 0.66); stroke: #00141f; filter: drop-shadow(0 0 5px rgba(0, 70, 135, 0.9)); }
+body.panel-theme-light .panel-mouse-middle-fill{ fill: var(--panel-mouse-face); }
+body.panel-theme-light .panel-mouse-midline{ stroke: rgba(0, 50, 105, 0.34); stroke-width: 1.2; }
+body.panel-theme-light .panel-mouse-middle-group.is-down{ animation: panel-mouse-flash .38s ease-in-out infinite alternate; }
+body.panel-theme-light .panel-mouse-middle-group.is-down .panel-mouse-middle-fill{ fill: rgba(0, 70, 135, 0.5); }
+body.panel-theme-light .panel-mouse-chevron{ fill: none; stroke: rgba(0, 50, 95, 0.6); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; transition: stroke .12s ease, filter .12s ease; }
+body.panel-theme-light .panel-mouse-chevron.is-active{ stroke: #000e15; filter: drop-shadow(0 0 5px rgba(0, 70, 115, 0.95)); animation: panel-mouse-arrow .4s ease-in-out infinite alternate; }
+body.panel-theme-light .panel-mouse.is-drag .panel-mouse-middle-fill{ fill: rgba(144, 96, 12, 0.45); }
+@keyframes panel-key-pop { from { opacity: .35; } to { opacity: 1; } }
+@keyframes panel-mouse-arrow { from { opacity: .4; } to { opacity: 1; } }
+@keyframes panel-mouse-flash { from { opacity: .45; } to { opacity: 1; } }
 body.panel-theme-light .panel-composer textarea{ width: 100%; flex: none; min-width: 0; min-height: 0; max-height: 155px; padding: 2px 2px 2px 0; resize: none; overflow-y: auto; border: 0; outline: none; color: #00030c; background: transparent; font-size: var(--text-md); line-height: 1.45; scrollbar-color: rgba(5, 35, 84, 0.62) transparent; scrollbar-width: auto; }
 body.panel-theme-light .panel-composer textarea::-webkit-scrollbar{ width: 8px; }
 body.panel-theme-light .panel-composer textarea::-webkit-scrollbar-thumb{ border-radius: 8px; background: rgba(5, 35, 84, 0.58); }
@@ -1159,4 +1192,20 @@ body.panel-theme-light .panel-event-sender{ display: inline-flex; align-items: c
 body.panel-theme-light .panel-timeline-divider{ display: flex; align-items: center; gap: 10px; margin: 20px 0; color: #273e62; font-size: var(--text-xs); }
 body.panel-theme-light .panel-timeline-divider::before, body.panel-theme-light .panel-timeline-divider::after{ content: ''; flex: 1; height: 1px; background: rgba(25, 55, 105, 0.28); }
 body.panel-theme-light .panel-timeline-divider span{ flex: none; padding: 0 2px; letter-spacing: .04em; }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

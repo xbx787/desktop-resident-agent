@@ -93,6 +93,11 @@ const api: PetAPI = {
     ipcRenderer.on('pet:panel-placement', listener)
     return () => ipcRenderer.removeListener('pet:panel-placement', listener)
   },
+  onInputActivity: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, activity: import('../shared/input-activity').InputActivity): void => callback(activity)
+    ipcRenderer.on('pet:input-activity', listener)
+    return () => ipcRenderer.removeListener('pet:input-activity', listener)
+  },
   onPanelDirection: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, direction: 'up' | 'down'): void => callback(direction)
     ipcRenderer.on('pet:panel-direction', listener)
