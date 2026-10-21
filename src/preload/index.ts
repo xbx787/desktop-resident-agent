@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { AppSnapshot, PetAPI, SideChatSnapshot, SlashUiAction, VoiceConfig } from '../shared/contracts'
+import type { AppSnapshot, PanelPlacement, PetAPI, SideChatSnapshot, SlashUiAction, VoiceConfig } from '../shared/contracts'
 
 const api: PetAPI = {
   getSnapshot: () => ipcRenderer.invoke('pet:get-snapshot'),
@@ -86,6 +86,18 @@ const api: PetAPI = {
     ipcRenderer.on('pet:panel-open', listener)
     return () => ipcRenderer.removeListener('pet:panel-open', listener)
   },
+  getPanelDirection: () => ipcRenderer.invoke('pet:get-panel-direction'),
+  getPanelPlacement: () => ipcRenderer.invoke('pet:get-panel-placement'),
+  onPanelPlacement: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, placement: PanelPlacement): void => callback(placement)
+    ipcRenderer.on('pet:panel-placement', listener)
+    return () => ipcRenderer.removeListener('pet:panel-placement', listener)
+  },
+  onPanelDirection: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, direction: 'up' | 'down'): void => callback(direction)
+    ipcRenderer.on('pet:panel-direction', listener)
+    return () => ipcRenderer.removeListener('pet:panel-direction', listener)
+  },
   showContextMenu: () => ipcRenderer.invoke('pet:show-context-menu'),
   setBalanceOpen: (open) => ipcRenderer.invoke('pet:set-balance-open', open),
   toggleBalance: () => ipcRenderer.invoke('pet:toggle-balance'),
@@ -100,6 +112,18 @@ const api: PetAPI = {
   setBubbleLayout: (layout, height) => ipcRenderer.invoke('pet:set-bubble-layout', layout, height),
   setBubbleExpanded: (expanded) => ipcRenderer.invoke('pet:set-bubble-expanded', expanded),
   setPanelSize: (width, height) => ipcRenderer.invoke('pet:set-panel-size', width, height),
+  resizeGhost: (pos) => ipcRenderer.send('pet:resize-ghost', pos),
+  onApprovalRequest: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, request: { id: string; title: string; detail?: string }): void => callback(request)
+    ipcRenderer.on('pet:approval-request', listener)
+    return () => ipcRenderer.removeListener('pet:approval-request', listener)
+  },
+  answerApproval: (id, approved) => ipcRenderer.send('pet:approval-result', id, approved),
+  onFarewell: (callback) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('pet:avatar:farewell', listener)
+    return () => ipcRenderer.removeListener('pet:avatar:farewell', listener)
+  },
   setAvatarBox: (box) => ipcRenderer.invoke('pet:set-avatar-box', box),
   setModelMode: (mode) => ipcRenderer.invoke('pet:set-model-mode', mode),
   setEffort: (level) => ipcRenderer.invoke('pet:set-effort', level),

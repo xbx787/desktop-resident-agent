@@ -89,10 +89,17 @@ export function taskDot(state: string | undefined): TaskDot | null {
     case 'planning':
     case 'executing':
     case 'verifying':
+    case 'running':
+    case 'working':
+    case 'thinking':
       return { tone: 'busy', pulse: true }
     case 'awaiting_approval':
+    case 'waiting':
+    case 'awaiting':
       return { tone: 'waiting', pulse: true }
     case 'done':
+    case 'completed':
+    case 'success':
       return { tone: 'done', pulse: false }
     case 'failed':
       return { tone: 'failed', pulse: false }

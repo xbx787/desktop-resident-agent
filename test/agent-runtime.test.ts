@@ -526,6 +526,74 @@ describe('task cancellation', () => {
   })
 })
 
+describe('local goal loop for kernels without a goal driver', () => {
+  it('continues until the model marks the goal done', async () => {
+    const calls: string[] = []
+    const model = {
+      goalMode: 'local',
+      respond: async (history: DialogueLine[]) => {
+        calls.push(history[history.length - 1].content)
+        return { text: calls.length === 1 ? '第一步完成' : '全部完成\n[[GOAL_DONE]]' }
+      }
+    } as ModelClient & { goalMode: string }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    await runtime.sendMessage('/goal 完成改进')
+    await vi.waitFor(() => expect(calls).toHaveLength(2))
+    await vi.waitFor(() => expect(runtime.getSnapshot().goal ?? null).toBeNull())
+    expect(calls[0]).toContain('目标：完成改进')
+    expect(calls[1]).toContain('继续执行目标：完成改进')
+    const timeline = runtime.getSnapshot().timeline
+    expect(timeline.some((entry) => entry.text.includes('目标已完成'))).toBe(true)
+    expect(timeline.some((entry) => entry.text.includes('[[GOAL_DONE]]'))).toBe(false)
+  })
+
+  it('clears a local goal without sending it to the model', async () => {
+    const calls: string[] = []
+    const model = {
+      goalMode: 'local',
+      respond: async () => {
+        calls.push('called')
+        return { text: '不应调用' }
+      }
+    } as ModelClient & { goalMode: string }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    runtime.restoreConversation({
+      id: 'local-goal', title: '本地目标', createdAt: '', updatedAt: '', archivedAt: null, pinnedAt: null,
+      mode: 'claude_code' as const, taskStatus: 'done' as const,
+      timeline: [], history: [], pendingMessages: [], sdkSessionId: null,
+      goal: { condition: '旧目标', phase: 'confirmed' as const, iterations: 1, startedAt: new Date().toISOString() }
+    })
+    await runtime.sendMessage('/goal clear')
+    expect(calls).toHaveLength(0)
+    expect(runtime.getSnapshot().goal ?? null).toBeNull()
+  })
+
+  it('keeps going past any iteration count instead of stopping', async () => {
+    const calls: string[] = []
+    let releaseSecond!: (reply: { text: string }) => void
+    const model = {
+      goalMode: 'local',
+      respond: async () => {
+        calls.push('called')
+        if (calls.length === 1) return { text: '这一步还没完成' }
+        return await new Promise<{ text: string }>((resolve) => { releaseSecond = resolve })
+      }
+    } as ModelClient & { goalMode: string }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    runtime.setGoalBudget(1, 0)
+    await runtime.sendMessage('/goal 永远做不完')
+    // 旧上限是 1 轮；现在会继续排下一轮，目标仍然在。
+    await vi.waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(2))
+    expect(runtime.getSnapshot().goal).not.toBeNull()
+    // 续轮不冒充用户，也不在每轮末尾补一行「继续执行目标」。
+    expect(runtime.getSnapshot().timeline.some((entry) => entry.kind === 'system' && entry.text === '继续执行目标')).toBe(false)
+    expect(runtime.getSnapshot().timeline.filter((entry) => entry.kind === 'user')).toHaveLength(1)
+    expect(runtime.getSnapshot().timeline.some((entry) => entry.text.includes('轮上限'))).toBe(false)
+    runtime.stop()
+    releaseSecond({ text: '停下' })
+  })
+})
+
 describe('plan mode and /goal truth', () => {
   it('keeps a cold plan-mode request unconfirmed until an SDK init callback arrives', async () => {
     let report!: (on: boolean) => void
@@ -599,14 +667,15 @@ describe('plan mode and /goal truth', () => {
     const switched = vi.fn(async () => true)
     const model: ModelClient = { respond: async () => ({ text: 'ok' }), setApprovalMode: switched }
     const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
-    await runtime.setApprovalMode('default')
-    expect(switched).toHaveBeenCalledWith('default')
-    expect(runtime.getSnapshot().approvalMode).toBe('default')
-    expect(runtime.getSnapshot().planMode).toBe(false)
-    await runtime.setApprovalMode('plan')
-    expect(runtime.getSnapshot().approvalMode).toBe('plan')
+    await runtime.setApprovalMode('read-only')
+    expect(switched).toHaveBeenCalledWith('read-only')
+    expect(runtime.getSnapshot().approvalMode).toBe('read-only')
     expect(runtime.getSnapshot().planMode).toBe(true)
-    expect(runtime.exportConversationState().approvalMode).toBe('plan')
+    await runtime.setApprovalMode('workspace-write')
+    expect(switched).toHaveBeenCalledWith('workspace-write')
+    expect(runtime.getSnapshot().approvalMode).toBe('workspace-write')
+    expect(runtime.getSnapshot().planMode).toBe(false)
+    expect(runtime.exportConversationState().approvalMode).toBe('workspace-write')
   })
 
   it('parks a tool permission on the snapshot and forwards the verdict', async () => {
@@ -629,13 +698,13 @@ describe('plan mode and /goal truth', () => {
     const record = await new ConversationStore(testRoot).createConversation('审批', 'claude_code')
     const current: ModelClient = { respond: async () => ({ text: 'ok' }), setApprovalMode: async () => true }
     const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, current)
-    runtime.restoreConversation({ ...record, approvalMode: 'acceptEdits' })
-    expect(runtime.getSnapshot().approvalMode).toBe('acceptEdits')
+    runtime.restoreConversation({ ...record, approvalMode: 'acceptEdits' as unknown as ApprovalMode })
+    expect(runtime.getSnapshot().approvalMode).toBe('workspace-write')
     // Legacy record: only the plan flag exists.
     const legacy: ModelClient = { respond: async () => ({ text: 'ok' }), setPlanMode: () => true }
     const restored = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, legacy)
     restored.restoreConversation({ ...record, planMode: true })
-    expect(restored.getSnapshot().approvalMode).toBe('plan')
+    expect(restored.getSnapshot().approvalMode).toBe('read-only')
     expect(restored.getSnapshot().planMode).toBe(true)
   })
 
@@ -655,7 +724,7 @@ describe('plan mode and /goal truth', () => {
     expect(runtime.getSnapshot().goal).toBeNull()
   })
 
-  it('stops at confirmed iteration or elapsed-time limits and pauses the queue', async () => {
+  it('ignores the confirmed iteration limit and wall-clock limits', async () => {
     let report!: Parameters<NonNullable<ModelClient['setGoalListener']>>[0]
     const model: ModelClient = {
       respond: async () => ({ text: '已接收' }),
@@ -664,12 +733,14 @@ describe('plan mode and /goal truth', () => {
     const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
     runtime.setGoalBudget(3, 5)
     report({ condition: '轮数目标', phase: 'confirmed', startedAt: new Date().toISOString(), iterations: 3 })
-    expect(runtime.getSnapshot().goal?.phase).toBe('unverified')
-    expect(runtime.getQueuePauseReason()).toContain('3 轮上限')
+    // 超过旧的 3 轮上限也不再暂停目标。
+    expect(runtime.getSnapshot().goal?.phase).toBe('confirmed')
+    expect(runtime.getQueuePauseReason()).toBeNull()
     runtime.resumeQueue()
+    // Goals have no wall-clock budget: an old startedAt does not pause.
     report({ condition: '时间目标', phase: 'confirmed', startedAt: new Date(Date.now() - 6 * 60_000).toISOString(), iterations: 1 })
-    expect(runtime.getSnapshot().goal?.phase).toBe('unverified')
-    expect(runtime.getQueuePauseReason()).toContain('5 分钟上限')
+    expect(runtime.getSnapshot().goal?.phase).toBe('confirmed')
+    expect(runtime.getQueuePauseReason()).toBeNull()
   })
 })
 
@@ -726,18 +797,18 @@ describe('subagents, interactions and goal truth in the snapshot', () => {
       setPlanModeListener: (listener) => { planListener = listener }
     }
     const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
-    await runtime.setApprovalMode('plan')
+    await runtime.setApprovalMode('read-only')
     park({ id: 'p1', plan: '1. 改配置\n2. 跑测试' })
     await runtime.answerPlan('p1', true)
     expect(runtime.getSnapshot().approvedPlan).toContain('改配置')
     // The SDK client mirrors its own exit from plan mode through both listeners.
-    modeListener('bypassPermissions')
+    modeListener('danger-full-access')
     planListener(false)
     expect(runtime.getSnapshot().planMode).toBe(false)
-    expect(runtime.exportConversationState().approvalMode).toBe('bypassPermissions')
+    expect(runtime.exportConversationState().approvalMode).toBe('danger-full-access')
   })
 
-  it('carries the goal stop-hook reason and the paused queue into the snapshot', () => {
+  it('carries the goal stop-hook reason into the snapshot without a budget pause', () => {
     let report!: (goal: AgentGoal | null) => void
     const model: ModelClient = {
       respond: async () => ({ text: 'ok' }),
@@ -748,10 +819,10 @@ describe('subagents, interactions and goal truth in the snapshot', () => {
       iterations: 2, lastReason: '还有 2 个用例未通过' })
     expect(runtime.getSnapshot().goal).toMatchObject({ iterations: 2, lastReason: '还有 2 个用例未通过' })
     runtime.setGoalBudget(2, 60)
-    expect(runtime.getSnapshot().queuePauseReason).toContain('2 轮上限')
+    expect(runtime.getSnapshot().queuePauseReason ?? null).toBeNull()
   })
 
-  it('clears an exhausted goal through the controller path, not stop alone', () => {
+  it('does not clear a goal on old iteration counts', () => {
     let report!: (goal: AgentGoal | null) => void
     const clear = vi.fn()
     const model: ModelClient = {
@@ -762,8 +833,8 @@ describe('subagents, interactions and goal truth in the snapshot', () => {
     runtime.setGoalClearHandler(clear)
     runtime.setGoalBudget(3, 5)
     report({ condition: '轮数目标', phase: 'confirmed', startedAt: new Date().toISOString(), iterations: 3 })
-    expect(clear).toHaveBeenCalledTimes(1)
-    expect(runtime.getSnapshot().goal?.phase).toBe('unverified')
+    expect(clear).not.toHaveBeenCalled()
+    expect(runtime.getSnapshot().goal?.phase).toBe('confirmed')
   })
 
   it('rolls back a goal that never reached the CLI when the send fails', async () => {
@@ -794,5 +865,66 @@ describe('subagents, interactions and goal truth in the snapshot', () => {
     report([{ taskId: 't1', description: '前台子代理', status: 'running', isBackgrounded: true }])
     await runtime.releaseForegroundSubagents()
     expect(background).toHaveBeenCalledTimes(1)
+  })
+
+  it('第一段思考把“正在理解需求”的时间也算进去', async () => {
+    const model: ModelClient = {
+      respond: async (_history, _signal, _progress, _session, _tool, _usage, onThinking) => {
+        onThinking?.('想一下接下来怎么做', 0)
+        return { text: '好了' }
+      }
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    await runtime.sendMessage('帮我看看这个改动')
+    const snapshot = runtime.getSnapshot()
+    const thinking = snapshot.timeline.find((entry) => entry.kind === 'thinking')
+    expect(thinking?.time).toBe(snapshot.taskMetrics?.startedAt)
+    expect(thinking?.endedAt).toBeTruthy()
+  })
+
+  it('一次只允许一条待确认的插话，回显后才放行下一条', async () => {
+    let finish!: (reply: { text: string }) => void
+    const steers: string[] = []
+    let echo!: (messageId: string) => void
+    const model = {
+      respond: () => new Promise<{ text: string }>((resolve) => { finish = resolve }),
+      steer: async (text: string) => { steers.push(text); return { accepted: true, messageId: 'm1' } },
+      setSteerEchoListener: (listener: (messageId: string) => void) => { echo = listener }
+    } as ModelClient
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    const running = runtime.sendMessage('开始')
+    await vi.waitFor(() => expect(runtime.isRunning()).toBe(true))
+
+    await expect(runtime.steerMessage('第一条插话')).resolves.toBe(true)
+    await expect(runtime.steerMessage('第二条插话')).resolves.toBe(false)
+    expect(steers).toEqual(['第一条插话'])
+    expect(runtime.getSnapshot().steering?.text).toBe('第一条插话')
+
+    echo('m1')
+    await expect(runtime.steerMessage('第二条插话')).resolves.toBe(true)
+    expect(steers).toEqual(['第一条插话', '第二条插话'])
+
+    finish({ text: '完成' })
+    await running
+    await vi.waitFor(() => expect(runtime.isRunning()).toBe(false))
+  })
+
+  it('插话投递失败时提示，并让调用方把消息退回队列', async () => {
+    let finish!: (reply: { text: string }) => void
+    const model = {
+      respond: () => new Promise<{ text: string }>((resolve) => { finish = resolve }),
+      steer: async () => ({ accepted: false })
+    } as ModelClient
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    const running = runtime.sendMessage('开始')
+    await vi.waitFor(() => expect(runtime.isRunning()).toBe(true))
+
+    await expect(runtime.steerMessage('插一句')).resolves.toBe(false)
+    expect(runtime.getSnapshot().timeline.some((entry) => entry.kind === 'system' && entry.text.includes('插话未能投递'))).toBe(true)
+    expect(runtime.getSnapshot().steering).toBeUndefined()
+
+    finish({ text: '完成' })
+    await running
+    await vi.waitFor(() => expect(runtime.isRunning()).toBe(false))
   })
 })

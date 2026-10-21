@@ -1,0 +1,56 @@
+/* 亮色主题的手工校正层：反色生成出来的底偏蓝，这里把主表面压到近白，
+   状态色（完成/进行/失败/等待/空闲）不动。加载顺序在 panel-light.css 之后。 */
+body.panel-theme-light .panel-bubble {
+  border-color: #d8e2f0;
+  background: linear-gradient(155deg, #ffffff, #f7fafe 45%, #eef4fc);
+}
+body.panel-theme-light .panel-chat-header { border-bottom-color: #e3eaf5; }
+body.panel-theme-light .panel-library-drawer {
+  border-right-color: #e0e8f3;
+  background: linear-gradient(155deg, #ffffff, #f3f7fd);
+  box-shadow: 12px 0 30px rgba(40, 60, 90, .16);
+}
+body.panel-theme-light .panel-session-menu,
+body.panel-theme-light .panel-nav-card,
+body.panel-theme-light .panel-model-menu,
+body.panel-theme-light .panel-context-menu {
+  border-color: #dde6f2;
+  background: #ffffff;
+  box-shadow: 0 10px 26px rgba(40, 60, 90, .16);
+}
+body.panel-theme-light .panel-event-user .panel-event-body {
+  border-color: #d6e2f2;
+  background: #eaf2fc;
+}
+body.panel-theme-light .panel-tool-activity,
+body.panel-theme-light .panel-thought { background: rgba(28, 52, 92, .045); }
+body.panel-theme-light .panel-tool-activity:hover,
+body.panel-theme-light .panel-tool-activity[open],
+body.panel-theme-light .panel-thought:hover,
+body.panel-theme-light .panel-thought[open] { background: rgba(28, 52, 92, .08); }
+body.panel-theme-light .panel-compose-dock { background: transparent; }
+body.panel-theme-light .panel-composer { border-top-color: #e0e8f3; }
+body.panel-theme-light .panel-feed { scrollbar-color: #b9c9e2 transparent; }
+body.panel-theme-light .panel-feed::-webkit-scrollbar-thumb { background: #c6d4e8; }
+
+/* 亮色下的主操作：发送键保持浅蓝深字，确认按钮保持浅琥珀深字，不跟着反色变重。 */
+body.panel-theme-light { color-scheme: light; }
+body.panel-theme-light .panel-send { background: #bfd7ff; color: #16305c; }
+body.panel-theme-light .panel-send:hover:not(:disabled) { background: #d7e6ff; }
+body.panel-theme-light .panel-send-spinner { border-color: #7c9bd0; border-top-color: transparent; }
+body.panel-theme-light .panel-ask-submit,
+body.panel-theme-light .panel-plan-approve,
+body.panel-theme-light .panel-permission-allow,
+body.panel-theme-light .panel-bypass-confirm {
+  border-color: #ddb26a;
+  color: #172d58;
+  background: #f2cd92;
+}
+body.panel-theme-light .panel-ask-submit:hover:not(:disabled),
+body.panel-theme-light .panel-plan-approve:hover:not(:disabled),
+body.panel-theme-light .panel-permission-allow:hover:not(:disabled),
+body.panel-theme-light .panel-bypass-confirm:hover:not(:disabled) { background: #f7dcb0; }
+body.panel-theme-light .panel-session-check { color: #2f5f9e; }
+body.panel-theme-light .panel-tool-activity pre,
+body.panel-theme-light .panel-tool-input-code,
+body.panel-theme-light .panel-code-block { color: #1b2b44; background: #f1f5fb; }

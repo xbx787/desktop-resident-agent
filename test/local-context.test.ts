@@ -196,7 +196,7 @@ describe('image attachment staging for SDK', () => {
     const image = await stageImageAttachment(images, 'screen.png', pixelPng)
     await expect(stageImageAttachment(images, 'screen.png', `data:image/jpeg;base64,${pixelPng}`)).rejects.toThrow('格式标记')
     await expect(stageImageAttachment(images, 'fake.png', Buffer.from('not an image').toString('base64'))).rejects.toThrow('不支持')
-    await expect(stageImageAttachment(images, 'screen.png', pixelPng, 16)).rejects.toThrow('大小限制')
+    await expect(stageImageAttachment(images, 'screen.png', pixelPng, 16)).rejects.toThrow('上限')
     await expect(loadSdkImageBlocks(images, [{ ...image, storageKey: '../outside.png' }])).rejects.toThrow('标识无效')
     await fs.writeFile(path.join(images, image.storageKey), Buffer.from('changed'))
     await expect(loadSdkImageBlocks(images, [image])).rejects.toThrow('内容已变化')

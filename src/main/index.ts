@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, screen, shell, Tray } from 'electron'
-import { existsSync, mkdirSync, promises as fsp } from 'node:fs'
+import { existsSync, mkdirSync, promises as fsp, readdirSync, writeFileSync } from 'node:fs'
+import { execFile, spawn } from 'node:child_process'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { AgentRuntime } from './agent-runtime'
@@ -10,11 +11,19 @@ import { MemoryService, type MemoryProvider } from './memory-service'
 import { GrowthExperiments } from './growth-experiments'
 import { ConversationStore, isModelProfile, MAX_BATCH_CONVERSATIONS } from './conversation-store'
 import { electronSecretCodec, publicSettings, publicSnapshot, SecretProtectionUnavailableError } from './secret-storage'
-import { ClaudeAgentClient } from './claude-agent'
 import { linkClaudeUserResources } from './claude-resource-links'
 import { CLAUDE_BASE_URL, DEFAULT_CLAUDE_MODEL, findClaudeExecutable, probeAnthropicEndpoint } from './claude-code'
 import { seedClaudeMemory } from './claude-memory'
-import { BUBBLE_BOTTOM, computeStageBounds, STAGE_HEIGHT, STAGE_WIDTH } from './stage-bounds'
+import { BUBBLE_BOTTOM, computeStageBounds, STAGE_HEIGHT, STAGE_WIDTH, TRIANGLE_ROOM } from './stage-bounds'
+import { runSelfTest } from './self-test'
+import { EvolveStore } from './evolve-store'
+import type { EvolveBridge } from './evolve-tools'
+import { DshRuntime } from './dsh-runtime'
+import { DshAgentClient } from './dsh-agent'
+import { normalizeDshModel } from './dsh-model'
+import { DshAcpRuntime, toAcpMcpServer, type DshAcpMcpServer } from './dsh-acp-runtime'
+import { DshAcpAgentClient } from './dsh-acp-agent'
+import { PetMcpBridge } from './pet-mcp-server'
 import { deepSeekBaseUrl, deepSeekModel, deepSeekProfile, ONBOARDING_PAGES, readOnboardingMarker, shouldOfferOnboarding, writeOnboardingMarker, type OnboardingPage } from './onboarding'
 import { normalizeApiKey } from '../shared/onboarding'
 import { DeepSeekClient } from './deepseek'
@@ -24,7 +33,6 @@ import { voiceLog, voiceLogError } from './voice-log'
 import { NoteStore } from './note-store'
 import { createSnapshotScheduler } from './snapshot-scheduler'
 import { getDeepSeekBalanceKey, getEnabledDeepSeekKey } from './model-config'
-import { loadWindowsMcpConfig } from './mcp-config'
 import { LibraryStore } from './library-store'
 import { searchMarket } from './marketplace'
 import { VoiceService } from './voice-service'
@@ -36,8 +44,8 @@ import { APP_SLASH_COMMANDS, listClaudeWorkflows, parseAppSlashCommand } from '.
 import { attachmentPreviewPath, prepareDroppedFile, readImagePreview, searchWorkspaceFiles, stagePastedAttachment, validAttachmentList, verifyDroppedFilePath } from './local-context'
 import { findSourceProjectRoot, isUsableWorkspace, isWritableWorkspace, readSavedWorkspace, resolveAgentWorkspace, writeSavedWorkspace } from './workspace-root'
 import { isEffortLevel } from '../shared/effort'
-import type { AvatarSize, BubbleLayout, ClaudeWorkflowOption, ConversationSettings, UiSize, UserAttachment } from '../shared/contracts'
-import { isApprovalMode, isAutoCompactPercent, PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH } from '../shared/contracts'
+import type { AgentKernelKind, AvatarSize, BubbleLayout, ClaudeWorkflowOption, ConversationSettings, PanelDirection, PanelPlacement, UiSize, UserAttachment } from '../shared/contracts'
+import { isAgentKernelKind, isApprovalMode, isAutoCompactPercent, isAvatarRenderer, PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH } from '../shared/contracts'
 import { isPersonaId } from '../shared/personas'
 
 const projectRoot = app.isPackaged ? path.dirname(process.execPath) : path.resolve(__dirname, '../..')
@@ -48,6 +56,7 @@ const dataRoot = dataRootOverride && path.isAbsolute(dataRootOverride)
   ? dataRootOverride
   : path.join(dataProjectRoot, 'data')
 const userHome = homedir()
+const evolveStore = new EvolveStore(dataRoot)
 // The wizard's saved choice survives a cleared environment variable; an
 // explicit DESKTOP_PET_WORKSPACE still wins so advanced setups keep control.
 let agentWorkspace = resolveAgentWorkspace(projectRoot, app.isPackaged, process.env, userHome, readSavedWorkspace(dataRoot))
@@ -107,6 +116,7 @@ const BALANCE_GAP = 4
  *  右下角走，不会在拖动过程中错位。 */
 let avatarBox: { right: number; bottom: number; width: number; height: number } | undefined
 let dragOrigin: { cursor: Electron.Point; bounds: Electron.Rectangle } | undefined
+let avatarDragging = false
 let shapeShrinkTimer: NodeJS.Timeout | undefined
 let rendererAvatarState: import('../shared/contracts').AvatarState | undefined
 
@@ -118,6 +128,12 @@ const AVATAR_WINDOW_WIDTH = 200
 const AVATAR_WINDOW_HEIGHT = 220
 /** 逻辑舞台：面板按它计算位置，头像窗口贴着它的右下角。 */
 let stageBounds: Electron.Rectangle | undefined
+/** 面板相对人物的位置：用户选的，默认上方。不再按屏幕上下半自动翻。 */
+let panelPlacement: PanelPlacement = 'top'
+/** 上次发给面板窗口的位置；窗口重建时清空，保证会重发。 */
+let sentPanelPlacement: PanelPlacement | undefined
+/** 由 panelPlacement 派生：top/left/right 走“向上”布局，bottom 走“向下”。 */
+let panelDirection: PanelDirection = 'up'
 
 function avatarRegion(size: { width: number; height: number }): Electron.Rectangle {
   // 图片裁掉透明边后，命中区跟着渲染器量出的可见矩形走；启动最初的几帧
@@ -132,13 +148,34 @@ function avatarRegion(size: { width: number; height: number }): Electron.Rectang
   return { x: size.width - 168, y: size.height - 186, width: 160, height: 180 }
 }
 
-/** 面板窗口底部留给小三角的空间。三角旋转 45° 后对角尖会伸到 9px 左右，
- *  7px 会把尖端削掉。 */
-const TRIANGLE_ROOM = 10
+/** 人物可见区的中心点（屏幕坐标）；渲染器还没上报时退回头像窗口中心。 */
+function avatarFocusPoint(bounds: Electron.Rectangle): Electron.Point {
+  const centerY = avatarBox
+    ? bounds.y + (bounds.height - avatarBox.bottom - avatarBox.height) + avatarBox.height / 2
+    : bounds.y + bounds.height / 2
+  return { x: bounds.x + bounds.width - 88, y: Math.round(centerY) }
+}
 
-function bubbleRegion(layout: BubbleLayout, size: { width: number; height: number }, compactHeight = compactBubbleHeight): Electron.Rectangle {
-  // BUBBLE_BOTTOM 是面板底边到舞台底的距离；额外的 TRIANGLE_ROOM 盖住小三角。
-  if (bubbleExpanded) return { x: 10, y: 0, width: size.width - 20, height: size.height - BUBBLE_BOTTOM + TRIANGLE_ROOM }
+function bubbleRegion(layout: BubbleLayout, size: { width: number; height: number }, compactHeight = compactBubbleHeight, direction = panelDirection): Electron.Rectangle {
+  // 向上时面板底边停在人物上方，小三角在窗口底部；向下时窗口顶边贴着人物
+  // 底边，小三角在顶部。TRIANGLE_ROOM 始终含在面板窗口里。
+  if (bubbleExpanded) {
+    return direction === 'down'
+      ? { x: 10, y: 0, width: size.width - 20, height: size.height }
+      : { x: 10, y: 0, width: size.width - 20, height: size.height - BUBBLE_BOTTOM + TRIANGLE_ROOM }
+  }
+  if (direction === 'down') {
+    switch (layout) {
+      case 'empty': return { x: size.width - 120, y: 0, width: 64, height: 56 + TRIANGLE_ROOM }
+      case 'composer':
+      case 'composer_attachments': {
+        const height = compactHeight ?? (layout === 'composer' ? 206 : 232)
+        return { x: size.width - 342, y: 0, width: 332, height: height + TRIANGLE_ROOM }
+      }
+      case 'composer_models': return { x: size.width - 342, y: 0, width: 332, height: 238 + TRIANGLE_ROOM }
+      case 'full': return { x: size.width - 366, y: 0, width: 356, height: 358 + TRIANGLE_ROOM }
+    }
+  }
   switch (layout) {
     case 'empty': return { x: size.width - 120, y: size.height - BUBBLE_BOTTOM - 56, width: 64, height: 56 + TRIANGLE_ROOM }
     case 'composer':
@@ -159,16 +196,99 @@ function applyPointerShape(): void {
   win.setShape([avatarRegion(win.getBounds())])
 }
 
-/** 面板窗口只包住面板矩形（逻辑舞台里的 bubbleRegion）。 */
+/** 面板窗口只包住面板矩形（逻辑舞台里的 bubbleRegion）。左/右贴边时直接
+ *  相对头像窗口定位，不再走“舞台”的上下布局。 */
 function syncPanelBounds(): void {
   const stage = stageBounds
   const panel = panelWindow
   if (!stage || !panel || panel.isDestroyed()) return
-  const region = bubbleRegion(bubbleLayout, stage)
-  const target = { x: stage.x + region.x, y: stage.y + region.y, width: region.width, height: region.height }
+  const region = bubbleRegion(bubbleLayout, stage, compactBubbleHeight, panelDirection)
+  let target = { x: stage.x + region.x, y: stage.y + region.y, width: region.width, height: region.height }
+  if ((panelPlacement === 'left' || panelPlacement === 'right') && avatarWindow && !avatarWindow.isDestroyed()) {
+    const avatar = avatarWindow.getBounds()
+    const gap = 10
+    const x = panelPlacement === 'left' ? avatar.x - region.width - gap : avatar.x + avatar.width + gap
+    const y = avatar.y + avatar.height - region.height
+    const work = screen.getDisplayNearestPoint({ x: avatar.x, y: avatar.y }).workArea
+    target = {
+      x: Math.min(work.x + work.width - region.width - 4, Math.max(work.x + 4, x)),
+      y: Math.min(work.y + work.height - region.height - 4, Math.max(work.y + 4, y)),
+      width: region.width,
+      height: region.height
+    }
+  }
+  broadcastPanelPlacement()
   const current = panel.getBounds()
-  if (current.x === target.x && current.y === target.y && current.width === target.width && current.height === target.height) return
+  if (current.x === target.x && current.y === target.y && current.width === target.width && current.height === target.height) {
+    syncGripWindow()
+    return
+  }
   panel.setBounds(target, false)
+  syncGripWindow()
+}
+
+/** 左上角缩放手柄的独立置顶小窗：面板窗口不置顶，抓手要一直在最上面。
+ *  抓手的拖动事件由这个小窗发给主进程，尺寸在这里算，面板实时跟随。 */
+const GRIP_SIZE = 44
+let gripWindow: BrowserWindow | undefined
+let gripDrag: { startX: number; startY: number; width: number; height: number; targetWidth: number; targetHeight: number; right: number; bottom: number; top: number } | undefined
+
+function ensureGripWindow(): BrowserWindow {
+  if (gripWindow && !gripWindow.isDestroyed()) return gripWindow
+  const win = new BrowserWindow({
+    width: GRIP_SIZE,
+    height: GRIP_SIZE,
+    frame: false,
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    focusable: false,
+    show: false,
+    webPreferences: { nodeIntegration: true, contextIsolation: false, sandbox: false }
+  })
+  win.setAlwaysOnTop(true, 'screen-saver')
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+    html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden;cursor:nwse-resize}
+    .grip{position:absolute;inset:3px;border:2px solid rgba(190,214,255,.62);border-radius:15px;clip-path:inset(0 17px 17px 0);filter:drop-shadow(0 0 3px rgba(160,205,255,.5))}
+    .grip:hover{border-color:rgba(225,242,255,.95);filter:drop-shadow(0 0 6px rgba(160,205,255,.9))}
+  </style></head><body><div class="grip"></div><script>
+    const { ipcRenderer } = require('electron')
+    let dragging = false
+    addEventListener('pointerdown', (event) => { if (event.button !== 0) return; dragging = true; ipcRenderer.send('pet:grip-resize', { phase: 'start', x: event.screenX, y: event.screenY }) })
+    addEventListener('pointermove', (event) => { if (!dragging) return; ipcRenderer.send('pet:grip-resize', { phase: 'move', x: event.screenX, y: event.screenY }) })
+    addEventListener('pointerup', (event) => { if (!dragging) return; dragging = false; ipcRenderer.send('pet:grip-resize', { phase: 'end', x: event.screenX, y: event.screenY }) })
+  <\/script></body></html>`
+  void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+  gripWindow = win
+  return win
+}
+
+function syncGripWindow(): void {
+  const panel = panelWindow
+  if (!panel || panel.isDestroyed() || !panel.isVisible() || !bubbleExpanded) {
+    gripWindow?.hide()
+    return
+  }
+  const bounds = panel.getBounds()
+  const win = ensureGripWindow()
+  const y = panelDirection === 'down' ? bounds.y + bounds.height - GRIP_SIZE : bounds.y
+  const current = win.getBounds()
+  if (current.x !== bounds.x || current.y !== y) {
+    win.setBounds({ x: bounds.x, y, width: GRIP_SIZE, height: GRIP_SIZE }, false)
+  }
+  if (!win.isVisible()) win.showInactive()
+}
+
+/** 告诉面板窗口它贴在人物的哪一侧，小三角据此换方向。 */
+function broadcastPanelPlacement(): void {
+  const panel = panelWindow
+  if (!panel || panel.isDestroyed()) return
+  if (sentPanelPlacement === panelPlacement) return
+  sentPanelPlacement = panelPlacement
+  panel.webContents.send('pet:panel-placement', panelPlacement)
 }
 
 /** 余额卡与人物可见区域对齐：顶部与人物顶部齐平，右侧三角尖离角色左缘
@@ -209,13 +329,25 @@ function syncStageBounds(): void {
   if (!win || win.isDestroyed()) return
   const avatar = win.getBounds()
   const bottom = avatar.y + avatar.height
-  const work = screen.getDisplayNearestPoint({ x: avatar.x + avatar.width - 88, y: bottom - 96 }).workArea
-  const next = computeStageBounds(avatar, work, bubbleExpanded, bubbleExpanded ? bubblePanelSize : undefined)
-  // 头像窗口绝对不动：舞台直接按头像的右下角锚定，尺寸取布局计算值。
-  // 展开/收起只改变面板窗口，人物在屏幕上的位置保持不变。
+  const focus = avatarFocusPoint(avatar)
+  const work = screen.getDisplayNearestPoint(focus).workArea
+  const direction: PanelDirection = panelPlacement === 'bottom' ? 'down' : 'up'
+  if (direction !== panelDirection) {
+    panelDirection = direction
+    panelWindow?.webContents.send('pet:panel-direction', direction)
+  }
+  const next = computeStageBounds(
+    direction === 'down'
+      // 向下展开时面板顶边要贴角色可见底边，而不是窗口底边；角色图下方的
+      // 透明边会让面板看起来离人物很远。
+      ? { ...avatar, height: Math.max(0, avatar.height - (avatarBox?.bottom ?? 0)) }
+      : avatar,
+    work, bubbleExpanded, bubbleExpanded ? bubblePanelSize : undefined, direction)
+  // 头像窗口绝对不动：向上时舞台底边、向下时舞台顶边贴着头像底边，尺寸取
+  // 布局计算值。展开/收起只改变面板窗口，人物在屏幕上的位置保持不变。
   stageBounds = {
     x: avatar.x + avatar.width - next.width,
-    y: avatar.y + avatar.height - next.height,
+    y: direction === 'down' ? next.y : bottom - next.height,
     width: next.width,
     height: next.height
   }
@@ -247,8 +379,7 @@ function schedulePanelSizeSave(): void {
 const apiKey = getEnabledDeepSeekKey(process.env)
 const claudeKey = process.env.DEEPSEEK_API_KEY?.trim()
 const claudeExecutable = findClaudeExecutable(process.env)
-const windowsMcpServers = loadWindowsMcpConfig(path.join(userHome, '.claude.json'))
-const libraryStore = new LibraryStore(dataRoot)
+const libraryStore = new LibraryStore(dataRoot, { homeDir: userHome, workspace: agentWorkspace })
 const voiceService = new VoiceService({
   dataRoot,
   codec: electronSecretCodec(),
@@ -279,7 +410,17 @@ const resolveLibraries: LibraryLaunchResolver = async (keys) => {
     resolved.push(`mcp:${item.id}`)
     servers[libraryServerName(item.id)] = launch.url
       ? { type: 'http', url: launch.url }
-      : { type: 'stdio', command: launch.command, args: launch.args ?? [], env: {} }
+      : {
+          type: 'stdio',
+          command: launch.command,
+          args: launch.args ?? [],
+          // Claude inherits PATH and the environment; DSH's MCP bridge scrubs
+          // names matching KEY/PASSWORD/SECRET/TOKEN, so pass the declared
+          // values explicitly from the main process environment.
+          env: Object.fromEntries((launch.env ?? [])
+            .map((name) => [name, process.env[name] ?? ''] as const)
+            .filter(([, value]) => Boolean(value)))
+        }
   }
   const pluginPaths: string[] = []
   for (const item of plugins) {
@@ -290,7 +431,99 @@ const resolveLibraries: LibraryLaunchResolver = async (keys) => {
   return { resolved, mcp: servers, plugins: pluginPaths }
 }
 let controller: ConversationController | undefined
+/** Set when a restart is queued; consumed after the running turns are saved. */
+let relaunchOnQuit = false
+/** Polls until every conversation is idle, then relaunches. */
+let restartPoll: NodeJS.Timeout | undefined
 const memory = new MemoryService(dataRoot, { onError: (error) => console.warn(error.message) })
+
+/** 独立看门狗：旧进程退出后，如果目标 exe 没在跑，就由它把新版本拉起来。 */
+function spawnRestartWatchdog(targetExe: string): void {
+  try {
+    const script = path.join(dataRoot, 'restart-watchdog.ps1')
+    const log = path.join(dataRoot, 'restart-watchdog.log')
+    writeFileSync(script, [
+      'param([string]$TargetExe,[int]$OldPid,[string]$Log)',
+      'function L($m){ "$(Get-Date -Format o) $m" | Add-Content -LiteralPath $Log }',
+      'L "watchdog old=$OldPid target=$TargetExe"',
+      'for($i=0;$i -lt 90;$i++){ if(-not (Get-Process -Id $OldPid -ErrorAction SilentlyContinue)){ break }; Start-Sleep -Milliseconds 500 }',
+      'Start-Sleep -Milliseconds 800',
+      'if(Test-Path -LiteralPath $TargetExe){',
+      '  $running = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $TargetExe }',
+      '  if(-not $running){ Start-Process -FilePath $TargetExe -WorkingDirectory (Split-Path $TargetExe); L "started" } else { L "already running" }',
+      '} else { L "missing $TargetExe" }'
+    ].join('\r\n'), 'utf8')
+    spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script,
+      '-TargetExe', targetExe, '-OldPid', String(process.pid), '-Log', log],
+    { detached: true, stdio: 'ignore', windowsHide: true }).unref()
+  } catch (error) {
+    console.error('Restart watchdog failed:', error)
+  }
+}
+
+type RestartOutcome = 'restarted' | 'waiting' | 'cancelled'
+
+/** 重启请示一次只开一张卡：重复请求复用同一次答复，避免叠两张勾叉。 */
+let restartApproval: Promise<boolean | null> | undefined
+
+function askRestartApproval(): Promise<boolean | null> {
+  restartApproval ??= requestApproval(
+    '还有任务在跑，现在就重启吗？',
+    '点勾：立刻退出重启，正在跑的任务会被打断；点叉：这次不重启，等你说下一步。'
+  ).finally(() => { restartApproval = undefined })
+  return restartApproval
+}
+
+/** 别的任务还在跑就要用户点头：勾=现在就走，叉=取消这次重启。
+ *  只有请求者自己的回合在跑时不算“别人”，照旧等它跑完再重启。 */
+async function decideRestart(excludeConversationId?: string): Promise<'now' | 'wait' | 'cancel'> {
+  const otherBusy = (controller?.hasRunningWorkExcept(excludeConversationId) ?? false) || sideChat.isBusy()
+  if (!otherBusy) return 'wait'
+  return (await askRestartApproval()) === true ? 'now' : 'cancel'
+}
+
+/** 关闭前给人物一个告别表情：只等一小会儿，绝不拖住退出。 */
+function playAvatarFarewell(): Promise<void> {
+  const win = avatarWindow && !avatarWindow.isDestroyed() ? avatarWindow : null
+  if (!win) return Promise.resolve()
+  try {
+    win.webContents.send('pet:avatar:farewell')
+  } catch {
+    return Promise.resolve()
+  }
+  return new Promise((resolve) => setTimeout(resolve, 700))
+}
+
+/** 退出并拉起指定 exe：快捷方式先切，看门狗兜底。 */
+async function restartNow(executable: string): Promise<void> {
+  await playAvatarFarewell()
+  pointShortcutsAt(executable)
+  spawnRestartWatchdog(executable)
+  relaunchOnQuit = true
+  app.quit()
+}
+
+/** Restarts without cutting a running turn. 有别人的任务在跑时先弹勾叉：
+ *  勾=立刻重启（打断它们），叉=取消并等用户下一条消息。 */
+async function requestRestart(excludeConversationId?: string, beforeQuit?: () => void): Promise<RestartOutcome> {
+  const decision = await decideRestart(excludeConversationId)
+  if (decision === 'cancel') return 'cancelled'
+  beforeQuit?.()
+  if (decision === 'now' || (controller?.allConversationsIdle() ?? true)) {
+    await restartNow(process.execPath)
+    return 'restarted'
+  }
+  if (!restartPoll) {
+    restartPoll = setInterval(() => {
+      if (controller && !controller.allConversationsIdle()) return
+      if (restartPoll) clearInterval(restartPoll)
+      restartPoll = undefined
+      void restartNow(process.execPath)
+    }, 1000)
+    restartPoll.unref?.()
+  }
+  return 'waiting'
+}
 
 async function backgroundProvider(): Promise<MemoryProvider | null> {
   const settings = (await activeController().getLibraryState()).settings
@@ -364,26 +597,187 @@ function publishSnapshot(): void {
   snapshotScheduler.publish()
 }
 
+/** Tools for the selfEvolve tier. Scheduling and status are cheap; restart is
+ *  deferred until the running turn is idle so the current answer is saved. */
+function evolveHooksFor(conversationId: string): Omit<EvolveBridge, 'enabled'> {
+  return {
+    schedule: async (input) => {
+      const task = evolveStore.schedule(conversationId, input)
+      return {
+        taskId: task.id,
+        goal: task.goalCondition ?? null,
+        pending: task.steps.filter((step) => step.status === 'pending')
+          .map((step) => ({ id: step.id, kind: step.kind, text: step.text.slice(0, 300) })),
+        restartCount: task.restartCount
+      }
+    },
+    status: async () => {
+      const task = evolveStore.load()
+      if (!task || task.conversationId !== conversationId) return { active: false }
+      return {
+        active: task.status === 'active',
+        status: task.status,
+        goal: task.goalCondition ?? null,
+        note: task.note ?? null,
+        restartCount: task.restartCount,
+        steps: task.steps.map((step) => ({
+          id: step.id, kind: step.kind, status: step.status,
+          text: step.text.slice(0, 300), result: step.result?.slice(0, 1_000)
+        }))
+      }
+    },
+    restart: async (version) => {
+      let task = evolveStore.load()
+      if (!task || task.conversationId !== conversationId) {
+        // 目标模式下没有安排跨重启步骤也能重启：把当前目标写进任务，
+        // 重启后 resumeEvolveTask 会重新装上目标并继续。
+        const currentGoal = controller?.getSnapshot().goal?.condition
+        if (!currentGoal) throw new Error('还没有安排跨重启任务；先调用 schedule。')
+        task = evolveStore.schedule(conversationId, { goal: currentGoal })
+      }
+      if (task.status !== 'active') throw new Error('当前自我进化任务不在进行中。')
+      if (!task.goalCondition) {
+        const currentGoal = controller?.getSnapshot().goal?.condition
+        if (currentGoal) task = evolveStore.schedule(conversationId, { goal: currentGoal })
+      }
+      if (!evolveStore.hasPending() && !task.goalCondition) throw new Error('没有待继续的目标或步骤，重启会直接结束任务。')
+      // 次数只在用户同意之后才记：点叉取消的重启不该消耗额度。
+      const noteRestart = (): void => {
+        if (!evolveStore.noteRestart()) throw new Error('重启次数达到上限，任务已停止。')
+      }
+      if (version) {
+        const executable = path.join(dataProjectRoot, 'release', `whale-companion-v${version}`, 'win-unpacked', 'Whale Companion Preview.exe')
+        if (!existsSync(executable)) throw new Error(`找不到版本 ${version} 的安装目录。`)
+        const outcome = await restartWhenIdle(version, conversationId, noteRestart)
+        if (outcome === 'cancelled') {
+          return { scheduled: false, cancelled: true, note: '用户点了叉：这次不重启，正在跑的任务继续。停下手上的事，等用户下一条消息。' }
+        }
+        return { scheduled: true, waiting: outcome === 'waiting', version }
+      }
+      const outcome = await requestRestart(conversationId, noteRestart)
+      if (outcome === 'cancelled') {
+        return { scheduled: false, cancelled: true, note: '用户点了叉：这次不重启，正在跑的任务继续。停下手上的事，等用户下一条消息。' }
+      }
+      return { scheduled: true, waiting: outcome === 'waiting' }
+    }
+  }
+}
+
+// Gray-switch the kernel through DESKTOP_PET_KERNEL=dsh. DSH is a vendored
+// pnpm runtime; npm's flat tree resolves the tool scheduler to the wrong copy,
+// which turns every tool call into TOOL_OUTCOME_UNKNOWN.
+const dshBin = (() => {
+  const override = process.env.DESKTOP_PET_DSH_BIN?.trim()
+  const candidates = [
+    override,
+    app.isPackaged ? path.join(process.resourcesPath, 'dsh', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js') : '',
+    path.join(projectRoot, 'reference', 'dsh-poc-pnpm', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+  ].filter((value): value is string => Boolean(value))
+  return candidates.find((value) => existsSync(value)) ?? null
+})()
+// DSH is the only agent kernel. `claude_code` remains a stored conversation
+// mode for old records, but no Claude runtime is loaded or packaged.
+const useDshKernel = (): boolean => Boolean(dshBin)
+
+const mcpBridgeScript = (() => {
+  const override = process.env.DESKTOP_PET_MCP_BRIDGE?.trim()
+  const candidates = [
+    override,
+    app.isPackaged ? path.join(process.resourcesPath, 'pet-mcp-bridge.cjs') : '',
+    path.join(projectRoot, 'scripts', 'pet-mcp-bridge.cjs')
+  ].filter((value): value is string => Boolean(value))
+  return candidates.find((value) => existsSync(value)) ?? null
+})()
+
 // The CLI alone decides whether the SDK path exists; the key may arrive later
 // from a saved model profile instead of the launch environment.
 // One runtime (and one engine connection) per conversation that actually
 // runs; the controller creates them on demand through this factory.
-const createRuntime = (onChange: () => void, persistSession = true): AgentRuntime => new AgentRuntime(
-  new NoteStore(projectRoot),
-  apiKey ? new DeepSeekClient(apiKey) : undefined,
-  onChange,
-  claudeExecutable
-    ? new ClaudeAgentClient(claudeExecutable, claudeKey ?? '', agentWorkspace, path.join(dataRoot, 'claude'), windowsMcpServers, persistSession)
-    : undefined,
-  agentWorkspace
-)
+const createRuntime = (conversationId: string, onChange: () => void, persistSession = true, enableEvolve = true): AgentRuntime => {
+  const key = claudeKey ?? apiKey ?? ''
+  const dshModel = useDshKernel() && dshBin
+    ? (() => {
+      const bridge = new PetMcpBridge(key)
+      // 打包/重启这类请示走角色旁的小批准卡，绿勾批准、红叉拒绝。
+      bridge.setApprovalBridge({ request: (title, detail) => requestApproval(title, detail) })
+      // 用 adapter 目录里的模型 id：deepseek-flash 声明了图片输入，deepseek-v4-flash 不在目录里，会被读图工具判定为不支持图片。
+      const model = normalizeDshModel(process.env.DSH_MODEL)
+      if (process.env.DESKTOP_PET_DSH_TRANSPORT === 'sdk-minimal') {
+        return new DshAgentClient({
+          bridge,
+          runtime: new DshRuntime({
+            bin: dshBin,
+            home: path.join(dataRoot, 'dsh-home'),
+            cwd: agentWorkspace,
+            provider: 'deepseek-official',
+            model,
+            env: { DEEPSEEK_API_KEY: key },
+            mcpBridge: mcpBridgeScript
+              ? { script: mcpBridgeScript, endpoint: () => bridge.endpoint }
+              : undefined
+          }),
+          cwd: agentWorkspace
+        })
+      }
+      const dshHome = path.join(dataRoot, 'dsh-home')
+      const dshLibraries: { mcp: Record<string, unknown>; plugins: string[] } = { mcp: {}, plugins: [] }
+      return new DshAcpAgentClient({
+        bridge,
+        cwd: agentWorkspace,
+        provider: 'deepseek-official',
+        model,
+        deepseekApiKey: key,
+        dshHome,
+        libraries: dshLibraries,
+        runtime: new DshAcpRuntime({
+          bin: dshBin,
+          home: dshHome,
+          cwd: agentWorkspace,
+          systemPrompt: 'You are XiaoJing, a helpful desktop companion. Reply in the user language.',
+          env: { DEEPSEEK_API_KEY: key },
+          mcpServers: () => {
+            const servers: DshAcpMcpServer[] = []
+            const endpoint = bridge.endpoint
+            if (mcpBridgeScript && endpoint) {
+              servers.push({
+                name: 'pet',
+                command: process.execPath,
+                args: [mcpBridgeScript],
+                env: [
+                  { name: 'ELECTRON_RUN_AS_NODE', value: '1' },
+                  { name: 'PET_BRIDGE_URL', value: endpoint.url },
+                  { name: 'PET_BRIDGE_TOKEN', value: endpoint.token },
+                  // 联网搜索关闭时桥不声明搜索/抓取工具。
+                  { name: 'PET_MCP_WEB', value: bridge.webSearchEnabled ? '1' : '0' }
+                ]
+              })
+            }
+            for (const [name, raw] of Object.entries(dshLibraries.mcp)) {
+              const server = toAcpMcpServer(name, raw)
+              if (server) servers.push(server)
+            }
+            return servers
+          }
+        })
+      })
+    })()
+    : undefined
+  return new AgentRuntime(
+    new NoteStore(projectRoot),
+    apiKey ? new DeepSeekClient(apiKey) : undefined,
+    onChange,
+    dshModel,
+    agentWorkspace,
+    enableEvolve ? evolveHooksFor(conversationId) : undefined
+  )
+}
 controller = new ConversationController(
   new ConversationStore(dataRoot, electronSecretCodec()),
   createRuntime,
   () => publishSnapshot(),
   (error) => { console.error('Conversation background task failed:', error) },
   claudeKey || apiKey
-    ? (source) => generateConversationTitle((claudeKey || apiKey)!, source, AbortSignal.timeout(20_000))
+    ? (source, locale, model) => generateConversationTitle((claudeKey || apiKey)!, source, AbortSignal.timeout(20_000), locale, model)
     : undefined,
   // The launch environment, materialized as the first editable profile.
   claudeKey
@@ -426,7 +820,7 @@ const sideSnapshotScheduler = createSnapshotScheduler(() => {
   }
 }, 80)
 const sideChat = new SideChatController(
-  createRuntime,
+  (sessionId, onChange, persistSession) => createRuntime(sessionId, onChange, persistSession, false),
   () => {
     const owner = activeController()
     const snapshot = owner.getSnapshot()
@@ -493,6 +887,7 @@ async function migrateAgentWorkspace(next: string): Promise<string> {
   await active.resetForWorkspace()
   writeSavedWorkspace(dataRoot, normalized)
   agentWorkspace = normalized
+  libraryStore.setWorkspace(normalized)
   process.env.DESKTOP_PET_WORKSPACE = agentWorkspace
   return agentWorkspace
 }
@@ -571,13 +966,16 @@ function createAvatarWindow(): BrowserWindow {
     win.moveTop()
   })
   win.on('move', () => {
-    // 拖动的是头像窗口；逻辑舞台跟着它的右下角平移，面板窗口再跟着舞台走。
+    // 拖动的是头像窗口；逻辑舞台跟着它平移，面板窗口再跟着舞台走。
+    // 越过屏幕中线时改由 syncStageBounds 重算展开方向。
+    const bounds = win.getBounds()
     if (stageBounds) {
-      const bounds = win.getBounds()
       stageBounds = {
         ...stageBounds,
         x: bounds.x - (stageBounds.width - bounds.width),
-        y: bounds.y - (stageBounds.height - bounds.height)
+        y: panelDirection === 'down'
+          ? bounds.y + bounds.height
+          : bounds.y - (stageBounds.height - bounds.height)
       }
     }
     syncPanelBounds()
@@ -594,6 +992,51 @@ function createAvatarWindow(): BrowserWindow {
   return win
 }
 
+/** 拖动缩放手柄时的全局悬浮手柄：独立置顶小窗，拖出面板也看得见。 */
+const RESIZE_GHOST_SIZE = 240
+let resizeGhostWindow: BrowserWindow | undefined
+
+function resizeGhostAt(pos: { x: number; y: number } | null): void {
+  if (pos === null) {
+    resizeGhostWindow?.hide()
+    return
+  }
+  if (!resizeGhostWindow || resizeGhostWindow.isDestroyed()) {
+    const win = new BrowserWindow({
+      width: RESIZE_GHOST_SIZE,
+      height: RESIZE_GHOST_SIZE,
+      frame: false,
+      transparent: true,
+      backgroundColor: '#00000000',
+      hasShadow: false,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: false,
+      focusable: false,
+      show: false,
+      webPreferences: { sandbox: false }
+    })
+    win.setAlwaysOnTop(true, 'screen-saver')
+    win.setIgnoreMouseEvents(true)
+    const html = '<!doctype html><html><body style="margin:0;overflow:hidden;background:transparent">'
+      + '<svg width="240" height="240" viewBox="0 0 240 240" style="position:absolute;inset:0;overflow:visible">'
+      + '<path d="M135 105 L120 105 A15 15 0 0 0 105 120 L105 135" fill="none" stroke="rgba(80,160,255,.22)" stroke-width="36" stroke-linecap="round" filter="blur(9px)"/>'
+      + '<path d="M135 105 L120 105 A15 15 0 0 0 105 120 L105 135" fill="none" stroke="rgba(90,180,255,.4)" stroke-width="22" stroke-linecap="round" filter="blur(5px)"/>'
+      + '<path d="M135 105 L120 105 A15 15 0 0 0 105 120 L105 135" fill="none" stroke="rgba(150,220,255,.65)" stroke-width="11" stroke-linecap="round" filter="blur(2px)"/>'
+      + '<path d="M135 105 L120 105 A15 15 0 0 0 105 120 L105 135" fill="none" stroke="#e8f9ff" stroke-width="2.6" stroke-linecap="round"/></svg></body></html>'
+    void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+    resizeGhostWindow = win
+  }
+  resizeGhostWindow.setBounds({
+    // 圆弧的 45° 点（圆心 48,48，半径 22）对准鼠标。
+    x: Math.round(pos.x - (120 - 15 / Math.SQRT2)),
+    y: Math.round(pos.y - (120 - 15 / Math.SQRT2)),
+    width: RESIZE_GHOST_SIZE,
+    height: RESIZE_GHOST_SIZE
+  }, false)
+  if (!resizeGhostWindow.isVisible()) resizeGhostWindow.showInactive()
+}
+
 function createPanelWindow(): BrowserWindow {
   const avatar = avatarWindow
   const bounds = avatar && !avatar.isDestroyed()
@@ -608,7 +1051,8 @@ function createPanelWindow(): BrowserWindow {
     transparent: true,
     backgroundColor: '#00000000',
     hasShadow: false,
-    alwaysOnTop: true,
+    // 消息窗口不置顶：可以被其他应用盖住；角色窗口才保持最上层。
+    alwaysOnTop: false,
     skipTaskbar: true,
     autoHideMenuBar: true,
     resizable: false,
@@ -621,6 +1065,18 @@ function createPanelWindow(): BrowserWindow {
     }
   })
   win.on('closed', () => { if (panelWindow === win) panelWindow = undefined })
+  sentPanelPlacement = undefined
+  // 面板右键：复制选中的消息文本；输入框里额外提供剪切/粘贴；全选始终可用。
+  win.webContents.on('context-menu', (_event, params) => {
+    const menu = Menu.buildFromTemplate([
+      { role: 'copy', label: '复制', enabled: params.selectionText.length > 0 || params.editFlags.canCopy },
+      { role: 'cut', label: '剪切', enabled: params.isEditable && params.editFlags.canCut },
+      { role: 'paste', label: '粘贴', enabled: params.isEditable && params.editFlags.canPaste },
+      { type: 'separator' },
+      { role: 'selectAll', label: '全选' }
+    ])
+    menu.popup({ window: win })
+  })
   loadPanelPage(win)
   return win
 }
@@ -686,7 +1142,7 @@ function createSettingsWindow(): BrowserWindow {
     // 标题栏画在页面里（.settings-header），窗口不带系统边框。
     frame: false,
     width: 760,
-    height: 560,
+    height: 620,
     minWidth: 560,
     minHeight: 420,
     show: false,
@@ -713,6 +1169,81 @@ function createSettingsWindow(): BrowserWindow {
   return win
 }
 
+/** Runs one cross-restart command in the agent workspace. Output is clipped so
+ *  a chatty build cannot blow up the task file or the conversation. */
+function runEvolveCommand(command: string): Promise<{ ok: boolean; output: string }> {
+  return new Promise((resolve) => {
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], {
+      // Self-evolution commands are mostly build/package steps, so the project
+      // root is the useful default; absolute paths still address the workspace.
+      cwd: dataProjectRoot,
+      timeout: 10 * 60_000,
+      maxBuffer: 1024 * 1024,
+      windowsHide: true
+    }, (error, stdout, stderr) => {
+      const output = `${stdout ?? ''}\n${stderr ?? ''}`.trim()
+      resolve({ ok: !error, output: (output || (error ? error.message : '')).slice(-8_000) })
+    })
+  })
+}
+
+/** Picks up an active self-evolution task after a restart: re-selects the
+ *  conversation, restores the approval tier, runs queued commands, re-arms the
+ *  goal, and sends the pending prompt. Failure marks the task instead of
+ *  looping forever. */
+async function resumeEvolveTask(): Promise<void> {
+  const task = evolveStore.load()
+  if (!task || task.status !== 'active') return
+  const id = task.conversationId
+  try {
+    const record = await controller?.selectConversation(id)
+    if (!record) throw new Error('找不到要恢复的对话。')
+    if (record.mode !== 'claude_code') throw new Error('对话不在 Claude Code 模式，无法恢复。')
+    await controller?.setApprovalMode('selfEvolve', id).catch(() => undefined)
+
+    const notes: string[] = []
+    for (const step of task.steps.filter((item) => item.kind === 'command' && item.status === 'pending')) {
+      evolveStore.updateStep(step.id, { status: 'running' })
+      const result = await runEvolveCommand(step.text)
+      evolveStore.updateStep(step.id, { status: result.ok ? 'done' : 'failed', result: result.output })
+      notes.push(`跨重启命令${result.ok ? '完成' : '失败'}：${step.text}\n${result.output}`)
+      if (!result.ok) {
+        evolveStore.setStatus('failed', `跨重启命令失败：${result.output.slice(0, 300)}`)
+        break
+      }
+    }
+
+    const refreshed = evolveStore.load()
+    if (!refreshed || refreshed.status !== 'active') return
+    if (refreshed.goalCondition) {
+      await controller?.sendMessage(`/goal ${refreshed.goalCondition}`, [], 'queue', id)
+    }
+    const next = refreshed.steps.find((item) => item.kind === 'prompt' && item.status === 'pending')
+    if (next) evolveStore.updateStep(next.id, { status: 'done' })
+    if (notes.length || next || refreshed.goalCondition) {
+      // 详细上下文仍走隐藏系统消息，避免把旧轮和新轮搅在一起；
+      // 真正开新轮的是用户消息「继续执行目标」，它带新头像、分隔上下两段。
+      const details: string[] = []
+      if (notes.length) details.push(notes.join('\n\n'))
+      if (refreshed.goalCondition) details.push(`目标条件：${refreshed.goalCondition}`)
+      if (next) details.push(`下一步：${next.text}`)
+      const version = app.getVersion()
+      const lastEntry = controller?.getSnapshot().timeline.at(-1)
+      const alreadyContinued = lastEntry?.kind === 'user' && /^(?:已重启，)?继续执行目标/u.test(lastEntry.text)
+      if (!alreadyContinued) {
+        // 一条隐藏上下文的用户条目：界面只画分割线，模型拿到命令结果和下一步。
+        const prompt = ['已重启，继续执行目标', `（应用已按计划重启到 ${version}，继续上次的任务。）`, ...details]
+          .join('\n\n').slice(0, 8_000)
+        await controller?.sendMessage(prompt, [], 'queue', id, true)
+      }
+    } else {
+      evolveStore.setStatus('done', '没有待继续的步骤。')
+    }
+  } catch (error) {
+    evolveStore.setStatus('failed', error instanceof Error ? error.message : String(error))
+  }
+}
+
 function setBalanceOpen(open: boolean): void {
   if (balanceOpen === open) return
   balanceOpen = open
@@ -735,12 +1266,13 @@ function showPanel(): void {
   if (balanceOpen) setBalanceOpen(false)
   if (!panelOpen) {
     panelOpen = true
-    syncPanelBounds()
+    syncStageBounds()
     applyPointerShape()
     // 面板是独立窗口：要真正激活它，输入框才能拿到键盘。
     if (panelWindow && !panelWindow.isDestroyed()) {
       panelWindow.show()
       panelWindow.focus()
+      syncGripWindow()
     }
     avatarWindow?.webContents.send('pet:panel-open', true)
   } else {
@@ -801,6 +1333,94 @@ function openOnboarding(): void {
   }
 }
 
+/** 隐藏人物和聊天窗口，只留通知区域图标；左击图标再把人物叫回来。 */
+function hideAvatar(): void {
+  if (balanceOpen) setBalanceOpen(false)
+  hidePanel()
+  avatarWindow?.hide()
+}
+
+/** 打包/重启这类请示的小卡：绿勾批准、红叉拒绝，点一下回传。 */
+interface PendingApproval {
+  resolve: (approved: boolean | null) => void
+  timer: NodeJS.Timeout
+}
+const pendingApprovals = new Map<string, PendingApproval>()
+
+function requestApproval(title: string, detail?: string, timeoutMs = 5 * 60_000): Promise<boolean | null> {
+  const label = `${title} ${detail ?? ''}`.replace(/[&<>"']/gu, (character) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character] ?? character
+  )).trim()
+  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+    html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden}
+    .card{position:absolute;left:50%;top:9px;transform:translateX(-50%);width:60px;height:34px;box-sizing:border-box;display:flex;flex-direction:row;align-items:center;justify-content:center;gap:6px;border-radius:9px;background:rgba(23,31,44,.94);border:1px solid rgba(126,160,214,.42)}
+    .pointer{position:absolute;top:-8px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:8px solid rgba(23,31,44,.94)}
+    a{display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;text-decoration:none;box-shadow:none}
+    .yes{background:rgba(52,168,104,.9);color:#f0fff5;border:1px solid rgba(120,235,170,.55)}
+    .no{background:rgba(196,72,84,.88);color:#fff2f3;border:1px solid rgba(255,140,150,.5)}
+    svg{display:block}
+  </style></head><body title="${label}"><div class="card"><span class="pointer"></span><a class="yes" href="https://approval.local/approve" title="批准"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></a><a class="no" href="https://approval.local/reject" title="拒绝"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"/></svg></a></div></body></html>`
+  return new Promise((resolve) => {
+    // 批准时把余额框收起来：同一位置只留两个按钮。
+    if (balanceOpen) setBalanceOpen(false)
+    const win = new BrowserWindow({
+      width: 64,
+      height: 46,
+      frame: false,
+      transparent: true,
+      backgroundColor: '#00000000',
+      hasShadow: false,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      resizable: false,
+      focusable: true,
+      show: false,
+      webPreferences: { sandbox: true }
+    })
+    win.setAlwaysOnTop(true, 'screen-saver')
+    let settled = false
+    const finish = (value: boolean | null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (!win.isDestroyed()) win.destroy()
+      resolve(value)
+    }
+    const timer = setTimeout(() => finish(null), timeoutMs)
+    win.webContents.on('will-navigate', (event, url) => {
+      event.preventDefault()
+      if (url.includes('/approve')) finish(true)
+      else if (url.includes('/reject')) finish(false)
+    })
+    win.on('closed', () => finish(null))
+    void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
+    win.webContents.once('did-finish-load', () => {
+      if (win.isDestroyed()) return
+      const avatar = avatarWindow && !avatarWindow.isDestroyed() ? avatarWindow.getBounds() : null
+      const panel = panelWindow && !panelWindow.isDestroyed() && panelWindow.isVisible() ? panelWindow.getBounds() : null
+      const work = screen.getPrimaryDisplay().workArea
+      // 优先挂在聊天面板下沿、靠左：这个位置就在人物左边，三角朝上指着那段对话。
+      // 面板不在人物上方或没打开时，退回余额框的位置（同样是人物左侧）。
+      let anchorX: number
+      let anchorY: number
+      if (panel && (!avatar || panel.y + panel.height <= avatar.y + 24)) {
+        anchorX = panel.x + 14
+        anchorY = panel.y + panel.height + 2
+      } else {
+        const anchor = avatar ? balanceBoundsFor(avatar) : null
+        anchorX = anchor ? anchor.x + anchor.width - 44 : Math.round(work.x + (work.width - 64) / 2)
+        anchorY = anchor ? anchor.y + 4 : Math.round(work.y + (work.height - 46) / 2)
+      }
+      const x = Math.min(work.x + work.width - 64 - 8, Math.max(work.x + 8, anchorX))
+      const y = Math.min(work.y + work.height - 46 - 8, Math.max(work.y + 8, anchorY))
+      win.setPosition(x, y, false)
+      win.show()
+      win.moveTop()
+      win.focus()
+    })
+  })
+}
+
 function createTray(): void {
   const asset = app.isPackaged
     ? path.join(process.resourcesPath, 'whale-tray-icon-pixel-24.png')
@@ -811,21 +1431,61 @@ function createTray(): void {
     { label: '配置向导', click: openOnboarding },
     { label: '选项', click: openSettings },
     { type: 'separator' },
+    { label: '隐藏', click: hideAvatar },
+    { type: 'separator' },
     { label: '退出', click: () => app.quit() }
   ])
   tray = new Tray(icon)
   tray.setToolTip('小鲸')
   tray.setContextMenu(contextMenu)
   tray.on('click', () => {
+    // 隐藏后左击图标只把人物叫回来，不顺手弹开聊天气泡；人物可见时仍
+    // 按原来的行为打开/聚焦面板。
+    if (avatarWindow && !avatarWindow.isVisible()) {
+      avatarWindow.show()
+      avatarWindow.moveTop()
+      return
+    }
     avatarWindow?.show()
     showPanel()
   })
+  // Windows 11 默认把新图标收进任务栏溢出区；晚一点再把它标记为常驻显示。
+  setTimeout(promoteTrayIcon, 1_500)
+  setTimeout(promoteTrayIcon, 4_000)
+}
+
+/** 把本程序的托盘图标标记为常驻，避免默认被收进任务栏的折叠区。 */
+function promoteTrayIcon(): void {
+  if (process.platform !== 'win32') return
+  const exe = process.execPath.toLowerCase()
+  const reg = (args: string[]): Promise<string> => new Promise((resolve) => {
+    execFile('reg.exe', args, { windowsHide: true }, (error, stdout) => resolve(error ? '' : stdout))
+  })
+  void (async () => {
+    const listing = await reg(['query', 'HKCU\\Control Panel\\NotifyIconSettings', '/s'])
+    if (!listing) return
+    let current = ''
+    const matches: string[] = []
+    for (const line of listing.split(/\r?\n/u)) {
+      const key = /^(HKEY_CURRENT_USER\\[^\r\n]+)$/u.exec(line.trim())
+      if (key) {
+        current = key[1]
+        continue
+      }
+      const pathValue = /^\s+ExecutablePath\s+REG_\w+\s+(.+)$/u.exec(line)
+      if (pathValue && pathValue[1].trim().toLowerCase() === exe) matches.push(current)
+    }
+    for (const key of matches) {
+      await reg(['add', key, '/v', 'IsPromoted', '/t', 'REG_DWORD', '/d', '1', '/f'])
+    }
+  })()
 }
 
 function hidePanel(): void {
   if (!panelOpen) return
   panelOpen = false
   panelWindow?.hide()
+  syncGripWindow()
   avatarWindow?.webContents.send('pet:panel-open', false)
   if (shapeShrinkTimer) clearTimeout(shapeShrinkTimer)
   shapeShrinkTimer = undefined
@@ -839,9 +1499,14 @@ function isScreenPoint(value: unknown): value is Electron.Point {
 function conversationSettingsPatch(value: unknown): Partial<ConversationSettings> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('会话设置无效。')
   const input = value as Record<string, unknown>
-  const editable = ['visibleConversationTabs', 'autoArchiveAfterDays', 'effort', 'goalMaxIterations', 'goalMaxMinutes', 'memoryEnabled', 'uiSize', 'avatarSize', 'webSearchEnabled', 'personaId', 'autoCompactPercent', 'assistantAvatar', 'enableAutoTitleGeneration', 'showMessageTimestamps', 'userName', 'assistantName']
+  const editable = ['visibleConversationTabs', 'autoArchiveAfterDays', 'effort', 'goalMaxIterations', 'goalMaxMinutes', 'memoryEnabled', 'uiSize', 'avatarSize', 'avatarRenderer', 'toolRowDetail', 'webSearchEnabled', 'personaId', 'agentKernel', 'autoCompactPercent', 'assistantAvatar', 'enableAutoTitleGeneration', 'showMessageTimestamps', 'userName', 'assistantName', 'panelPlacement', 'panelTheme',
+    'outputStyle', 'appendSystemPrompt', 'autoScroll', 'expandFileEditsByDefault', 'sessionSort', 'titleLocale', 'titleModel', 'loadUserSettings']
   if (Object.keys(input).some((key) => !editable.includes(key))) throw new Error('会话设置无效。')
   const patch: Partial<ConversationSettings> = {}
+  if (input.agentKernel !== undefined) {
+    if (!isAgentKernelKind(input.agentKernel)) throw new Error('Agent 内核设置无效。')
+    patch.agentKernel = input.agentKernel
+  }
   if (input.visibleConversationTabs !== undefined) {
     const tabs = input.visibleConversationTabs
     if (typeof tabs !== 'number' || !Number.isInteger(tabs) || tabs < 1 || tabs > 12) throw new Error('快捷切换数应为 1–12。')
@@ -878,6 +1543,27 @@ function conversationSettingsPatch(value: unknown): Partial<ConversationSettings
     if (input.avatarSize !== 'small' && input.avatarSize !== 'medium' && input.avatarSize !== 'large') throw new Error('人物大小设置无效。')
     patch.avatarSize = input.avatarSize
   }
+  if (input.avatarRenderer !== undefined) {
+    if (!isAvatarRenderer(input.avatarRenderer)) throw new Error('人物渲染方式无效。')
+    patch.avatarRenderer = input.avatarRenderer
+  }
+  if (input.panelPlacement !== undefined) {
+    if (input.panelPlacement !== 'top' && input.panelPlacement !== 'bottom' &&
+        input.panelPlacement !== 'left' && input.panelPlacement !== 'right') {
+      throw new Error('面板位置设置无效。')
+    }
+    patch.panelPlacement = input.panelPlacement
+  }
+  if (input.panelTheme !== undefined) {
+    if (input.panelTheme !== 'dark' && input.panelTheme !== 'light') throw new Error('面板主题设置无效。')
+    patch.panelTheme = input.panelTheme
+  }
+  if (input.toolRowDetail !== undefined) {
+    if (input.toolRowDetail !== 'full' && input.toolRowDetail !== 'brief' && input.toolRowDetail !== 'name') {
+      throw new Error('工具行详细程度无效。')
+    }
+    patch.toolRowDetail = input.toolRowDetail
+  }
   if (input.webSearchEnabled !== undefined) {
     if (typeof input.webSearchEnabled !== 'boolean') throw new Error('联网搜索设置无效。')
     patch.webSearchEnabled = input.webSearchEnabled
@@ -908,23 +1594,118 @@ function conversationSettingsPatch(value: unknown): Partial<ConversationSettings
     if (typeof input[key] !== 'string') throw new Error('称呼无效。')
     patch[key] = input[key]
   }
+  if (input.outputStyle !== undefined) {
+    if (typeof input.outputStyle !== 'string' || input.outputStyle.length > 64) throw new Error('回答风格无效。')
+    patch.outputStyle = input.outputStyle
+  }
+  if (input.appendSystemPrompt !== undefined) {
+    if (typeof input.appendSystemPrompt !== 'string' || input.appendSystemPrompt.length > 4_000) throw new Error('附加指令不能超过 4000 字。')
+    patch.appendSystemPrompt = input.appendSystemPrompt
+  }
+  for (const key of ['autoScroll', 'expandFileEditsByDefault'] as const) {
+    if (input[key] === undefined) continue
+    if (typeof input[key] !== 'boolean') throw new Error('显示设置无效。')
+    patch[key] = input[key]
+  }
+  if (input.sessionSort !== undefined) {
+    if (input.sessionSort !== 'updated' && input.sessionSort !== 'created') throw new Error('会话排序设置无效。')
+    patch.sessionSort = input.sessionSort
+  }
+  if (input.titleLocale !== undefined) {
+    if (input.titleLocale !== 'auto' && input.titleLocale !== 'zh' && input.titleLocale !== 'en') throw new Error('标题语言设置无效。')
+    patch.titleLocale = input.titleLocale
+  }
+  if (input.titleModel !== undefined) {
+    if (typeof input.titleModel !== 'string' || input.titleModel.length > 64) throw new Error('标题模型设置无效。')
+    patch.titleModel = input.titleModel
+  }
+  if (input.loadUserSettings !== undefined) {
+    if (typeof input.loadUserSettings !== 'boolean') throw new Error('用户设置加载开关无效。')
+    patch.loadUserSettings = input.loadUserSettings
+  }
   return patch
 }
 
+/** 解析真正可用的发布 exe：优先指定版本，否则退回最新的可用版本。 */
+function resolveLaunchTarget(version?: string): string {
+  const releaseRoot = path.join(dataProjectRoot, 'release')
+  if (version) {
+    const preferred = path.join(releaseRoot, `whale-companion-v${version}`, 'win-unpacked', 'Whale Companion Preview.exe')
+    if (existsSync(preferred)) return preferred
+  }
+  try {
+    const candidates = readdirSync(releaseRoot)
+      .filter((name) => /^whale-companion-v\d+\.\d+\.\d+$/.test(name))
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+      .reverse()
+      .map((name) => path.join(releaseRoot, name, 'win-unpacked', 'Whale Companion Preview.exe'))
+      .filter((file) => existsSync(file))
+    if (candidates[0]) return candidates[0]
+  } catch {
+    // release 目录不可读时退回当前进程。
+  }
+  return process.execPath
+}
+
+/** 把项目根和桌面的小鲸快捷方式指到指定 exe；目标不存在时绝不写入。 */
+function pointShortcutsAt(executable: string): void {
+  if (process.platform !== 'win32' || !app.isPackaged || !existsSync(executable)) return
+  const targets = [path.join(dataProjectRoot, '小鲸.lnk')]
+  try {
+    targets.push(path.join(app.getPath('desktop'), '小鲸.lnk'))
+  } catch {
+    // 没有桌面目录时只处理项目根。
+  }
+  for (const shortcut of targets) {
+    try {
+      const ok = shell.writeShortcutLink(shortcut, 'create', {
+        target: executable,
+        cwd: path.dirname(executable),
+        description: '小鲸',
+        icon: executable,
+        iconIndex: 0
+      })
+      if (!ok) console.error('Shortcut switch returned false:', shortcut)
+    } catch (error) {
+      console.error('Shortcut switch failed:', shortcut, error)
+    }
+  }
+}
+
 let adoptedRestartTimer: NodeJS.Timeout | undefined
-function restartWhenIdle(version: string): void {
+
+/** 切到指定版本并退出；告别动作播完再走。 */
+async function adoptVersion(executable: string): Promise<void> {
+  await playAvatarFarewell()
+  pointShortcutsAt(executable)
+  spawnRestartWatchdog(executable)
+  app.relaunch({ execPath: executable })
+  app.quit()
+}
+
+async function restartWhenIdle(version: string, excludeConversationId?: string, beforeQuit?: () => void): Promise<RestartOutcome> {
   if (adoptedRestartTimer) clearInterval(adoptedRestartTimer)
-  const executable = path.join(dataProjectRoot, 'release', `whale-companion-v${version}`, 'win-unpacked', 'Whale Companion Preview.exe')
+  const executable = resolveLaunchTarget(version)
+  const decision = await decideRestart(excludeConversationId)
+  if (decision === 'cancel') return 'cancelled'
+  beforeQuit?.()
+  if (decision === 'now' || (controller?.allConversationsIdle() ?? true)) {
+    await adoptVersion(executable)
+    return 'restarted'
+  }
+  const startedAt = Date.now()
   adoptedRestartTimer = setInterval(() => {
-    if (!controller?.allConversationsIdle()) return
-    void fsp.access(executable).then(() => {
-      if (adoptedRestartTimer) clearInterval(adoptedRestartTimer)
-      adoptedRestartTimer = undefined
-      app.relaunch({ execPath: executable })
-      app.quit()
-    }).catch((error: unknown) => console.error('Adopted version restart failed:', error))
+    // 等对话空闲，但最多等 2 分钟：旧实例里可能有永远不结束的回合，
+    // 不能让版本切换无限期卡住（表现就是一直停在旧版本）。
+    if (!controller?.allConversationsIdle() && Date.now() - startedAt < 120_000) return
+    if (adoptedRestartTimer) clearInterval(adoptedRestartTimer)
+    adoptedRestartTimer = undefined
+    void fsp.access(executable)
+      .then(() => adoptVersion(executable))
+      .catch((error: unknown) => console.error('Adopted version restart failed:', error))
   }, 1500)
   adoptedRestartTimer.unref?.()
+  return 'waiting'
 }
 
 const AVATARS_DIR = path.join(dataRoot, 'avatars')
@@ -990,6 +1771,12 @@ function registerIpc(): void {
       // 界面尺寸等显示设置也要立刻传给头像窗口里的小面板，不必等下一个事件。
       broadcastUiSize(settings.uiSize)
       currentAvatarSize = settings.avatarSize
+      // 面板贴哪一侧改了：立刻按新位置重排，不必等下一次打开。
+      const nextPlacement = settings.panelPlacement ?? 'top'
+      if (nextPlacement !== panelPlacement) {
+        panelPlacement = nextPlacement
+        syncStageBounds()
+      }
       // 人物大小变了，余额卡的高度和位置要跟着重新对齐。
       syncBalancePosition()
       publishSnapshot()
@@ -1013,6 +1800,10 @@ function registerIpc(): void {
     if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
     return app.getVersion()
   })
+  ipcMain.handle('pet:settings:capabilities', (event) => {
+    if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
+    return activeController().getCapabilities()
+  })
   ipcMain.handle('pet:settings:close', (event) => {
     if (!settingsTrusted(event)) return
     settingsWindow?.close()
@@ -1021,10 +1812,9 @@ function registerIpc(): void {
     if (!settingsTrusted(event)) return
     app.quit()
   })
-  ipcMain.handle('pet:settings:restart', (event) => {
-    if (!settingsTrusted(event)) return
-    relaunchOnQuit = true
-    app.quit()
+  ipcMain.handle('pet:settings:restart', async (event) => {
+    if (!settingsTrusted(event)) return false
+    return (await requestRestart()) === 'waiting'
   })
   ipcMain.handle('pet:libraries:list', async (event) => {
     if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
@@ -1512,6 +2302,16 @@ function registerIpc(): void {
   ipcMain.handle('pet:show-panel', (event) => { if (trusted(event)) showPanel() })
   ipcMain.handle('pet:hide-panel', (event) => { if (trusted(event)) hidePanel() })
   ipcMain.handle('pet:get-panel-open', (event) => { if (!trusted(event)) throw new Error('无效的界面请求。'); return panelOpen })
+  ipcMain.handle('pet:get-panel-placement', (event) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    syncStageBounds()
+    return panelPlacement
+  })
+  ipcMain.handle('pet:get-panel-direction', (event) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    syncStageBounds()
+    return panelDirection
+  })
   ipcMain.handle('pet:show-context-menu', (event) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     if (avatarWindow && contextMenu) contextMenu.popup({ window: avatarWindow })
@@ -1560,14 +2360,14 @@ function registerIpc(): void {
     const nextHeight = (layout === 'composer' || layout === 'composer_attachments') && typeof height === 'number' ? Math.round(height) : undefined
     if (bubbleLayout === layout && compactBubbleHeight === nextHeight) return
     const size = stageBounds ?? { x: 0, y: 0, ...stageSize }
-    const previous = bubbleRegion(bubbleLayout, size)
+    const previous = bubbleRegion(bubbleLayout, size, compactBubbleHeight, panelDirection)
     bubbleLayout = layout
     compactBubbleHeight = nextHeight
     // 面板窗口的 bounds 就是当前布局的矩形，布局一变就得跟着改。
     syncPanelBounds()
     if (shapeShrinkTimer) clearTimeout(shapeShrinkTimer)
     shapeShrinkTimer = undefined
-    const next = bubbleRegion(layout, size)
+    const next = bubbleRegion(layout, size, nextHeight, panelDirection)
     if (panelOpen && next.width * next.height < previous.width * previous.height) {
       shapeShrinkTimer = setTimeout(() => {
         shapeShrinkTimer = undefined
@@ -1599,9 +2399,9 @@ function registerIpc(): void {
       width: boxWidth,
       height: boxHeight
     }
-    applyPointerShape()
-    // 姿势/大小变化后人物可见区会变，开着的余额卡跟着重新对齐。
-    if (balanceOpen) syncBalancePosition()
+    // 姿势/大小变化会移动人物可见区的中心，展开方向和命中形状都跟着重算；
+    // 余额卡也在 syncStageBounds 里重新对齐。
+    syncStageBounds()
   })
   ipcMain.handle('pet:set-panel-size', (event, width: unknown, height: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
@@ -1614,6 +2414,66 @@ function registerIpc(): void {
     }
     syncStageBounds()
     schedulePanelSizeSave()
+  })
+  ipcMain.on('pet:resize-ghost', (event, pos: unknown) => {
+    if (!trusted(event)) return
+    if (pos === null) {
+      resizeGhostAt(null)
+      return
+    }
+    const point = pos && typeof pos === 'object' ? pos as { x?: unknown; y?: unknown } : null
+    if (point && typeof point.x === 'number' && typeof point.y === 'number' &&
+      Number.isFinite(point.x) && Number.isFinite(point.y)) {
+      resizeGhostAt({ x: point.x, y: point.y })
+    }
+  })
+  ipcMain.on('pet:grip-resize', (event, payload: unknown) => {
+    const panel = panelWindow
+    if (!panel || panel.isDestroyed() || !bubbleExpanded) return
+    // 只接受抓手小窗自己的消息，别的页面不能改面板尺寸。
+    if (!gripWindow || event.sender !== gripWindow.webContents) return
+    const value = payload && typeof payload === 'object' ? payload as { phase?: unknown; x?: unknown; y?: unknown } : null
+    if (!value || typeof value.x !== 'number' || typeof value.y !== 'number' ||
+        !Number.isFinite(value.x) || !Number.isFinite(value.y)) return
+    if (value.phase === 'start') {
+      const bounds = panel.getBounds()
+      gripDrag = {
+        startX: value.x, startY: value.y,
+        width: bounds.width, height: bounds.height,
+        targetWidth: bounds.width, targetHeight: bounds.height,
+        right: bounds.x + bounds.width, bottom: bounds.y + bounds.height, top: bounds.y
+      }
+      resizeGhostAt({ x: value.x, y: value.y })
+      return
+    }
+    if (!gripDrag) return
+    if (value.phase === 'move') {
+      const dx = value.x - gripDrag.startX
+      const dy = value.y - gripDrag.startY
+      gripDrag.targetWidth = Math.round(Math.min(4000, Math.max(PANEL_MIN_WIDTH, gripDrag.width - dx)))
+      gripDrag.targetHeight = Math.round(Math.min(4000, Math.max(PANEL_MIN_HEIGHT, panelDirection === 'down'
+        ? gripDrag.height + dy
+        : gripDrag.height - dy)))
+      // 和面板里的抓手一致：拖动时只给悬浮手柄，松手再一次性应用尺寸。
+      resizeGhostAt({ x: value.x, y: value.y })
+      return
+    }
+    if (value.phase === 'end') {
+      resizeGhostAt(null)
+      bubblePanelSize = { width: gripDrag.targetWidth, height: gripDrag.targetHeight }
+      gripDrag = undefined
+      syncStageBounds()
+      schedulePanelSizeSave()
+    }
+  })
+  ipcMain.on('pet:approval-result', (event, id: unknown, approved: unknown) => {
+    if (!trusted(event)) return
+    if (typeof id !== 'string') return
+    const pending = pendingApprovals.get(id)
+    if (!pending) return
+    clearTimeout(pending.timer)
+    pendingApprovals.delete(id)
+    pending.resolve(approved === true)
   })
   ipcMain.handle('pet:set-plan-mode', async (event, on: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
@@ -1712,11 +2572,12 @@ function registerIpc(): void {
   })
   ipcMain.handle('pet:quit', (event) => { if (trusted(event)) app.quit() })
   ipcMain.handle('pet:begin-drag', (event, cursor: unknown) => {
-    if (event.sender.id !== avatarWindow?.webContents.id || !avatarWindow || !isScreenPoint(cursor)) return
+    if ((event.sender.id !== avatarWindow?.webContents.id && event.sender.id !== panelWindow?.webContents.id) || !avatarWindow || !isScreenPoint(cursor)) return
     dragOrigin = { cursor, bounds: avatarWindow.getBounds() }
+    avatarDragging = true
   })
   ipcMain.handle('pet:drag-move', (event, current: unknown) => {
-    if (event.sender.id !== avatarWindow?.webContents.id || !avatarWindow || !dragOrigin || !isScreenPoint(current)) return
+    if ((event.sender.id !== avatarWindow?.webContents.id && event.sender.id !== panelWindow?.webContents.id) || !avatarWindow || !dragOrigin || !isScreenPoint(current)) return
     const width = dragOrigin.bounds.width
     const height = dragOrigin.bounds.height
     const x = Math.round(dragOrigin.bounds.x + current.x - dragOrigin.cursor.x)
@@ -1741,17 +2602,38 @@ function registerIpc(): void {
     syncBalancePosition()
   })
   ipcMain.handle('pet:end-drag', (event) => {
-    if (trusted(event)) dragOrigin = undefined
+    if (trusted(event)) {
+      dragOrigin = undefined
+      avatarDragging = false
+      syncStageBounds()
+    }
   })
 }
 
 // 隔离冒烟测试：配合 DESKTOP_PET_WORKSPACE 指向临时目录时，允许再起一个实例。
 const ownsSingleInstance = process.env.DESKTOP_PET_MULTI_INSTANCE === '1' || app.requestSingleInstanceLock()
-if (!ownsSingleInstance) app.quit()
-else app.on('second-instance', (_event, commandLine) => {
+if (!ownsSingleInstance) {
+  // Do not disappear silently: a second copy looks like a crash otherwise.
+  void app.whenReady().then(async () => {
+    try {
+      await dialog.showMessageBox({
+        type: 'info',
+        title: '小鲸已在运行',
+        message: '已经有一个小鲸实例在运行。请先从托盘退出旧实例，再启动新版本。'
+      })
+    } finally {
+      app.quit()
+    }
+  })
+} else app.on('second-instance', (_event, commandLine) => {
   // Lets the packaging script close a running copy without killing it.
   if (commandLine.includes('--quit')) {
     app.quit()
+    return
+  }
+  // One-command restart for the evolve loop: wait for idle, then relaunch.
+  if (commandLine.includes('--restart')) {
+    void requestRestart()
     return
   }
   avatarWindow?.show()
@@ -1775,10 +2657,17 @@ if (ownsSingleInstance) void app.whenReady().then(async () => {
   memory.setEnabled(initialSettings.memoryEnabled)
   currentUiSize = initialSettings.uiSize
   currentAvatarSize = initialSettings.avatarSize
+  panelPlacement = initialSettings.panelPlacement ?? 'top'
+  panelDirection = panelPlacement === 'bottom' ? 'down' : 'up'
   const savedPanelSize = initialSettings.panelSize
   if (savedPanelSize) bubblePanelSize = { width: savedPanelSize.width, height: savedPanelSize.height }
   await memory.initialize()
   registerIpc()
+  // 启动即自愈：快捷方式必须指向当前正在运行的版本，目录被换掉也不会指空。
+  pointShortcutsAt(process.execPath)
+  // 预加载缩放手柄悬浮窗，避免按下时因首次创建/加载出现空档。
+  resizeGhostAt({ x: -2000, y: -2000 })
+  resizeGhostAt(null)
   avatarWindow = createAvatarWindow()
   panelWindow = createPanelWindow()
   createTray()
@@ -1789,6 +2678,32 @@ if (ownsSingleInstance) void app.whenReady().then(async () => {
   if (shouldOfferOnboarding(readOnboardingMarker(dataRoot), onboardProfiles.length,
     onboardProfiles.some((profile) => profile.needsKeyReentry))) {
     setTimeout(openOnboarding, 1000)
+  }
+
+  // 自我进化：上一次运行留下了跨重启任务时，等窗口和运行时就绪后继续。
+  // 自检模式不恢复，避免干扰打包验证。
+  if (!process.argv.includes('--self-test')) {
+    setTimeout(() => { void resumeEvolveTask() }, 2_000)
+  }
+
+  // 启动自检：打包脚本用 --self-test 启动新版本，结果落到 data/self-test，
+  // 不弹额外窗口、不改用户设置；--self-test-exit 时跑完就退出。
+  if (process.argv.includes('--self-test')) {
+    setTimeout(() => {
+      void (async () => {
+        const settingsReady = await activeController().getLibraryState().then(() => true).catch(() => false)
+        const result = runSelfTest({
+          version: app.getVersion(),
+          dataRoot,
+          rendererRoot: path.join(__dirname, '../renderer'),
+          windowsReady: Boolean(avatarWindow && !avatarWindow.isDestroyed() && avatarWindow.isVisible() &&
+            panelWindow && !panelWindow.isDestroyed()),
+          settingsReady
+        })
+        console.log(`Self-test ${result.ok ? 'passed' : 'failed'} (${result.version})`)
+        if (process.argv.includes('--self-test-exit')) app.quit()
+      })()
+    }, 3_000)
   }
 
   // 自检模式：node/electron --self-test-asr 用测试音频调用 transcribeAudio
@@ -1834,8 +2749,6 @@ if (ownsSingleInstance) void app.whenReady().then(async () => {
 
 let quitting = false
 let inboxWatcher: InboxWatcher | undefined
-/** Set by the settings restart button; consumed once the turn is saved. */
-let relaunchOnQuit = false
 app.on('before-quit', (event) => {
   if (quitting) return
   quitting = true
@@ -1857,10 +2770,16 @@ app.on('before-quit', (event) => {
     new Promise<void>((resolve) => setTimeout(resolve, 2_000))
   ]).catch((error: unknown) => {
     console.error('Final conversation save failed:', error)
-  }).finally(() => {
+  }).finally(async () => {
+    await controller?.disposeAll().catch(() => undefined)
     if (relaunchOnQuit) app.relaunch()
     app.quit()
   })
 })
 
-app.on('window-all-closed', () => app.quit())
+// The tray owns the app lifecycle. Closing one window (or a startup window
+// failing to open) must not take down the resident process; only an explicit
+// tray/menu quit or a failed startup does that.
+app.on('window-all-closed', () => {
+  if (!tray) app.quit()
+})

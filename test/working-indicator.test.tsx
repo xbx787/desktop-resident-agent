@@ -9,7 +9,7 @@ describe('workingPhrase', () => {
     expect(workingPhrase({ sending: false, thinking: false, status: 'planning' })).toBe('正在理解你的需求')
     expect(workingPhrase({ sending: false, thinking: false, status: 'executing', tool: 'Bash' })).toBe('正在执行命令')
     expect(workingPhrase({ sending: false, thinking: false, status: 'executing', tool: 'Read' })).toBe('正在读取')
-    expect(workingPhrase({ sending: false, thinking: false, status: 'executing', tool: 'mcp__windows-mcp__click' })).toBe('正在执行 mcp__windows-mcp__click')
+    expect(workingPhrase({ sending: false, thinking: false, status: 'executing', tool: 'mcp__windows-mcp__click' })).toBe('正在使用外部工具')
     expect(workingPhrase({ sending: false, thinking: false, status: 'executing' })).toBe('正在执行工具')
     expect(workingPhrase({ sending: false, thinking: false, status: 'verifying' })).toBe('正在整理结果')
   })

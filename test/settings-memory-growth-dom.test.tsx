@@ -56,7 +56,7 @@ async function mount(api: SettingsAPI): Promise<void> {
 function bridge(overrides: Partial<SettingsAPI> = {}): SettingsAPI {
   return {
     get: async () => settings, update: async (patch) => ({ ...settings, ...patch }),
-    version: async () => '0.0.47', close: async () => {}, quit: async () => {}, restart: async () => {}, setAvatar: async () => {},
+    version: async () => '0.0.47', close: async () => {}, quit: async () => {}, restart: async () => false, setAvatar: async () => {},
     workspace: async () => ({ path: 'D:\\project', saved: false }),
     pickWorkspace: async () => null,
     migrateWorkspace: async (next) => ({ path: next }),
@@ -78,22 +78,27 @@ function bridge(overrides: Partial<SettingsAPI> = {}): SettingsAPI {
 }
 
 describe('SettingsPage memory and growth review', () => {
-  it('saves the goal budget as one validated setting change', async () => {
+  it('labels the fixed Live2D preview and lets the user return to the standard illustration', async () => {
     const update = vi.fn(async (patch: Partial<ConversationSettings>) => ({ ...settings, ...patch }))
     await mount(bridge({ update }))
-    const iterations = container!.querySelector('#goal-iterations') as HTMLInputElement
-    const minutes = container!.querySelector('#goal-minutes') as HTMLInputElement
-    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => { await Promise.resolve() })
+    await act(async () => click('外观'))
+    expect(container!.textContent).toContain('Live2D 技术预览（Arch Chan）')
+    expect(container!.textContent).toContain('不是小鲸最终形象')
+    expect(container!.textContent).toContain('可随时切回标准插画')
+    const renderer = container!.querySelector('#avatar-renderer') as HTMLSelectElement
+    const setValue = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!
     await act(async () => {
-      setValue.call(iterations, '40')
-      iterations.dispatchEvent(new Event('input', { bubbles: true }))
-      setValue.call(minutes, '120')
-      minutes.dispatchEvent(new Event('input', { bubbles: true }))
+      setValue.call(renderer, 'live2d-preview')
+      renderer.dispatchEvent(new Event('change', { bubbles: true }))
     })
-    await act(async () => {
-      container!.querySelector('.settings-budget-row form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
-    })
-    expect(update).toHaveBeenCalledWith({ goalMaxIterations: 40, goalMaxMinutes: 120 })
+    expect(update).toHaveBeenCalledWith({ avatarRenderer: 'live2d-preview' })
+  })
+
+  it('目标模式不再提供轮数或时间上限输入', async () => {
+    await mount(bridge({}))
+    expect(container!.querySelector('#goal-iterations')).toBeNull()
+    expect(container!.querySelector('#goal-minutes')).toBeNull()
   })
 
   it('loads provenance and only toggles memory after an explicit click', async () => {

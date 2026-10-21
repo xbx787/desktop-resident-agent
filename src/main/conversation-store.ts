@@ -5,8 +5,8 @@ import type { DialogueLine } from './deepseek'
 import { isEffortLevel } from '../shared/effort'
 import { containsSensitiveData } from './memory-service'
 import { protectProfiles, restoreProfiles, type SecretCodec } from './secret-storage'
-import type { AgentGoal, ApprovalMode, AvatarSize, ConversationBatchAction, ConversationBatchResult, ConversationLibraryState, ConversationSummary, EffortLevel, ModelMode, ModelProfile, TaskStatus, TimelineEntry, UserAttachment, ConversationSettings, UiSize } from '../shared/contracts'
-import { AUTO_COMPACT_DEFAULT_PERCENT, PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH, isAutoCompactPercent } from '../shared/contracts'
+import type { AgentGoal, ApprovalMode, AvatarSize, ConversationBatchAction, ConversationBatchResult, ConversationLibraryState, ConversationSummary, EffortLevel, ModelMode, ModelProfile, PanelPlacement, PanelTheme, TaskStatus, TimelineEntry, UserAttachment, ConversationSettings, UiSize } from '../shared/contracts'
+import { AUTO_COMPACT_DEFAULT_PERCENT, PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH, isAgentKernelKind, isAutoCompactPercent, isAvatarRenderer } from '../shared/contracts'
 import { isPersonaId } from '../shared/personas'
 
 const DEFAULT_VISIBLE_TABS = 5
@@ -26,6 +26,8 @@ export interface PendingMessage {
   createdAt: string
   /** Frozen at submit time; only the main process uses this model context. */
   sessionContext?: string
+  /** A restart divider: opens a new segment but renders as a cut line. */
+  divider?: boolean
 }
 
 export interface ConversationRecord {
@@ -239,10 +241,21 @@ function isAvatarSize(value: unknown): value is AvatarSize {
   return value === 'small' || value === 'medium' || value === 'large'
 }
 
+function isPanelPlacement(value: unknown): value is PanelPlacement {
+  return value === 'top' || value === 'bottom' || value === 'left' || value === 'right'
+}
+
+function isPanelTheme(value: unknown): value is PanelTheme {
+  return value === 'dark' || value === 'light'
+}
+
 function readExtendedSettings(settings: Record<string, unknown>): Pick<ConversationSettings,
   'modelProfiles' | 'activeModelProfileId' | 'enableAutoTitleGeneration' | 'showMessageTimestamps' |
   'userName' | 'assistantName' | 'userAvatar' | 'assistantAvatar' | 'tabOrder' |
-  'goalMaxIterations' | 'goalMaxMinutes' | 'memoryEnabled' | 'panelSize' | 'uiSize' | 'avatarSize' | 'webSearchEnabled' | 'personaId' | 'autoCompactPercent'> {
+  'goalMaxIterations' | 'goalMaxMinutes' | 'memoryEnabled' | 'panelSize' | 'panelPlacement' | 'panelTheme' | 'uiSize' | 'avatarSize' | 'avatarRenderer' | 'webSearchEnabled' | 'personaId' | 'agentKernel' | 'autoCompactPercent' |
+  'toolRowDetail' |
+  'outputStyle' | 'appendSystemPrompt' | 'autoScroll' | 'expandFileEditsByDefault' | 'sessionSort' | 'titleLocale' |
+  'titleModel' | 'loadUserSettings'> {
   const profiles = Array.isArray(settings.modelProfiles)
     ? (settings.modelProfiles.filter(isModelProfile) as ModelProfile[]).map((profile) => structuredClone(profile))
     : []
@@ -260,15 +273,32 @@ function readExtendedSettings(settings: Record<string, unknown>): Pick<Conversat
     assistantAvatar: isStoredAvatar(settings.assistantAvatar) ? settings.assistantAvatar : null,
     tabOrder: Array.isArray(settings.tabOrder) ? settings.tabOrder.filter((id): id is string => typeof id === 'string') : [],
     goalMaxIterations: Number.isInteger(settings.goalMaxIterations) && Number(settings.goalMaxIterations) >= 1 && Number(settings.goalMaxIterations) <= 300 ? Number(settings.goalMaxIterations) : 30,
-    goalMaxMinutes: Number.isInteger(settings.goalMaxMinutes) && Number(settings.goalMaxMinutes) >= 1 && Number(settings.goalMaxMinutes) <= 1440 ? Number(settings.goalMaxMinutes) : 180,
+    goalMaxMinutes: Number.isInteger(settings.goalMaxMinutes) && Number(settings.goalMaxMinutes) >= 0 && Number(settings.goalMaxMinutes) <= 1440 ? Number(settings.goalMaxMinutes) : 0,
     memoryEnabled: settings.memoryEnabled !== false,
     panelSize: readPanelSize(settings.panelSize),
+    panelPlacement: isPanelPlacement(settings.panelPlacement) ? settings.panelPlacement : 'top',
+    panelTheme: isPanelTheme(settings.panelTheme) ? settings.panelTheme : 'dark',
     uiSize: isUiSize(settings.uiSize) ? settings.uiSize : 'small',
     avatarSize: isAvatarSize(settings.avatarSize) ? settings.avatarSize : 'small',
+    avatarRenderer: isAvatarRenderer(settings.avatarRenderer) ? settings.avatarRenderer : 'sprite',
+    toolRowDetail: settings.toolRowDetail === 'full' || settings.toolRowDetail === 'name'
+      ? settings.toolRowDetail : 'brief',
     webSearchEnabled: settings.webSearchEnabled !== false,
     personaId: isPersonaId(settings.personaId) ? settings.personaId : 'xiaojing',
+    agentKernel: isAgentKernelKind(settings.agentKernel) ? settings.agentKernel : 'dsh',
     autoCompactPercent: isAutoCompactPercent(settings.autoCompactPercent)
-      ? settings.autoCompactPercent : AUTO_COMPACT_DEFAULT_PERCENT
+      ? settings.autoCompactPercent : AUTO_COMPACT_DEFAULT_PERCENT,
+    ...(typeof settings.outputStyle === 'string' && settings.outputStyle.trim()
+      ? { outputStyle: settings.outputStyle.trim().slice(0, 64) } : {}),
+    ...(typeof settings.appendSystemPrompt === 'string' && settings.appendSystemPrompt.trim()
+      ? { appendSystemPrompt: settings.appendSystemPrompt.trim().slice(0, 4_000) } : {}),
+    autoScroll: settings.autoScroll !== false,
+    expandFileEditsByDefault: settings.expandFileEditsByDefault === true,
+    sessionSort: settings.sessionSort === 'created' ? 'created' : 'updated',
+    titleLocale: settings.titleLocale === 'zh' || settings.titleLocale === 'en' ? settings.titleLocale : 'auto',
+    titleModel: typeof settings.titleModel === 'string' && settings.titleModel.trim()
+      ? settings.titleModel.trim().slice(0, 64) : 'deepseek-flash',
+    loadUserSettings: settings.loadUserSettings !== false
   }
 }
 
@@ -402,17 +432,19 @@ function cleanTitle(title: string): string {
   return clean
 }
 
-function compareByRecent(a: ConversationRecord, b: ConversationRecord): number {
-  const left = b.lastActivityAt ?? b.updatedAt
-  const right = a.lastActivityAt ?? a.updatedAt
+function compareByRecent(a: ConversationRecord, b: ConversationRecord,
+  sort: 'updated' | 'created' = 'updated'): number {
+  const left = sort === 'created' ? b.createdAt : b.lastActivityAt ?? b.updatedAt
+  const right = sort === 'created' ? a.createdAt : a.lastActivityAt ?? a.updatedAt
   return left.localeCompare(right) || b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id)
 }
 
-function compareForList(a: ConversationRecord, b: ConversationRecord): number {
+function compareForList(a: ConversationRecord, b: ConversationRecord,
+  sort: 'updated' | 'created' = 'updated'): number {
   const scopeOrder = Number(a.archivedAt !== null) - Number(b.archivedAt !== null)
   if (scopeOrder !== 0) return scopeOrder
-  if (a.archivedAt !== null) return compareByRecent(a, b)
-  return Number(b.pinnedAt !== null) - Number(a.pinnedAt !== null) || compareByRecent(a, b)
+  if (a.archivedAt !== null) return compareByRecent(a, b, sort)
+  return Number(b.pinnedAt !== null) - Number(a.pinnedAt !== null) || compareByRecent(a, b, sort)
 }
 
 const SUMMARY_PREVIEW_LENGTH = 160
@@ -463,14 +495,15 @@ function summaryPreview(record: ConversationRecord, terms: readonly string[]): s
   return '匹配了过程记录（思考或工具）'
 }
 
-function summaries(records: ConversationRecord[], options: ConversationSearchOptions = {}): ConversationSummary[] {
+function summaries(records: ConversationRecord[], options: ConversationSearchOptions = {},
+  sort: 'updated' | 'created' = 'updated'): ConversationSummary[] {
   const terms = searchTerms(options.query ?? '')
   return records
     .filter((record) => options.archived === undefined || (record.archivedAt !== null) === options.archived)
     .filter((record) => !terms.length || matchesTerms(record.title, terms) ||
       record.timeline.some((entry) => matchesTerms(entry.text, terms)) ||
       record.history.some((line) => matchesTerms(line.content, terms)))
-    .sort(compareForList)
+    .sort((a, b) => compareForList(a, b, sort))
     .map((record) => ({
       id: record.id,
       title: record.title,
@@ -490,7 +523,7 @@ function stateOf(library: PersistedLibrary): ConversationLibraryState {
   return {
     settings: structuredClone(library.settings),
     activeConversationId: library.activeConversationId,
-    conversations: summaries(library.conversations)
+    conversations: summaries(library.conversations, {}, library.settings.sessionSort ?? 'updated')
   }
 }
 
@@ -620,8 +653,11 @@ export class ConversationStore {
       settings = { visibleConversationTabs: DEFAULT_VISIBLE_TABS, autoArchiveAfterDays: 0, effort: 'max',
         modelProfiles: [], activeModelProfileId: null, enableAutoTitleGeneration: true, showMessageTimestamps: true,
         userName: '主人', assistantName: '小鲸', userAvatar: null, assistantAvatar: null, tabOrder: [],
-        goalMaxIterations: 30, goalMaxMinutes: 180, memoryEnabled: true, uiSize: 'small', avatarSize: 'small',
-        autoCompactPercent: AUTO_COMPACT_DEFAULT_PERCENT }
+        goalMaxIterations: 30, goalMaxMinutes: 0, memoryEnabled: true, uiSize: 'small', avatarSize: 'small', avatarRenderer: 'sprite', agentKernel: 'dsh',
+        panelPlacement: 'top', panelTheme: 'dark',
+        toolRowDetail: 'brief',
+        autoCompactPercent: AUTO_COMPACT_DEFAULT_PERCENT, autoScroll: true, expandFileEditsByDefault: false,
+        sessionSort: 'updated', titleLocale: 'auto', titleModel: 'deepseek-flash', loadUserSettings: true }
       migrating = true
     }
 
@@ -688,7 +724,7 @@ export class ConversationStore {
   async listConversations(options: ConversationSearchOptions = {}): Promise<ConversationSummary[]> {
     await this.initialize()
     await this.queue
-    return summaries(this.library!.conversations, options)
+    return summaries(this.library!.conversations, options, this.library!.settings.sessionSort ?? 'updated')
   }
 
   async getConversation(id: string): Promise<ConversationRecord | null> {
@@ -882,7 +918,9 @@ export class ConversationStore {
     const modelProfiles = patch.modelProfiles
     const activeModelProfileId = patch.activeModelProfileId
     const { goalMaxIterations, goalMaxMinutes, memoryEnabled } = patch
-    const { enableAutoTitleGeneration, showMessageTimestamps, userName, assistantName, userAvatar, assistantAvatar, panelSize, uiSize, avatarSize, personaId, autoCompactPercent } = patch
+    const { enableAutoTitleGeneration, showMessageTimestamps, userName, assistantName, userAvatar, assistantAvatar, panelSize, panelPlacement, panelTheme, uiSize, avatarSize, avatarRenderer, toolRowDetail, personaId, agentKernel, autoCompactPercent,
+      outputStyle, appendSystemPrompt, autoScroll, expandFileEditsByDefault, sessionSort, titleLocale,
+      titleModel, loadUserSettings } = patch
     if (tabs !== undefined && (!Number.isInteger(tabs) || tabs < 1 || tabs > MAX_VISIBLE_TABS)) {
       throw new ConversationStoreError('INVALID_INPUT', `快捷切换显示数量应为 1–${MAX_VISIBLE_TABS}。`)
     }
@@ -898,7 +936,7 @@ export class ConversationStore {
     if (goalMaxIterations !== undefined && (!Number.isInteger(goalMaxIterations) || goalMaxIterations < 1 || goalMaxIterations > 300)) {
       throw new ConversationStoreError('INVALID_INPUT', '目标轮数上限应为 1–300。')
     }
-    if (goalMaxMinutes !== undefined && (!Number.isInteger(goalMaxMinutes) || goalMaxMinutes < 1 || goalMaxMinutes > 1440)) {
+    if (goalMaxMinutes !== undefined && (!Number.isInteger(goalMaxMinutes) || goalMaxMinutes < 0 || goalMaxMinutes > 1440)) {
       throw new ConversationStoreError('INVALID_INPUT', '目标时间上限应为 1–1440 分钟。')
     }
     if (memoryEnabled !== undefined && typeof memoryEnabled !== 'boolean') {
@@ -928,11 +966,41 @@ export class ConversationStore {
     if (avatarSize !== undefined && !isAvatarSize(avatarSize)) {
       throw new ConversationStoreError('INVALID_INPUT', '人物大小只能是小、中或大。')
     }
+    if (avatarRenderer !== undefined && !isAvatarRenderer(avatarRenderer)) {
+      throw new ConversationStoreError('INVALID_INPUT', '人物渲染方式无效。')
+    }
+    if (toolRowDetail !== undefined && toolRowDetail !== 'full' && toolRowDetail !== 'brief' && toolRowDetail !== 'name') {
+      throw new ConversationStoreError('INVALID_INPUT', '工具行详细程度无效。')
+    }
     if (personaId !== undefined && !isPersonaId(personaId)) {
       throw new ConversationStoreError('INVALID_INPUT', '人设预设无效。')
     }
+    if (agentKernel !== undefined && !isAgentKernelKind(agentKernel)) {
+      throw new ConversationStoreError('INVALID_INPUT', 'Agent 内核无效。')
+    }
     if (autoCompactPercent !== undefined && !isAutoCompactPercent(autoCompactPercent)) {
       throw new ConversationStoreError('INVALID_INPUT', '自动压缩阈值应为 50–90 之间的整数。')
+    }
+    if (outputStyle !== undefined && (typeof outputStyle !== 'string' || outputStyle.length > 64)) {
+      throw new ConversationStoreError('INVALID_INPUT', '回答风格无效。')
+    }
+    if (appendSystemPrompt !== undefined && (typeof appendSystemPrompt !== 'string' || appendSystemPrompt.length > 4_000)) {
+      throw new ConversationStoreError('INVALID_INPUT', '附加指令不能超过 4000 字。')
+    }
+    for (const [value, label] of [[autoScroll, '自动跟随'], [expandFileEditsByDefault, '默认展开编辑']] as const) {
+      if (value !== undefined && typeof value !== 'boolean') throw new ConversationStoreError('INVALID_INPUT', `${label}设置无效。`)
+    }
+    if (sessionSort !== undefined && sessionSort !== 'updated' && sessionSort !== 'created') {
+      throw new ConversationStoreError('INVALID_INPUT', '会话排序设置无效。')
+    }
+    if (titleLocale !== undefined && titleLocale !== 'auto' && titleLocale !== 'zh' && titleLocale !== 'en') {
+      throw new ConversationStoreError('INVALID_INPUT', '标题语言设置无效。')
+    }
+    if (titleModel !== undefined && (typeof titleModel !== 'string' || titleModel.length > 64)) {
+      throw new ConversationStoreError('INVALID_INPUT', '标题模型设置无效。')
+    }
+    if (loadUserSettings !== undefined && typeof loadUserSettings !== 'boolean') {
+      throw new ConversationStoreError('INVALID_INPUT', '用户设置加载开关无效。')
     }
     return this.mutate((draft) => {
       if (tabs !== undefined) draft.settings.visibleConversationTabs = tabs
@@ -940,6 +1008,7 @@ export class ConversationStore {
       if (effort !== undefined) draft.settings.effort = effort
       if (goalMaxIterations !== undefined) draft.settings.goalMaxIterations = goalMaxIterations
       if (goalMaxMinutes !== undefined) draft.settings.goalMaxMinutes = goalMaxMinutes
+      if (agentKernel !== undefined) draft.settings.agentKernel = agentKernel
       if (memoryEnabled !== undefined) draft.settings.memoryEnabled = memoryEnabled
       if (modelProfiles !== undefined) {
         draft.settings.modelProfiles = structuredClone(modelProfiles)
@@ -961,10 +1030,40 @@ export class ConversationStore {
       if (userAvatar !== undefined) draft.settings.userAvatar = userAvatar
       if (assistantAvatar !== undefined) draft.settings.assistantAvatar = assistantAvatar
       if (panelSize !== undefined) draft.settings.panelSize = { width: panelSize.width, height: panelSize.height }
+      if (panelPlacement !== undefined) {
+        if (!isPanelPlacement(panelPlacement)) throw new ConversationStoreError('INVALID_INPUT', '面板位置无效。')
+        draft.settings.panelPlacement = panelPlacement
+      }
+      if (panelTheme !== undefined) {
+        if (!isPanelTheme(panelTheme)) throw new ConversationStoreError('INVALID_INPUT', '面板主题无效。')
+        draft.settings.panelTheme = panelTheme
+      }
       if (uiSize !== undefined) draft.settings.uiSize = uiSize
       if (avatarSize !== undefined) draft.settings.avatarSize = avatarSize
+      if (avatarRenderer !== undefined) draft.settings.avatarRenderer = avatarRenderer
+      if (toolRowDetail !== undefined) draft.settings.toolRowDetail = toolRowDetail
       if (personaId !== undefined) draft.settings.personaId = personaId
       if (autoCompactPercent !== undefined) draft.settings.autoCompactPercent = autoCompactPercent
+      if (outputStyle !== undefined) {
+        const trimmed = outputStyle.trim()
+        if (trimmed) draft.settings.outputStyle = trimmed
+        else delete draft.settings.outputStyle
+      }
+      if (appendSystemPrompt !== undefined) {
+        const trimmed = appendSystemPrompt.trim()
+        if (trimmed) draft.settings.appendSystemPrompt = trimmed
+        else delete draft.settings.appendSystemPrompt
+      }
+      if (autoScroll !== undefined) draft.settings.autoScroll = autoScroll
+      if (expandFileEditsByDefault !== undefined) draft.settings.expandFileEditsByDefault = expandFileEditsByDefault
+      if (sessionSort !== undefined) draft.settings.sessionSort = sessionSort
+      if (titleLocale !== undefined) draft.settings.titleLocale = titleLocale
+      if (titleModel !== undefined) {
+        const trimmed = titleModel.trim()
+        if (trimmed) draft.settings.titleModel = trimmed
+        else delete draft.settings.titleModel
+      }
+      if (loadUserSettings !== undefined) draft.settings.loadUserSettings = loadUserSettings
       return draft.settings
     })
   }

@@ -1,6 +1,6 @@
 {
   "name": "desktop-resident-agent",
-  "version": "0.0.83",
+  "version": "0.0.101",
   "private": true,
   "license": "UNLICENSED",
   "author": "DesktopPetProject",
@@ -8,17 +8,23 @@
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
-    "build": "electron-vite build",
+    "build": "node scripts/build-panel-light.cjs && electron-vite build",
     "preview": "electron-vite preview",
     "check": "tsc --noEmit",
     "test": "vitest run",
+    "live2d:generate": "node tools/live2d-motion/generate.mjs",
+    "live2d:validate": "node tools/live2d-motion/validate.mjs",
+    "live2d:check": "npm run live2d:generate -- --check && npm run live2d:validate",
     "pack:dir": "npm run build && electron-builder --win --dir -c.electronDist=node_modules/electron/dist",
     "verify:asar": "node scripts/check-asar.cjs",
-    "pack:release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-release.ps1"
+    "pack:release": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack-release.ps1",
+    "theme:build": "node scripts/build-panel-light.cjs",
+    "predev": "node scripts/build-panel-light.cjs"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.292",
     "katex": "^0.19.0",
+    "pixi-live2d-display": "0.4.0",
+    "pixi.js": "6.5.10",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-markdown": "^10.1.0",
@@ -39,7 +45,8 @@
     "jsdom": "^30.1.2",
     "typescript": "^7.0.2",
     "vite": "^7.3.7",
-    "vitest": "^3.2.7"
+    "vitest": "^3.2.7",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.292"
   },
   "build": {
     "appId": "local.desktop.resident.agent",
@@ -49,8 +56,6 @@
     },
     "files": [
       "out/**/*",
-      "node_modules/@anthropic-ai/claude-agent-sdk/**/*",
-      "node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/**/*",
       "package.json"
     ],
     "extraResources": [
@@ -65,6 +70,35 @@
       {
         "from": "src/renderer/assets/whale-tray-icon-pixel.ico",
         "to": "whale-tray-icon-pixel.ico"
+      },
+      {
+        "from": "reference/dsh-runtime/node_modules",
+        "to": "dsh/node_modules",
+        "filter": [
+          "**/*",
+          "!**/.pnpm/@deepseek-ai+libreoffice-kit-*",
+          "!**/.pnpm/sherpa-onnx-*",
+          "!**/.pnpm/@deepseek-ai+dsh-experiment*",
+          "!**/.pnpm/@anthropic-ai+sdk*",
+          "!**/.pnpm/@google+genai*",
+          "!**/.pnpm/openai@*",
+          "!**/.pnpm/@deepseek-ai+dsh-web-frontend*",
+          "!**/.pnpm/@deepseek-ai+dsh-web-app*",
+          "!**/.pnpm/@deepseek-ai+dsh-client-ui-*",
+          "!**/*.map",
+          "!**/*.d.ts",
+          "!**/*.d.mts",
+          "!**/*.d.cts",
+          "!**/*.tsbuildinfo"
+        ]
+      },
+      {
+        "from": "reference/dsh-runtime/package.json",
+        "to": "dsh/package.json"
+      },
+      {
+        "from": "scripts/pet-mcp-bridge.cjs",
+        "to": "pet-mcp-bridge.cjs"
       }
     ],
     "asar": true,
@@ -74,3 +108,4 @@
     }
   }
 }
+

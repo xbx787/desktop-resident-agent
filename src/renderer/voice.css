@@ -1,19 +1,28 @@
-/* 录音按钮：静止是麦克风，录音时变成上下两组横杠夹一个停止方块。
-   动画只碰 transform / opacity，避免布局和重绘。 */
+/* 录音按钮：平时就是普通工具按钮里的麦克风；录音时整颗按钮进入录音态，
+   中心是一个明确的停止方块，外圈只做一次轻脉冲。没有额外的横杠或第二层
+   图标，按钮尺寸和工具栏其它按钮完全一致。 */
 .panel-microphone-button {
   position: relative;
 }
 
-/* 录音态用低饱和的暖色描边，不用整块红底：按钮仍然是 29px 的工具按钮，
-   变化只发生在图标和边框上。 */
 .panel-microphone-button.is-listening {
-  color: #ffd9de;
-  background: rgba(255, 112, 128, .12);
-  border-color: rgba(255, 154, 166, .46);
+  color: #ffe1e5;
+  background: rgba(255, 112, 128, .16);
+  border-color: rgba(255, 154, 166, .52);
 }
 
 .panel-microphone-button.is-listening:hover {
-  background: rgba(255, 112, 128, .18);
+  background: rgba(255, 112, 128, .22);
+}
+
+.panel-microphone-button.is-listening::after {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  border: 1px solid rgba(255, 154, 166, .45);
+  border-radius: 7px;
+  pointer-events: none;
+  animation: panel-voice-ring 1.7s ease-out infinite;
 }
 
 .panel-microphone-button.is-speaking {
@@ -22,50 +31,23 @@
   border-color: rgba(160, 205, 255, .42);
 }
 
-.panel-voice-wave {
-  position: absolute;
-  inset: 0;
+.panel-voice-recording {
   display: grid;
-  grid-template-rows: 1fr auto 1fr;
   place-items: center;
-  gap: 3px;
-  pointer-events: none;
+  width: 100%;
+  height: 100%;
 }
 
-.panel-voice-wave-bars {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  height: 2px;
-}
-
-.panel-voice-wave-bars i {
-  display: block;
-  width: 6px;
-  height: 2px;
-  border-radius: 1px;
+.panel-voice-recording i {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
   background: currentColor;
-  opacity: .72;
-  transform: scaleX(.55);
-  animation: panel-voice-bar 1.05s ease-in-out infinite alternate;
-  will-change: transform, opacity;
 }
 
-.panel-voice-wave-bars.is-top i:nth-child(1) { animation-delay: -.50s; }
-.panel-voice-wave-bars.is-top i:nth-child(2) { animation-delay: -.15s; }
-.panel-voice-wave-bars.is-bottom i:nth-child(1) { animation-delay: -.30s; }
-.panel-voice-wave-bars.is-bottom i:nth-child(2) { animation-delay: -.65s; }
-
-.panel-voice-stop {
-  width: 4px;
-  height: 4px;
-  border-radius: 1px;
-  background: currentColor;
-  opacity: .95;
-}
-
-@keyframes panel-voice-bar {
-  to { transform: scaleX(1); opacity: 1; }
+@keyframes panel-voice-ring {
+  0% { opacity: .7; transform: scale(.82); }
+  70%, 100% { opacity: 0; transform: scale(1.08); }
 }
 
 .panel-voice-spinner {
@@ -81,29 +63,64 @@
   to { transform: rotate(360deg); }
 }
 
-.panel-voice-caption {
-  position: absolute;
-  left: 12px;
-  bottom: calc(100% + 4px);
-  max-width: calc(100% - 24px);
-  overflow: hidden;
-  padding: 3px 8px;
-  border-radius: 7px;
-  color: #cfe0ff;
-  background: rgba(10, 24, 58, .88);
-  font-size: var(--text-xs);
-  line-height: 1.4;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  pointer-events: none;
+/* 录音状态用一排纵向频谱柱表示，不再显示文字。柱子只改 transform 和
+   opacity，交给合成器；转写时换成更慢、更低的蓝色波形。 */
+.panel-voice-waveform {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  height: 16px;
+  padding: 0 3px;
+  color: #ff8b96;
+}
+
+.panel-voice-waveform i {
+  width: 3px;
+  height: 100%;
+  border-radius: 1.5px;
+  background: currentColor;
+  opacity: .8;
+  transform: scaleY(.2);
+  transform-origin: center;
+  animation: panel-voice-spectrum .82s ease-in-out infinite alternate;
+  animation-delay: calc(var(--bar) * -.07s);
+  will-change: transform;
+}
+
+.panel-voice-waveform i:nth-child(3n) {
+  animation-duration: 1.08s;
+}
+
+.panel-voice-waveform i:nth-child(4n) {
+  animation-duration: .64s;
+}
+
+.panel-voice-waveform.is-processing {
+  color: #9cc4ff;
+}
+
+.panel-voice-waveform.is-processing i {
+  animation-duration: 1.7s;
+}
+
+@keyframes panel-voice-spectrum {
+  0% { transform: scaleY(.18); opacity: .48; }
+  55% { transform: scaleY(.9); opacity: 1; }
+  100% { transform: scaleY(.4); opacity: .76; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .panel-voice-wave-bars i {
+  .panel-microphone-button.is-listening::after {
     animation: none;
-    transform: scaleX(.8);
-    opacity: .8;
-    will-change: auto;
+    opacity: .55;
+    transform: none;
+  }
+
+  .panel-voice-waveform i {
+    animation: none;
+    opacity: .72;
+    transform: scaleY(.35);
   }
 
   .panel-voice-spinner {
@@ -112,7 +129,8 @@
 }
 
 /* 设置 → 语音 */
-.settings-voice-section { max-height: calc(100vh - 171px); overflow-y: auto; scrollbar-color: rgba(177, 207, 255, .5) transparent; scrollbar-width: thin; }
+.settings-voice-section { max-height: calc(100vh - 171px); overflow-y: auto; scrollbar-width: none; }
+.settings-voice-section::-webkit-scrollbar { display: none; }
 .settings-voice-state { flex: none; padding: 3px 9px; border-radius: 999px; color: #9fb8e1; background: rgba(160, 191, 251, .1); font-size: var(--text-xs); }
 .settings-voice-state.is-on { color: #172b56; background: #bbd2ff; }
 .settings-voice-warning { margin: 0 18px 10px; padding: 8px 10px; border-radius: 8px; color: #ffd4a2; background: rgba(255, 194, 109, .09); font-size: var(--text-xs); line-height: 1.5; }

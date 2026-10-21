@@ -103,7 +103,7 @@ describe('VoiceManager', () => {
     manager.destroy()
   })
 
-  it('submits final text and enters processing', async () => {
+  it('submits final text and returns the microphone to idle', async () => {
     const bridge = createBridge()
     const onRequestText = vi.fn(async () => undefined)
     const onPhaseChange = vi.fn()
@@ -113,9 +113,12 @@ describe('VoiceManager', () => {
 
     emitResult(lastInstance!, '记录测试', true)
     await Promise.resolve()
+    await Promise.resolve()
 
     expect(onRequestText).toHaveBeenCalledWith('记录测试')
     expect(onPhaseChange).toHaveBeenCalledWith('processing')
+    // Waiting for the model must not keep the button spinning.
+    expect(onPhaseChange).toHaveBeenLastCalledWith('idle')
     manager.destroy()
   })
 

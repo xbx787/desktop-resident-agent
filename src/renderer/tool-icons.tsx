@@ -2,7 +2,7 @@ import type { ReactElement } from 'react'
 
 /** Icon families a tool name can map to. Distinguishing them is what lets a long
  *  timeline be skimmed by shape instead of by reading every row. */
-export type ToolIconKind = 'terminal' | 'document' | 'document-write' | 'pencil' | 'search' | 'agent' | 'globe' | 'checklist' | 'notebook' | 'link' | 'gear';
+export type ToolIconKind = 'terminal' | 'job' | 'document' | 'document-write' | 'pencil' | 'search' | 'agent' | 'globe' | 'checklist' | 'notebook' | 'link' | 'gear';
 
 /** Most specific patterns first: "TodoWrite" must not fall through to the task
  *  branch, and "BashOutput" must reach the terminal rather than the document. */
@@ -11,7 +11,8 @@ const families: Array<{ kind: ToolIconKind; match: RegExp }> = [
   { kind: 'notebook', match: /notebook/ },
   { kind: 'globe', match: /web|fetch|http|browser|url/ },
   { kind: 'search', match: /grep|glob|search|find/ },
-  { kind: 'terminal', match: /bash|shell|terminal|command|exec|kill|run/ },
+  { kind: 'job', match: /job|background/ },
+  { kind: 'terminal', match: /bash|pwsh|powershell|shell|terminal|command|exec|kill|run/ },
   { kind: 'globe', match: /deepseek/ },
   { kind: 'link', match: /mcp/ },
   { kind: 'agent', match: /task|agent|subagent/ },
@@ -27,6 +28,7 @@ export function toolIconKind(name: string): ToolIconKind {
 
 const shapes: Record<ToolIconKind, ReactElement> = {
   terminal: <><path d="m7.6 5.2-3.6 4.8 3.6 4.8" /><path d="m12.4 5.2 3.6 4.8-3.6 4.8" /></>,
+  job: <><rect x="3.8" y="4.6" width="12.4" height="10.8" rx="2.2" /><path d="M6.6 8h6.8M6.6 11h4.2" /><path d="m12.4 12.2 2 1.4-2 1.4z" /></>,
   document: <><path d="M6.2 3.6h4.6l3.4 3.4v9.4H6.2z" /><path d="M10.8 3.6v3.4h3.4" /></>,
   'document-write': <><path d="M10 3.8v7.6m-2.6-2.6L10 11.4l2.6-2.6" /><path d="M4.6 13.6v1.8h10.8v-1.8" /></>,
   pencil: <><path d="m4.6 14.8.6-2.9 7.6-7.6 2.4 2.4-7.6 7.6z" /><path d="m11.6 5.6 2.4 2.4" /></>,

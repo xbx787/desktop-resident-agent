@@ -64,11 +64,15 @@ describe('avatar motion geometry', () => {
     expect(hitRule).not.toMatch(/\btransform\s*:/);
     expect(css).not.toMatch(/\.avatar-hit-target:active\s*\{[^}]*transform/);
     expect(css).not.toContain('var(--panel-pulse-p');
-    expect(css).toMatch(/\.avatar-task-dot\.is-pulsing\s*\{\s*animation:\s*avatar-task-pulse/);
-    for (const state of ['working', 'waiting', 'listening', 'speaking', 'completed', 'failed']) {
-      expect(css).toMatch(new RegExp(`\\.avatar-stage\\.is-${state} \\.avatar-breath \\{[^}]*animation:`));
+    expect(css).toMatch(/\.avatar-status-dot\.is-pulsing\s*\{\s*animation:\s*avatar-task-pulse/);
+    for (const state of ['planning', 'executing', 'verifying', 'compacting', 'waiting']) {
+      expect(css).toMatch(new RegExp(`\\.avatar-stage\\[data-task='${state}'\\] \\.avatar-state-loop \\{[^}]*animation:`));
     }
-    const stateMotionRule = css.match(/@media \(prefers-reduced-motion: no-preference\) \{([\s\S]*?\.avatar-stage\.is-working \.avatar-breath[\s\S]*?)\n\}/)?.[1] ?? '';
-    expect(stateMotionRule).toContain('.avatar-stage.is-working .avatar-breath');
+    for (const state of ['listening', 'speaking']) {
+      expect(css).toMatch(new RegExp(`\\.avatar-stage\\[data-voice='${state}'\\] \\.avatar-look \\{[^}]*animation:`));
+    }
+    expect(css).toContain('.avatar-breath { transform-origin: 50% 100%; animation: whale-breath');
+    expect(css).toContain(".avatar-stage[data-interaction='dragging'] .avatar-state-loop");
+    expect(css).toContain(".avatar-stage[data-task='completed'] .avatar-success-sparkles");
   });
 });

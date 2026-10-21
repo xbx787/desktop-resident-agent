@@ -47,3 +47,15 @@
 `scripts/audit-active-avatar-assets.cjs` 只读取渲染代码实际引用的 PNG，检查缺图、格式与校验值、alpha 内容、立绘尺寸、独立头像画布、姿势图底边差异。有引用呆毛层时还会检查身体与呆毛画布一致性、旋转轴画布假设和 body 是否仍与完整原图相同；不使用呆毛层时不强制生成该层。旧 `scripts/sprite-audit.cjs` 仍负责生成暂存区诊断。`node scripts/audit-active-avatar-assets.cjs` 已接到正式打包前，这是质量闸，不应为发版而调低阈值。失败状态另有专用的歉意表情，不再错误复用“害羞”；sleepy / shy 的白色贴纸外框已去掉。
 
 透明率、尺寸、锚点都不能证明画的是正确人物，也不能判断色彩、构图或表情是否可爱。身份与美术审查必须保留人工对照。所有新角色素材统一采用：透明背景、可辨识剪影、同一画笔线宽与阴影档位、统一 Q 版头身比；头像从与桌面立绘同一设计稿导出。运行中动效优先使用同一角色的表情和少量骨骼/分层变化，避免不同绘制来源整张跳换。
+
+## 运行时拆分（0.0.84）
+
+上一版把工作、等待、语音等状态写成 `.avatar-breath` 上的不同 keyframes，多个状态实际在争用同一个整图 transform；待机小动作和表情轮换又各有一个定时器。0.0.84 把结构拆开：
+
+- `avatar-rig.ts`：每套人设的 body、faces、avatar、accent、energy、状态点与脸部锚点。素材和参数只在这里定义。
+- `avatar-lanes.ts`：`task` / `voice` / `interaction` / `emotion` 四条独立通道，按固定优先级归并成当前状态。
+- `WhalePortrait` 的视觉层：`entry`（一次性进场）→ `idle`（待机小动作）→ `state-loop`（任务循环）→ `look`（语音/交互）→ `breath` → `swap`（表情）→ `portrait`。
+- `avatar-behavior.ts`：单一待机行为时钟，按人设权重选择小动作或表情，串行执行并保证清理；`document.hidden`、`is-resting` 和 reduced motion 在动作入口统一跳过。
+- `AvatarStateEffects.tsx`：脸部附近的局部状态提示，不改变窗口几何和点击区域。
+
+外部人设当前没有专属表情素材。表情接口已经就位（`faces` + `faceForAvatarEmotion`），但空的 `faces` 不会回退到别人的脸；素材到位前，它们的状态只通过整体动作、呼吸、状态点和局部特效表达，不整张借用小鲸的表情。

@@ -55,6 +55,28 @@ describe('inbox watcher', () => {
     expect(await fs.readdir(testRoot)).toEqual(['bad.json.failed'])
   })
 
+  it('starts a model turn for an explicit autoRun message', async () => {
+    await fs.mkdir(testRoot, { recursive: true })
+    await fs.writeFile(path.join(testRoot, '003.json'), JSON.stringify({
+      from: { name: '定时任务', badge: '时' },
+      text: '执行今天的任务',
+      autoRun: true
+    }))
+    const appendExternalMessage = vi.fn(async () => undefined)
+    const sendMessage = vi.fn(async () => ({ id: 'queued' }))
+    const watcher = new InboxWatcher(testRoot, {
+      appendExternalMessage,
+      sendMessage,
+      conversationSender: () => undefined
+    } as never, 50)
+    expect(parseInboxMessage({ from: { name: '定时任务', badge: '时' }, text: '执行', autoRun: true }))
+      .toMatchObject({ autoRun: true })
+    await watcher.poll()
+    expect(sendMessage).toHaveBeenCalledWith('执行今天的任务', [], 'queue', undefined)
+    expect(appendExternalMessage).not.toHaveBeenCalled()
+    expect(await fs.readdir(testRoot)).toEqual([])
+  })
+
   it('uses the source conversation title as the sender', async () => {
     await fs.mkdir(testRoot, { recursive: true })
     await fs.writeFile(path.join(testRoot, '002.json'), JSON.stringify({

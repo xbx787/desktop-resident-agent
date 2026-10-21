@@ -7,6 +7,8 @@ function flatten(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
 }
 
+
+
 /**
  * One readable line describing the object of a tool call — the command, the file,
  * the pattern — for the tool row's header. The complete input is formatted
@@ -37,7 +39,9 @@ export function toolArgumentPreview(input: string | undefined): string {
       const record = parsed as Record<string, unknown>;
       for (const key of argumentKeys) {
         const value = record[key];
-        if (typeof value === 'string' && value.trim()) return flatten(value);
+        if (typeof value !== 'string' || !value.trim()) continue;
+        const text = flatten(value);
+        return text;
       }
       const first = Object.values(record).find((value) => typeof value === 'string' && value.trim());
       if (typeof first === 'string') return flatten(first);

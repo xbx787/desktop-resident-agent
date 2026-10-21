@@ -37,7 +37,7 @@ function click(label: string): void {
 function bridge(overrides: Partial<SettingsAPI> = {}): SettingsAPI {
   return {
     get: async () => settings, update: async (patch) => ({ ...settings, ...patch }),
-    version: async () => '0.0.75', close: async () => {}, quit: async () => {}, restart: async () => {}, setAvatar: async () => {},
+    version: async () => '0.0.75', close: async () => {}, quit: async () => {}, restart: async () => false, setAvatar: async () => {},
     workspace: async () => ({ path: 'D:\\old', saved: false }),
     pickWorkspace: async () => null,
     migrateWorkspace: async (next) => ({ path: next }),
@@ -71,7 +71,7 @@ async function mount(api: SettingsAPI): Promise<void> {
 
 describe('settings quit control', () => {
   it('asks before restarting the whole app', async () => {
-    const restart = vi.fn(async () => {})
+    const restart = vi.fn(async () => false)
     await mount(bridge({ restart }))
 
     await act(async () => click('重启小鲸'))

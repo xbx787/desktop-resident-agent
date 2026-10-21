@@ -31,7 +31,7 @@ function harness(model: ModelClient & { steer?: (text: string) => Promise<boolea
     { role: 'user', content: '主线问题' }, { role: 'assistant', content: '主线答案' }
   ]
   const side = new SideChatController(
-    (onChange, persistSession) => {
+    (_sessionId, onChange, persistSession) => {
       persistFlags.push(persistSession)
       const runtime = new AgentRuntime(new NoteStore(path.join(process.cwd(), '.cache', 'tests', 'side-chat-notes')),
         model, onChange, model)

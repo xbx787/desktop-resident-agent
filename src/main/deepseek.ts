@@ -35,6 +35,13 @@ export interface ModelToolEvent {
   isError?: boolean
 }
 
+/** 一张随消息一起发出的图片；data 是 base64，不进入持久化历史。 */
+export interface ModelImage {
+  name: string
+  mimeType: string
+  data: string
+}
+
 export interface ModelClient {
   respond(
     history: DialogueLine[],
@@ -43,7 +50,8 @@ export interface ModelClient {
     sdkSessionId?: string | null,
     onToolEvent?: (event: ModelToolEvent) => void,
     onTaskUsage?: (usage: TaskUsage) => void,
-    onThinking?: (text: string, segment?: number) => void
+    onThinking?: (text: string, segment?: number) => void,
+    images?: ModelImage[]
   ): Promise<ModelReply>
   /** Clients that can control thinking depth implement this. */
   setEffort?(level: EffortLevel): void
@@ -61,6 +69,14 @@ export interface ModelClient {
   setLibraries?(mcpServers: Record<string, unknown>, plugins: string[]): void
   /** Clients that switch the persona preset implement this. */
   setPersonaId?(id: string): void
+  /** Clients that expose the self-evolution tools implement this. */
+  setEvolveBridge?(bridge: import('./evolve-tools').EvolveBridge): void
+  /** Clients that apply a Claude Code response style implement this. */
+  setOutputStyle?(style?: string): void
+  /** Clients that append extra instructions to the system prompt implement this. */
+  setAppendSystemPrompt?(text?: string): void
+  /** Clients that can include or exclude ~/.claude settings implement this. */
+  setLoadUserSettings?(on: boolean): void
   setApprovalModeListener?(listener: (mode: ApprovalMode) => void): void
   /** Clients that park tool calls for approval implement this. */
   setPermissionListener?(listener: (request: ToolPermissionRequest | null) => void): void
@@ -81,7 +97,7 @@ export interface ModelClient {
    *  receives the parked question, then null once it is settled. */
   setQuestionListener?(listener: (question: AskQuestionRequest | null) => void): void
   /** Resolves a parked question; returns false when the id is stale. */
-  answerQuestion?(id: string, answers: AskAnswers | null): boolean
+  answerQuestion?(id: string, answers: AskAnswers | null): boolean | Promise<boolean>
   /** Clients that relay plan approvals implement this. The listener receives
    *  the parked plan, then null once it is settled. */
   setPlanListener?(listener: (plan: PlanApprovalRequest | null) => void): void
@@ -90,6 +106,9 @@ export interface ModelClient {
   /** Clients that surface Task-tool subagents implement this. The listener
    *  receives the current set whenever it changes, already throttled. */
   setSubagentTasksListener?(listener: (tasks: SubagentTask[]) => void): void
+  /** Clients that echo a steered user message implement this; the echoed
+   *  message id confirms the steer actually landed in the running turn. */
+  setSteerEchoListener?(listener: (messageId: string) => void): void
   /** Moves one foreground subagent to the background; false when unmatched. */
   backgroundTask?(toolUseId?: string): Promise<boolean>
   /** Stops one subagent by task id. */

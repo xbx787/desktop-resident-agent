@@ -2,11 +2,17 @@
 
 :root { font-family: var(--font-ui); font-size: var(--text-sm); color: #edf3ff; background: #162854; font-synthesis: none; }
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 400px; }
+body { margin: 0; min-width: 400px; overflow: hidden; }
+/* 窗口框架固定占满视口，不允许整页滚动；每个栏目自己是滚动容器。
+   滚动条仍隐藏，滚轮和触控板照常工作。 */
+html, body, #root { height: 100%; scrollbar-width: none; }
+html::-webkit-scrollbar, body::-webkit-scrollbar { display: none; }
 button, input, select { font: inherit; }
 button { cursor: pointer; }
 button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55; }
-.settings-window { min-height: 100vh; padding: 28px 30px 20px; background: linear-gradient(155deg, #27427e 0%, #162854 45%, #0c1b3e 100%); }
+.settings-window { display: flex; flex-direction: column; height: 100%; min-height: 0; padding: 24px 30px 14px; overflow: hidden; background: linear-gradient(155deg, #27427e 0%, #162854 45%, #0c1b3e 100%); }
+.settings-header, .settings-tabs, .settings-quit, .settings-notice { flex: none; }
+.settings-window > main { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow: hidden; }
 .settings-header { display: flex; align-items: center; gap: 13px; margin-bottom: 16px; }
 /* 窗口没有系统边框：标题栏画在这里——按住空白处拖动窗口，按钮不参与拖动。
    × 与余额卡上的收起按钮同一副配方。 */
@@ -16,7 +22,8 @@ button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55
 /* One group shows at a time, so the small
    window never scrolls through the whole list. The chip style follows the
    panel's pick buttons. */
-.settings-tabs { display: flex; gap: 4px; margin: 0 0 14px; overflow-x: auto; scrollbar-width: thin; }
+.settings-tabs { display: flex; gap: 4px; margin: 0 0 14px; overflow-x: auto; scrollbar-width: none; }
+.settings-tabs::-webkit-scrollbar { display: none; }
 .settings-tab { height: 26px; padding: 0 12px; border: 0; border-radius: 999px; color: #a9bee4; background: transparent; font-size: var(--text-sm); font-weight: 600; }
 .settings-tab:hover { color: #dbe8ff; background: rgba(181, 205, 255, .12); }
 .settings-tab.is-active { color: #dbe8ff; background: rgba(111, 211, 255, .14); }
@@ -25,7 +32,10 @@ button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55
 .settings-header p { margin: 0 0 1px; color: #aec2e8; font-size: var(--text-sm); }
 .settings-header h1 { margin: 0; font-size: var(--text-lg); font-weight: 600; letter-spacing: .02em; }
 .settings-version { margin-left: auto; color: #aec2e8; font-family: var(--font-numeric); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
-.settings-section { border: 1px solid rgba(184, 209, 255, .28); border-radius: 13px; background: rgba(9, 21, 53, .5); overflow: hidden; }
+/* 栏目卡片是唯一滚动区：内容少时保持自然高度，内容多时缩到剩余空间并
+   内部滚动。框架（标题、标签、底部按钮）始终不动。 */
+.settings-section { flex: 0 1 auto; min-height: 0; border: 1px solid rgba(184, 209, 255, .28); border-radius: 13px; background: rgba(9, 21, 53, .5); overflow-x: hidden; overflow-y: auto; scrollbar-width: none; }
+.settings-section::-webkit-scrollbar { display: none; }
 .settings-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 82px; padding: 12px 18px; }
 .settings-row + .settings-row { border-top: 1px solid rgba(194, 215, 255, .16); }
 .settings-copy { flex: 1; min-width: 0; }
@@ -46,6 +56,13 @@ button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55
 .settings-row .settings-switch.is-on::after { transform: translateX(15px); background: #fff; }
 .settings-row .settings-switch:disabled { opacity: .5; cursor: default; }
 .settings-row input[type="text"] { width: 150px; padding: 0 10px; text-align: left; }
+.settings-row select.settings-wide-select { width: 148px; }
+/* 附加指令要能写多行：说明在左，编辑区和应用键在右，整体保持同一行的节奏。 */
+.settings-prompt-row { align-items: flex-start; }
+.settings-prompt-row form { flex-direction: column; align-items: stretch; width: min(360px, 48%); }
+.settings-prompt-row textarea { width: 100%; min-height: 76px; padding: 7px 9px; border: 1px solid rgba(190, 213, 253, .35); border-radius: 8px; color: #eef4ff; background: rgba(10, 24, 58, .45); font-family: inherit; font-size: var(--text-sm); line-height: 1.5; outline: none; resize: vertical; }
+.settings-prompt-row textarea:focus-visible { outline: 2px solid #b4d1ff; outline-offset: 2px; }
+.settings-prompt-row button { align-self: flex-end; }
 .settings-avatar { position: relative; display: grid; place-items: center; flex: none; width: 44px; height: 44px; overflow: hidden; border: 1px solid rgba(190, 213, 253, .35); border-radius: 12px; color: #dbe8ff; background: rgba(10, 24, 58, .45); cursor: pointer; }
 .settings-avatar img { width: 100%; height: 100%; object-fit: cover; }
 .settings-avatar span { font-size: var(--text-lg); font-weight: 700; }
@@ -53,7 +70,9 @@ button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55
 
 /* 人设预设：头像、名字、性格各一张卡片，切换时同时换人设、对话头像和
    桌面形象。 */
-.settings-personas { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px; margin-bottom: 14px; }
+/* 人设预设：标题和卡片都不贴边框；默认窗口宽度下固定四列，五列会挤。 */
+#settings-panel-avatar > .settings-copy { padding: 14px 18px 0; }
+.settings-personas { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; padding: 12px 18px 14px; }
 .settings-persona { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 10px; border: 1px solid rgba(190, 213, 253, .2); border-radius: 12px; color: inherit; background: rgba(120, 155, 220, .06); text-align: left; font-family: inherit; cursor: pointer; transition: border-color .15s ease, background .15s ease; }
 .settings-persona:hover:not(:disabled) { background: rgba(150, 185, 245, .12); }
 .settings-persona.is-active { border-color: rgba(240, 196, 123, .65); background: rgba(240, 196, 123, .10); }
@@ -108,7 +127,6 @@ button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55
 .settings-budget-row form { align-items: flex-end; }
 .settings-budget-row form label { display: grid; gap: 3px; color: #a9bee4; font-size: var(--text-xs); }
 .settings-budget-row form input { width: 55px; }
-.settings-section[aria-labelledby="settings-tab-memory"], .settings-growth-section { max-height: calc(100vh - 171px); overflow-y: auto; scrollbar-color: rgba(177, 207, 255, .5) transparent; scrollbar-width: thin; }
 .settings-list-header, .settings-growth-list-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 11px 18px; border-top: 1px solid rgba(194, 215, 255, .16); color: #c5d8f8; font-size: var(--text-sm); font-weight: 600; }
 .settings-list-header span:last-child { color: #9fb8e1; font-weight: 400; }
 .settings-empty { margin: 0; padding: 18px; color: #a9bee4; line-height: 1.6; }
@@ -132,7 +150,8 @@ button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55
 .settings-growth-form label, .settings-growth-notes label { display: grid; gap: 4px; color: #a9bee4; font-size: var(--text-sm); }
 .settings-growth-form button, .settings-growth-notes button { justify-self: end; }
 .settings-growth-layout { border-top: 1px solid rgba(194, 215, 255, .12); }
-.settings-growth-proposals { display: flex; gap: 6px; overflow-x: auto; padding: 10px 14px; scrollbar-width: thin; }
+.settings-growth-proposals { display: flex; gap: 6px; overflow-x: auto; padding: 10px 14px; scrollbar-width: none; }
+.settings-growth-proposals::-webkit-scrollbar { display: none; }
 .settings-growth-proposal { display: grid; gap: 5px; flex: 0 0 auto; width: 140px; padding: 9px 10px; border: 1px solid rgba(190, 213, 253, .2); border-radius: 9px; color: #dbe8ff; background: rgba(160, 191, 251, .07); text-align: left; }
 .settings-growth-proposal:hover { background: rgba(160, 191, 251, .16); }
 .settings-growth-proposal.is-active { border-color: rgba(151, 202, 255, .62); background: rgba(111, 211, 255, .12); }
@@ -165,7 +184,8 @@ button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55
 .settings-size-picker .settings-size-option.is-active { color: #172b56; background: #bbd2ff; border-color: transparent; }
 
 /* 三个库：MCP / 技能 / 插件。顶部分档，下面是已安装和同名市场。 */
-.settings-library-section { max-height: calc(100vh - 171px); overflow-y: auto; scrollbar-color: rgba(177, 207, 255, .5) transparent; scrollbar-width: thin; }
+/* 本地已有条目由 Claude 配置直接加载，不写进应用索引，因此没有“移除”。 */
+.settings-library-external { flex: none; padding: 1px 8px; border-radius: 999px; color: #9bd8ad; background: rgba(110, 214, 145, .10); font-size: var(--text-xs); }
 .settings-library-kinds { position: sticky; top: 0; z-index: 1; display: flex; gap: 6px; padding: 12px 16px; border-bottom: 1px solid rgba(194, 215, 255, .16); background: rgba(12, 27, 62, .96); }
 .settings-library-kind { display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 13px; border: 1px solid transparent; border-radius: 999px; color: #a9bee4; background: transparent; font-size: var(--text-sm); font-weight: 600; }
 .settings-library-kind:hover { color: #dbe8ff; background: rgba(181, 205, 255, .12); }
@@ -195,7 +215,7 @@ button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55
 .settings-library-error { margin: 0; padding: 8px 10px; border-radius: 8px; color: #ffbbbb; background: rgba(240, 126, 144, .09); font-size: var(--text-xs); line-height: 1.5; }
 
 /* 退出整个小鲸：放着不显眼，点开才确认。 */
-.settings-quit { display: flex; justify-content: flex-end; padding: 14px 2px 0; }
+.settings-quit { display: flex; justify-content: flex-end; padding: 10px 2px 0; }
 .settings-quit-actions-row { display: flex; gap: 8px; }
 .settings-quit-button { height: 30px; padding: 0 12px; border: 1px solid rgba(240, 126, 144, .26); border-radius: 8px; color: #ffc4ca; background: transparent; font-size: var(--text-sm); }
 .settings-quit-button:hover { background: rgba(240, 126, 144, .1); }
@@ -205,3 +225,6 @@ button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55
 .settings-quit-actions button { height: 30px; padding: 0 12px; border: 1px solid rgba(190, 213, 253, .28); border-radius: 8px; color: #dbe8ff; background: rgba(160, 191, 251, .1); font-size: var(--text-sm); }
 .settings-quit-actions button:hover { background: rgba(160, 191, 251, .22); }
 .settings-quit-actions .is-danger { color: #fff; background: rgba(240, 126, 144, .55); border-color: transparent; }
+
+.settings-capability { flex: none; color: #9fd8b6; font-size: var(--text-sm); }
+

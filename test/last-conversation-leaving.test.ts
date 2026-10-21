@@ -26,7 +26,7 @@ afterEach(async () => {
 
 function controllerFor(store: ConversationStore): ConversationController {
   return new ConversationController(store,
-    (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))
+    (_conversationId, onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))
 }
 
 describe('the last conversation leaving the tab strip', () => {

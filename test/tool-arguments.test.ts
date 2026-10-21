@@ -12,6 +12,11 @@ describe('toolArgumentPreview', () => {
     expect(toolArgumentPreview('{"url":"https://example.com/a"}')).toBe('https://example.com/a')
   })
 
+  it('shows the description even when the model wrote it in English', () => {
+    expect(toolArgumentPreview('{"command":"npm test","description":"run tests"}')).toBe('run tests')
+    expect(toolArgumentPreview('{"command":"npm test","description":"Run the full test suite"}')).toBe('Run the full test suite')
+  })
+
   it('falls back to another string field, then to the raw text', () => {
     expect(toolArgumentPreview('{"unknown":"值"}')).toBe('值')
     expect(toolArgumentPreview('{"list":[1,2]}')).toBe('{"list":[1,2]}')

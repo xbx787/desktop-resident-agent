@@ -43,6 +43,7 @@ export const ThinkingItem = memo(function ThinkingItem({ entry, running }: { ent
     return () => window.clearInterval(timer)
   }, [streaming])
   const elapsed = entry.endedAt || streaming ? thinkingElapsedSeconds(entry, now) : null
+  // 时长统一用 mm:ss；不足一秒就是 00:00。
   const duration = elapsed === null ? null : thinkingDurationText(elapsed)
   const label = streaming ? '思考中' : '已思考'
   return <details className={`panel-thought${streaming ? ' is-streaming' : ''}`} open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>

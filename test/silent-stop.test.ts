@@ -33,7 +33,7 @@ describe('silent stop on app quit', () => {
     }
     const store = new ConversationStore(testRoot)
     const controller = new ConversationController(store,
-      (onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model))
+      (_conversationId, onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange, model))
     await controller.initialize()
     const id = controller.displayedConversationId()!
 

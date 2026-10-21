@@ -173,6 +173,26 @@ describe('persistent conversation library', () => {
     await expect(store.updateSettings({ panelSize: { width: 5000, height: 520 } })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
   })
 
+  it('saves the response style, extra instructions and list preferences', async () => {
+    const store = new ConversationStore(testRoot)
+    await store.updateSettings({
+      outputStyle: 'Explanatory', appendSystemPrompt: '先给结论，再给证据。',
+      autoScroll: false, expandFileEditsByDefault: true,
+      sessionSort: 'created', titleLocale: 'en', titleModel: 'deepseek-chat', loadUserSettings: false
+    })
+    expect((await new ConversationStore(testRoot).getState()).settings).toMatchObject({
+      outputStyle: 'Explanatory', appendSystemPrompt: '先给结论，再给证据。',
+      autoScroll: false, expandFileEditsByDefault: true,
+      sessionSort: 'created', titleLocale: 'en', titleModel: 'deepseek-chat', loadUserSettings: false
+    })
+    await store.updateSettings({ outputStyle: '', appendSystemPrompt: '' })
+    const cleared = (await store.getState()).settings
+    expect(cleared.outputStyle).toBeUndefined()
+    expect(cleared.appendSystemPrompt).toBeUndefined()
+    await expect(store.updateSettings({ sessionSort: 'random' as never })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+    await expect(store.updateSettings({ titleLocale: 'fr' as never })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+  })
+
   it('saves and validates the interface size', async () => {
     const store = new ConversationStore(testRoot)
     expect((await store.getState()).settings.uiSize).toBe('small')
@@ -191,6 +211,19 @@ describe('persistent conversation library', () => {
     await store.updateSettings({ avatarSize: 'large' })
     expect((await new ConversationStore(testRoot).getState()).settings.avatarSize).toBe('large')
     await expect(store.updateSettings({ avatarSize: 'huge' as never })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+  })
+
+  it('defaults to the standard illustration and persists only the supported avatar renderer', async () => {
+    const store = new ConversationStore(testRoot)
+    expect((await store.getState()).settings.avatarRenderer).toBe('sprite')
+    await store.updateSettings({ avatarRenderer: 'live2d-preview' })
+    expect((await new ConversationStore(testRoot).getState()).settings.avatarRenderer).toBe('live2d-preview')
+    await expect(store.updateSettings({ avatarRenderer: 'remote-url' as never })).rejects.toMatchObject({ code: 'INVALID_INPUT' })
+
+    const onDisk = JSON.parse(await fs.readFile(store.filePath, 'utf8'))
+    onDisk.settings.avatarRenderer = 'untrusted-renderer'
+    await fs.writeFile(store.filePath, JSON.stringify(onDisk), 'utf8')
+    expect((await new ConversationStore(testRoot).getState()).settings.avatarRenderer).toBe('sprite')
   })
 
   it('saves and validates the auto-compaction percentage', async () => {
@@ -229,8 +262,11 @@ describe('persistent conversation library', () => {
       modelProfiles: [], activeModelProfileId: null, enableAutoTitleGeneration: true,
       showMessageTimestamps: true, userName: '主人', assistantName: '小鲸',
       userAvatar: null, assistantAvatar: null, tabOrder: [],
-      goalMaxIterations: 30, goalMaxMinutes: 180, memoryEnabled: true, uiSize: 'small', avatarSize: 'small',
-      webSearchEnabled: true, personaId: 'xiaojing', autoCompactPercent: 80
+      goalMaxIterations: 30, goalMaxMinutes: 0, memoryEnabled: true, uiSize: 'small', avatarSize: 'small', avatarRenderer: 'sprite', panelPlacement: 'top', panelTheme: 'dark',
+      webSearchEnabled: true, personaId: 'xiaojing', agentKernel: 'dsh', autoCompactPercent: 80,
+      toolRowDetail: 'brief',
+      autoScroll: true, expandFileEditsByDefault: false, sessionSort: 'updated', titleLocale: 'auto',
+      titleModel: 'deepseek-flash', loadUserSettings: true
     })
     expect((await migrated.listConversations()).length).toBe(8)
     expect((await migrated.getConversation(created[0].id))?.pendingMessages[0].text).toBe('继续执行')

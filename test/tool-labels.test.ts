@@ -19,18 +19,39 @@ describe('toolLabel', () => {
 
   it('covers the newer CLI tools too, Search and the mode switches included', () => {
     expect(toolLabel('Search')).toBe('搜索')
-    expect(toolLabel('EnterPlanMode')).toBe('进入计划模式')
+    expect(toolLabel('EnterPlanMode')).toBe('进入计划')
     expect(toolLabel('ExitPlanMode')).toBe('提交计划')
     expect(toolLabel('ToolSearch')).toBe('查找工具')
-    expect(toolLabel('Workflow')).toBe('编排工作流')
-    expect(toolLabel('CronCreate')).toBe('新建定时任务')
+    expect(toolLabel('Workflow')).toBe('工作流')
+    expect(toolLabel('CronCreate')).toBe('新建定时')
     expect(toolLabel('ScheduleWakeup')).toBe('安排唤醒')
   })
 
-  it('keeps names it has no word for — MCP tools above all', () => {
-    expect(toolLabel('mcp__windows-mcp__click')).toBe('mcp__windows-mcp__click')
-    expect(toolLabel('SomeFutureTool')).toBe('SomeFutureTool')
+  it('labels the DSH first-party tools too, underscores and all', () => {
+    expect(toolLabel('pwsh')).toBe('执行命令')
+    expect(toolLabel('read_image')).toBe('读取图片')
+    expect(toolLabel('job_output')).toBe('读取输出')
+    expect(toolLabel('todo_write')).toBe('更新任务')
+    expect(toolLabel('subagent')).toBe('子代理')
+    expect(toolLabel('subagent_fork')).toBe('子代理')
+    expect(toolLabel('ask_user_question')).toBe('向你提问')
+    expect(toolLabel('web_search')).toBe('联网搜索')
+    expect(toolLabel('list_agents')).toBe('列出代理')
+  })
+
+  it('classifies unknown names instead of leaking English identifiers', () => {
+    expect(toolLabel('mcp__windows-mcp__click')).toBe('外部工具')
+    expect(toolLabel('mcp__acme__search_docs')).toBe('搜索')
+    expect(toolLabel('SomeFutureTool')).toBe('工具')
+    expect(toolLabel('read_something')).toBe('读取')
+    expect(toolLabel('list_items')).toBe('列出')
     expect(toolLabel('')).toBe('')
+  })
+
+  it('keeps every label within four Chinese characters', () => {
+    for (const name of ['Read', 'Bash', 'Workflow', 'get_goal', 'ask_user_question', 'mcp__x__y', 'SomeFutureTool']) {
+      expect(Array.from(toolLabel(name)).length).toBeLessThanOrEqual(4)
+    }
   })
 
   it('labels a missing tool name as a result, not "未知工具"', () => {

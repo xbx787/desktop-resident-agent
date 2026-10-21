@@ -46,6 +46,31 @@ describe('generateConversationTitle', () => {
     expect((call[1] as { headers: Record<string, string> }).headers.Authorization).toBe('Bearer test-key')
   })
 
+  it('switches the title instruction with the requested locale', async () => {
+    respondWith(messageOutput('Tidy the project'))
+    await generateConversationTitle('test-key', '帮我整理一下项目', undefined, 'en')
+    const english = JSON.parse(((globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.at(-1)![1] as { body: string }).body)
+    expect(english.instructions).toContain('English title')
+
+    respondWith(messageOutput('整理项目'))
+    await generateConversationTitle('test-key', '帮我整理一下项目', undefined, 'zh', 'deepseek-chat')
+    const chinese = JSON.parse(((globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.at(-1)![1] as { body: string }).body)
+    expect(chinese.instructions).toContain('中文标题')
+    expect(chinese.model).toBe('deepseek-chat')
+  })
+
+  it('follows the source language when the locale is auto', async () => {
+    respondWith(messageOutput('整理项目'))
+    await generateConversationTitle('test-key', '帮我整理一下项目', undefined, 'auto')
+    const chinese = JSON.parse(((globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.at(-1)![1] as { body: string }).body)
+    expect(chinese.instructions).toContain('中文标题')
+
+    respondWith(messageOutput('Organize the project'))
+    await generateConversationTitle('test-key', 'Please organize the project notes', undefined, 'auto')
+    const english = JSON.parse(((globalThis.fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.at(-1)![1] as { body: string }).body)
+    expect(english.instructions).toContain('English title')
+  })
+
   it('returns null without a request when there is nothing to title', async () => {
     respondWith(messageOutput('不会用到'))
     expect(await generateConversationTitle('test-key', '   ')).toBeNull()

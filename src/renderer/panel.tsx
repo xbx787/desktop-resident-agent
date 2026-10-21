@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type AnimationEvent, type MouseEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import type { AppSnapshot, ApprovalMode, BubbleLayout, ClaudeWorkflowOption, ContextUsageSnapshot, ConversationSummary, EffortLevel, ModelMode, ModelProfile, PendingMessage, PetAPI, ProposedAction, SideChatSnapshot, TaskMetrics, TaskStatus, TimelineEntry, UserAttachment, VoiceConfig } from '../shared/contracts';
+import { normalizeApprovalMode, type AppSnapshot, ApprovalMode, BubbleLayout, ClaudeWorkflowOption, ContextUsageSnapshot, ConversationSummary, EffortLevel, ModelMode, ModelProfile, PanelDirection, PanelPlacement, PendingMessage, PetAPI, ProposedAction, SideChatSnapshot, TaskMetrics, TaskStatus, TimelineEntry, type ToolRowDetail, UserAttachment, VoiceConfig } from '../shared/contracts';
 import { AUTO_COMPACT_DEFAULT_PERCENT, AUTO_COMPACT_MAX_PERCENT, AUTO_COMPACT_MIN_PERCENT, PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH } from '../shared/contracts';
 import { isImageAttachmentName } from '../shared/image-preview';
 import { EFFORT_LABELS } from '../shared/effort';
@@ -40,36 +40,57 @@ import { TurnProcess, WorkCluster } from './work-cluster';
 import { petBridge } from './pet-state';
 import { personaAvatarUrl } from './avatar-art';
 import { VoiceManager, type VoiceManagerPhase } from './voice-manager';
-import { VoiceButton } from './voice-button';
+import { VoiceButton, VoiceWaveform } from './voice-button';
 import './voice.css';
 import './panel.css';
+import './panel-light.css';
+import './panel-theme-tune.css';
 
-// 审批菜单只放权限相关的三档；计划模式是工作方式，不在这里。顺序从
-// 严格到宽松：每次操作都弹审批、只放行编辑、全部直接执行。
-const APPROVAL_MODES: ApprovalMode[] = ['default', 'acceptEdits', 'bypassPermissions']
+// 审批菜单按 DSH 的沙箱预设排列，严格到宽松：只读、工作区写入、完全访问，
+// 最后一档是应用自己的自我进化（完全访问 + 修改自身和重启）。
+const APPROVAL_MODES: ApprovalMode[] = ['read-only', 'workspace-write', 'danger-full-access', 'selfEvolve']
 const APPROVAL_MODE_LABELS: Record<ApprovalMode, string> = {
-  default: '手动审批',
-  acceptEdits: '允许所有编辑',
-  bypassPermissions: '完全访问',
-  plan: '计划模式'
+  'read-only': '手动审批',
+  'workspace-write': '工作区写入',
+  'danger-full-access': '完全访问',
+  selfEvolve: '自我进化'
 }
 const APPROVAL_MODE_HINTS: Record<ApprovalMode, string> = {
-  default: '每个需要权限的操作都先问你',
-  acceptEdits: '文件修改自动放行，其他操作仍询问',
-  bypassPermissions: '所有工具直接执行，不再询问',
-  plan: '先研究并给出计划，批准后再动手'
+  'read-only': '每次修改文件或执行命令前都先问你',
+  'workspace-write': '允许在工作区内改文件，越界操作由沙箱拦住',
+  'danger-full-access': '所有工具直接执行，不再询问',
+  selfEvolve: '最高权限：可改代码、打包、重启并跨重启续跑'
 }
 
-/** One icon per permission mode: a raised hand (every call asks), a pencil
- *  (edits pass), a warning shield (everything runs). */
+/** One icon per permission mode: a hand (manual approval), a pencil (workspace
+ *  writes), a warning shield (everything runs), a hexagon (self restart). */
 function ApprovalIcon({ mode }: { mode: ApprovalMode }) {
-  if (mode === 'acceptEdits') {
+  if (mode === 'read-only') {
+    // 手动审批：一只举起的手。
+    return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6.4 10.6V6.4a1.2 1.2 0 0 1 2.4 0v3.3" /><path d="M8.8 9.7V5.2a1.2 1.2 0 0 1 2.4 0v4.5" /><path d="M11.2 9.4V6.4a1.2 1.2 0 0 1 2.4 0v5.5c0 2.7-1.9 4.5-4.5 4.5H8.2c-1.4 0-2.5-.7-3.2-1.9l-1.2-2.1a1.1 1.1 0 0 1 1.8-1.2l1.4 1.4" /></svg>
+  }
+  if (mode === 'workspace-write') {
     return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4.2 15.8l.9-3.8 7.6-7.6a1.5 1.5 0 0 1 2.1 2.1l-7.6 7.6-3 .9Z" /><path d="m11.7 5.4 2.1 2.1" /></svg>
   }
-  if (mode === 'bypassPermissions') {
+  if (mode === 'danger-full-access') {
     return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.8 16.2 5v5.1c0 3.5-2.4 6.3-6.2 7.4-3.8-1.1-6.2-3.9-6.2-7.4V5L10 2.8Z" /><path d="M10 7.1v4.1" /><path d="M10 13.7h.01" /></svg>
   }
-  return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6.3 10.2V5.6a1.2 1.2 0 0 1 2.4 0v4.1" /><path d="M8.7 9.7V4.4a1.2 1.2 0 0 1 2.4 0v5.2" /><path d="M11.1 9.8V5.2a1.2 1.2 0 0 1 2.4 0v5.3" /><path d="M13.5 10.1V6.8a1.2 1.2 0 0 1 2.4 0v5.5c0 3.4-2.1 5.4-5.5 5.4-2.4 0-3.8-.9-5-2.6L3.6 12a1.3 1.3 0 0 1 2-1.6l1.6 1.7" /></svg>
+  // 自我进化：科技感六边形 + 向上的箭头，紫色由 CSS 给。
+  return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 2.4 16.4 6v8L10 17.6 3.6 14V6z" /><path d="M10 13.2V7.1" /><path d="m7.3 9.6 2.7-2.6 2.7 2.6" /><path d="M7 14.6h6" /><circle cx="10" cy="15.1" r=".6" /></svg>
+}
+
+/** Goal mode: a target with an arrow; plan mode: a checklist. */
+function GoalIcon() {
+  return <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7" /><circle cx="10" cy="10" r="3.2" /><path d="M10 10 16.2 3.8" /><path d="M12.8 3.8h3.4v3.4" /></svg>
+}
+
+function PlanIcon() {
+  return <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4.4" y="3.6" width="11.2" height="13.2" rx="1.8" /><path d="M7.4 7.2h5.2" /><path d="M7.4 10h5.2" /><path d="M7.4 12.8h3.2" /></svg>
+}
+
+/** 联网搜索：地球加放大镜手柄，和搜索类工具图标同一套线条。 */
+function WebSearchIcon() {
+  return <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="8.9" cy="8.9" r="5.3" /><path d="M3.9 8.9h10" /><path d="M8.9 3.6c1.5 1.6 2.3 3.3 2.3 5.3s-.8 3.7-2.3 5.3c-1.5-1.6-2.3-3.3-2.3-5.3s.8-3.7 2.3-5.3Z" /><path d="m12.9 12.9 3.1 3.1" /></svg>
 }
 
 const taskLabels: Record<TaskStatus, string> = {
@@ -253,6 +274,47 @@ const RunParagraph = memo(function RunParagraph({ entry, onOpenImage }: { entry:
   return <div className="panel-run-item"><MessageBody entry={entry} onOpenImage={onOpenImage} /></div>;
 });
 
+/** 把工作区绝对路径缩成 `~/…`，工具行才看得见改的是哪个文件。 */
+function abbreviateWorkspace(text: string, root?: string): string {
+  if (!root || !text) return text
+  const variants = new Set([
+    root,
+    root.replace(/\\/gu, '/'),
+    root.replace(/\\/gu, '\\\\'),
+    root.replace(/\\/gu, '\\/')
+  ])
+  let next = text
+  for (const variant of variants) {
+    if (!variant) continue
+    next = next.split(variant).join('~')
+  }
+  return next
+}
+
+/** 读图工具的原始文件路径：优先用结果里的 images，其次从参数里的
+ *  file_path / path 或输出里的 <path> 取。只认图片扩展名，普通文件不挂按钮。 */
+function toolImagePath(tool?: { input?: unknown; output?: string; images?: Array<{ path: string }> }): string | null {
+  const fromImages = tool?.images?.[0]?.path;
+  if (fromImages) return fromImages;
+  const candidates: string[] = [];
+  let parsed: unknown = tool?.input;
+  if (typeof parsed === 'string') {
+    try { parsed = JSON.parse(parsed); } catch { parsed = null; }
+  }
+  if (parsed && typeof parsed === 'object') {
+    for (const key of ['file_path', 'filePath', 'path', 'file']) {
+      const value = (parsed as Record<string, unknown>)[key];
+      if (typeof value === 'string') candidates.push(value);
+    }
+  }
+  if (typeof tool?.output === 'string') {
+    const inOutput = /<path>([^<]+)<\/path>/u.exec(tool.output)?.[1];
+    if (inOutput) candidates.push(inOutput);
+  }
+  const isImage = (value: string): boolean => /\.(?:png|jpe?g|webp|gif|bmp)$/iu.test(value.trim());
+  return candidates.map((value) => value.trim()).find(isImage) ?? null;
+}
+
 export const TimelineItem = memo(function TimelineItem({ entry, running = false, onOpenImage, onAvatarMenu, onKill, display }: { entry: TimelineEntry; running?: boolean; onOpenImage?: (name: string, url: string) => void; onAvatarMenu?: (event: MouseEvent<HTMLElement>) => void; onKill?: () => void; display: RowDisplay }) {
   const timeLabel = timeText(entry.time);
   const toolPreview = entry.kind === 'tool' ? (entry.text.trim().split(/\r?\n/, 1)[0] || '工具活动') : '';
@@ -279,18 +341,28 @@ export const TimelineItem = memo(function TimelineItem({ entry, running = false,
     return () => window.clearTimeout(timer);
   }, [entry.kind, entry.time, entry.tool?.status, running]);
   // The card body (diff preview, long output) mounts on first expand only.
-  const [toolOpened, setToolOpened] = useState(false);
+  // Edit-like rows may start open when the reader asked for that.
+  const editTool = entry.kind === 'tool' && ['Edit', 'Write', 'MultiEdit'].includes(toolName);
+  const [toolOpened, setToolOpened] = useState(() => Boolean(display.expandEditsByDefault && editTool));
   if (entry.kind === 'tool') {
     const status = entry.tool?.status ?? 'done';
     const name = entry.tool?.name ?? toolPreview.split(' · ')[0].split('（')[0];
     const label = toolLabel(name);
-    const argument = toolArgumentPreview(entry.tool?.input);
+    const rowDetail = display.toolRowDetail ?? 'brief';
+    const rawArgument = abbreviateWorkspace(toolArgumentPreview(entry.tool?.input), display.workspace);
+    // 简略档截一小截；完整档保留全部。命令没有中文说明时，命令本身也会显示。
+    const argument = rowDetail === 'name' ? ''
+      : rowDetail === 'brief'
+        ? (Array.from(rawArgument).length > 28 ? `${Array.from(rawArgument).slice(0, 28).join('')}…` : rawArgument)
+        : rawArgument;
     const diff = toolDiff;
     // A plan lives in the call's input; its output is only "approved". Showing
     // the plan itself is the whole point of plan mode.
     const plan = toolPlanText(name, entry.tool?.input);
     const detail = entry.tool?.output?.trim() ? entry.tool.output : legacyToolDetail;
     const images = entry.tool?.images ?? [];
+    // 读取图片的工具没有 images 数组，路径只在参数里；右上角给一个直接入口。
+    const openImagePath = toolImagePath(entry.tool);
     const imageDetail = images.length && detail
       ? stripAnsi(detail).replace(/^\[图片结果\]\s*$/gm, '').trim()
       : '';
@@ -305,17 +377,19 @@ export const TimelineItem = memo(function TimelineItem({ entry, running = false,
       : detail ? <pre className="panel-tool-output">{stripAnsi(detail)}</pre>
       : <div className="panel-tool-empty">{status === 'running' ? '正在运行…' : '没有输出'}</div>;
     return <details className={`panel-tool-activity${status === 'running' ? ' is-running' : ''}`}
-      onToggle={(event) => { if (event.currentTarget.open) setToolOpened(true); }}>
-      <summary aria-label={`${label}${argument ? ` ${argument}` : ''}${diff ? `，新增 ${diff.added} 行，删除 ${diff.removed} 行` : ''}，${status === 'error' ? '失败' : status === 'running' ? '执行中' : '已完成'}`}>
+      open={toolOpened} onToggle={(event) => setToolOpened(event.currentTarget.open)}>
+      <summary aria-label={`${label}${argument ? ` ${argument}` : ''}${diff && rowDetail !== 'name' ? `，新增 ${diff.added} 行，删除 ${diff.removed} 行` : ''}，${status === 'error' ? '失败' : status === 'running' ? '执行中' : '已完成'}`}>
         <ToolIcon name={name} />
         <code className={status === 'running' ? 'panel-live-label' : undefined}>{label}</code>
         {argument && <span className="panel-tool-argument">{argument}</span>}
-        {diff && <span className="panel-tool-diff" aria-hidden="true">
+        {diff && rowDetail !== 'name' && <span className="panel-tool-diff" aria-hidden="true">
           <span className="panel-tool-diff-add">+{diff.added}</span>
           {diff.removed > 0 && <span className="panel-tool-diff-del">−{diff.removed}</span>}
         </span>}
+        {openImagePath && <button type="button" className="panel-tool-open-image" title="用系统默认程序打开原图" aria-label="查看原图"
+          onClick={(event) => { event.preventDefault(); event.stopPropagation(); void petBridge().openPath(openImagePath); }}>查看原图</button>}
         <span className={`panel-tool-result is-${status}`} aria-hidden="true">{status === 'error' ? '×' : status === 'running' ? '…' : '✓'}</span>
-        {killable && <button type="button" className="panel-tool-kill" aria-label="中断当前任务" title="中断当前任务"
+        {killable && <button type="button" className="panel-tool-kill" aria-label="中断当前任务" title="中断当前任务（ESC）"
           onClick={(event) => { event.preventDefault(); event.stopPropagation(); onKill?.(); }}>×</button>}
       </summary>
       {toolOpened && body}
@@ -366,7 +440,10 @@ export const TimelineItem = memo(function TimelineItem({ entry, running = false,
   prev.display.showTimestamps === next.display.showTimestamps &&
   (prev.display.avatars.user ?? null) === (next.display.avatars.user ?? null) &&
   (prev.display.avatars.assistant ?? null) === (next.display.avatars.assistant ?? null) &&
-  (prev.display.personaAvatar ?? null) === (next.display.personaAvatar ?? null));
+  (prev.display.personaAvatar ?? null) === (next.display.personaAvatar ?? null) &&
+  prev.display.expandEditsByDefault === next.display.expandEditsByDefault &&
+  prev.display.toolRowDetail === next.display.toolRowDetail &&
+  (prev.display.workspace ?? null) === (next.display.workspace ?? null));
 
 
 /** The display preferences a row needs beyond its entry itself. */
@@ -375,6 +452,12 @@ interface RowDisplay {
   avatars: { user: string | null; assistant: string | null }
   /** Built-in avatar of the current persona, used when no custom one exists. */
   personaAvatar?: string | null
+  /** Open Edit/Write/MultiEdit rows on first render. */
+  expandEditsByDefault?: boolean
+  /** 工具行右侧显示多少信息。 */
+  toolRowDetail?: ToolRowDetail
+  /** 工作区绝对路径：工具行里的长路径缩成 `~/…`。 */
+  workspace?: string
 }
 
 /** Thinking entries get their own expandable row; everything else keeps the message layout. */
@@ -493,7 +576,14 @@ async function fileToBase64(file: File): Promise<string> {
 }
 
 async function prepareFileAttachment(bridge: PetAPI, file: File): Promise<UserAttachment> {
-  const filePath = bridge.getPathForFile(file);
+  let filePath = '';
+  // 剪贴板里的图片没有磁盘路径，webUtils 有时会直接抛错；抛错时走下面的
+  // base64 暂存，不能让它把整个粘贴流程打断。
+  try {
+    filePath = bridge.getPathForFile(file);
+  } catch {
+    filePath = '';
+  }
   if (filePath) return bridge.prepareDroppedFile(filePath);
   if (file.size > 5 * 1024 * 1024) throw new Error('粘贴的文件不能超过 5 MB。');
   return bridge.preparePastedFile({ name: pastedFileName(file), data: await fileToBase64(file) });
@@ -504,6 +594,10 @@ interface PanelBubbleProps {
   snapshot: AppSnapshot | null;
   error: string | null;
   run: (action: (bridge: PetAPI) => Promise<void>) => Promise<boolean>;
+  /** 面板相对人物的展开方向；默认向上，独立面板窗口由主进程推送。 */
+  direction?: PanelDirection;
+  /** 面板贴在人物的哪一侧；左/右时靠侧边对齐。 */
+  placement?: PanelPlacement;
 }
 
 /** Runs a box's exit animation. `closing` stays true from beginClose until the
@@ -529,7 +623,30 @@ function useExitAnimation(durationMs: number) {
  *  render would defeat the memo comparisons downstream. */
 const EMPTY_TAB_ORDER: string[] = [];
 
-export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: PanelBubbleProps) {
+export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direction = 'up', placement = 'top' }: PanelBubbleProps) {
+  // 独立面板窗口里，body 决定面板贴窗口顶还是底、小三角朝上还是朝下。
+  useEffect(() => {
+    if (!document.body.classList.contains('panel-window')) return;
+    document.body.classList.toggle('panel-direction-down', direction === 'down');
+    return () => { document.body.classList.remove('panel-direction-down'); };
+  }, [direction]);
+  // 贴左/贴右时，面板填满窗口高度，侧边用不同的对齐方式。
+  useEffect(() => {
+    if (!document.body.classList.contains('panel-window')) return;
+    document.body.classList.toggle('panel-placement-left', placement === 'left');
+    document.body.classList.toggle('panel-placement-right', placement === 'right');
+    return () => {
+      document.body.classList.remove('panel-placement-left');
+      document.body.classList.remove('panel-placement-right');
+    };
+  }, [placement]);
+  // 主题只作用于聊天面板；状态色在 CSS 里单独成组，不跟主题覆盖。
+  const panelTheme = mainSnapshot?.conversationLibrary?.settings.panelTheme ?? 'dark';
+  useEffect(() => {
+    if (!document.body.classList.contains('panel-window')) return;
+    document.body.classList.toggle('panel-theme-light', panelTheme === 'light');
+    return () => { document.body.classList.remove('panel-theme-light'); };
+  }, [panelTheme]);
   const [sideChat, setSideChat] = useState<SideChatSnapshot | null>(null);
   const sideSessionId = sideChat?.parentConversationId === (mainSnapshot?.conversationLibrary?.activeConversationId ?? null)
     ? sideChat?.sessionId ?? null : null;
@@ -643,12 +760,15 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
   const [effortMenuOpen, setEffortMenuOpen] = useState(false);
   const [approvalMenuOpen, setApprovalMenuOpen] = useState(false);
   const [bypassConfirmOpen, setBypassConfirmOpen] = useState(false);
+  const [evolveConfirmOpen, setEvolveConfirmOpen] = useState(false);
+  // Self-evolution is the only mode that requires a typed authorization.
+  const [evolveAuthorizeText, setEvolveAuthorizeText] = useState('');
+  const evolveAuthorizePhrase = '我授权你自动进化';
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
   const [goalPrompting, setGoalPrompting] = useState(false);
   const [imageViewer, setImageViewer] = useState<{ name: string; url: string } | null>(null);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const [voicePhase, setVoicePhase] = useState<VoiceManagerPhase>('idle');
-  const [voicePartial, setVoicePartial] = useState('');
   const [voiceConfig, setVoiceConfig] = useState<VoiceConfig | null>(null);
   const [voiceReady, setVoiceReady] = useState(false);
   const [feedAtBottom, setFeedAtBottom] = useState(true);
@@ -660,13 +780,17 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
   // `tabOrder` takes over.
   const [tabDragOrder, setTabDragOrder] = useState<string[] | null>(null);
   const tabDragRef = useRef<{ id: string; startX: number; moved: boolean } | null>(null);
+  // 拖拽开始时各标签的静态中心：拖拽中不再随 DOM 重排重算，否则目标槽位会在
+  // 两个位置之间来回跳，表现为标签不断切换。
+  const tabDragCentersRef = useRef<Array<{ id: string; center: number }>>([]);
   const tabClickSuppressRef = useRef(false);
   const followFeedRef = useRef(true);
   // The first content of a conversation is not there yet when the panel
   // mounts. Until the feed actually becomes scrollable once, keep forcing the
   // bottom so a delayed store load cannot leave the view at the top.
   const startupScrollRef = useRef(true);
-  const startupConversationRef = useRef<string | null>(null);
+  /** 切换对话后的短时间窗里，程序滚动不能被 onScroll 当成“用户离开底部”。 */
+  const switchJumpRef = useRef(false);
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const feedWrapRef = useRef<HTMLDivElement>(null);
   const openImageViewer = useCallback((name: string, url: string) => setImageViewer({ name, url }), []);
@@ -834,7 +958,10 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
   const rowDisplay: RowDisplay = {
     showTimestamps: library?.settings.showMessageTimestamps ?? true,
     avatars: { user: library?.settings.userAvatar ?? null, assistant: library?.settings.assistantAvatar ?? null },
-    personaAvatar: personaAvatarUrl(library?.settings.personaId)
+    personaAvatar: personaAvatarUrl(library?.settings.personaId),
+    expandEditsByDefault: library?.settings.expandFileEditsByDefault === true,
+    toolRowDetail: library?.settings.toolRowDetail ?? 'brief',
+    workspace: snapshot?.workspace
   };
   // The stop action is defined lower in the component, but rows rendered
   // through renderEntry still need a stable callback. The ref carries the
@@ -849,7 +976,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
       <EntryItem entry={entry} running={running} onOpenImage={openImageViewerRef.current} onKill={killTurn} display={rowDisplay} />
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [rowDisplay.showTimestamps, rowDisplay.avatars.user, rowDisplay.avatars.assistant, killTurn]
+    [rowDisplay.showTimestamps, rowDisplay.avatars.user, rowDisplay.avatars.assistant, rowDisplay.expandEditsByDefault, rowDisplay.toolRowDetail, rowDisplay.workspace, killTurn]
   );
   // The progress sentences inside a folded turn render the same way they do
   // outside one — the same RunParagraph rows, from a ref-stable callback.
@@ -1059,13 +1186,17 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
   }, [approvalMenuOpen]);
 
   useEffect(() => {
-    if (!bypassConfirmOpen) return;
+    if (!bypassConfirmOpen && !evolveConfirmOpen) return;
     const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { event.stopPropagation(); setBypassConfirmOpen(false); }
+      if (event.key === 'Escape') {
+        event.stopPropagation();
+        setBypassConfirmOpen(false);
+        setEvolveConfirmOpen(false);
+      }
     };
     document.addEventListener('keydown', closeOnEscape, true);
     return () => document.removeEventListener('keydown', closeOnEscape, true);
-  }, [bypassConfirmOpen]);
+  }, [bypassConfirmOpen, evolveConfirmOpen]);
 
   useEffect(() => {
     if (!imageViewer) return;
@@ -1180,8 +1311,6 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
         setVoiceConfig(config);
         const manager = new VoiceManager(bridge, {
           onPhaseChange: (phase) => { if (active) setVoicePhase(phase); },
-          onPartial: (text) => { if (active) setVoicePartial(text); },
-          onFinal: (text) => { if (active) setVoicePartial(text); },
           onError: (message) => { if (active) setVoiceError(message); },
           onRequestText: async (text) => {
             if (!active) return;
@@ -1234,22 +1363,49 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
   const newestText = snapshot?.timeline[snapshot.timeline.length - 1]?.text;
   useEffect(() => {
     const feed = feedRef.current;
-    if (!visible || !feed || !followFeedRef.current || window.getSelection()?.toString()) return;
+    if (!visible || !feed || !followFeedRef.current || library?.settings.autoScroll === false || window.getSelection()?.toString()) return;
     // Reading scrollHeight forces a layout; do it once per frame instead of once per snapshot.
     const frame = requestAnimationFrame(() => { feed.scrollTop = feed.scrollHeight; });
     return () => cancelAnimationFrame(frame);
-  }, [visible, composerOpen, snapshot?.timeline.length, newestText, snapshot?.proposal?.id]);
+  }, [visible, composerOpen, snapshot?.timeline.length, newestText, snapshot?.proposal?.id, library?.settings.autoScroll]);
 
-  // 启动就停在最新一条，等于先替用户按一次「回到底部」。面板重载时时间线
-  // 往往还没到；等第一批内容到达、并且真正能滚动一次之后才结束这段启动
-  // 跟随，避免 onScroll 在空列表上先把 followFeed 关掉。
+  // 切换对话：把视图钉在最新一条。只滚一次不够——切换后的快照可能晚一拍
+  // 才到，平滑滚动又会被 onScroll 当成“用户离开底部”，跟随就断了。这里用
+  // 多次直接赋值，并让 onScroll 在这段时间里保持跟随；用户主动滚动或超时
+  // 后结束。
   useEffect(() => {
-    const id = snapshot?.conversationId ?? null;
-    if (startupConversationRef.current !== id) {
-      startupConversationRef.current = id;
-      startupScrollRef.current = true;
-    }
-  }, [snapshot?.conversationId]);
+    const feed = feedRef.current;
+    if (!feed || !visible) return;
+    switchJumpRef.current = true;
+    startupScrollRef.current = true;
+    followFeedRef.current = true;
+    setFeedAtBottom(true);
+    const jump = (): void => {
+      if (!switchJumpRef.current) return;
+      feed.scrollTop = feed.scrollHeight;
+    };
+    jump();
+    const timers = [40, 120, 260, 450, 700, 1000].map((ms) => window.setTimeout(jump, ms));
+    const release = (): void => { switchJumpRef.current = false; };
+    feed.addEventListener('wheel', release, { passive: true });
+    feed.addEventListener('touchstart', release, { passive: true });
+    const stopTimer = window.setTimeout(release, 1200);
+    return () => {
+      switchJumpRef.current = false;
+      for (const timer of timers) window.clearTimeout(timer);
+      window.clearTimeout(stopTimer);
+      feed.removeEventListener('wheel', release);
+      feed.removeEventListener('touchstart', release);
+    };
+  }, [snapshot?.conversationId, visible]);
+  // 新对话的内容晚到时再补一次；已经到底就自然结束。
+  useEffect(() => {
+    if (!switchJumpRef.current) return;
+    const feed = feedRef.current;
+    if (!feed) return;
+    const frame = requestAnimationFrame(() => { feed.scrollTop = feed.scrollHeight; });
+    return () => cancelAnimationFrame(frame);
+  }, [snapshot?.timeline.length, snapshot?.timelineRevision]);
   useEffect(() => {
     const feed = feedRef.current;
     if (!feed || !visible || !startupScrollRef.current) return;
@@ -1527,7 +1683,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
   }
 
   async function applyApprovalMode(mode: ApprovalMode) {
-    if ((snapshot?.approvalMode ?? 'bypassPermissions') === mode) {
+    if (normalizeApprovalMode(snapshot?.approvalMode) === mode) {
       setApprovalMenuOpen(false);
       setBypassConfirmOpen(false);
       return;
@@ -1538,15 +1694,23 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
     if (accepted) {
       setApprovalMenuOpen(false);
       setBypassConfirmOpen(false);
+      setEvolveConfirmOpen(false);
+      setEvolveAuthorizeText('');
     }
   }
 
   async function chooseApprovalMode(mode: ApprovalMode) {
-    // Full access asks once, in words, before it takes effect. The menu closes
-    // first so the warning is the only thing left on screen.
-    if (mode === 'bypassPermissions' && (snapshot?.approvalMode ?? 'bypassPermissions') !== 'bypassPermissions') {
+    // Full access and self-evolution ask once, in words, before taking effect.
+    // The menu closes first so the warning is the only thing left on screen.
+    if (mode === 'danger-full-access' && normalizeApprovalMode(snapshot?.approvalMode) !== 'danger-full-access') {
       setApprovalMenuOpen(false);
       setBypassConfirmOpen(true);
+      return;
+    }
+    if (mode === 'selfEvolve' && normalizeApprovalMode(snapshot?.approvalMode) !== 'selfEvolve') {
+      setApprovalMenuOpen(false);
+      setEvolveAuthorizeText('');
+      setEvolveConfirmOpen(true);
       return;
     }
     await applyApprovalMode(mode);
@@ -1698,8 +1862,9 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
     if (!feed) return;
     followFeedRef.current = true;
     setFeedAtBottom(true);
-    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
-    feed.scrollTo({ top: feed.scrollHeight, behavior: reduceMotion ? 'auto' : 'smooth' });
+    // 流式输出时 20fps 的更新会不断打断平滑滚动，直接用 scrollTop 落到底，
+    // 发送后和“回到底部”都走这条稳定路径。
+    feed.scrollTop = feed.scrollHeight;
   }
 
   function toggleVoice(): void {
@@ -1790,21 +1955,29 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
         if (Math.abs(event.clientX - drag.startX) < 5) return;
         drag.moved = true;
         setTabDragOrder(orderedSessionsRef.current.map((item) => item.id));
+        const tabs = quickTabsRef.current;
+        tabDragCentersRef.current = tabs
+          ? Array.from(tabs.querySelectorAll<HTMLElement>('.panel-quick-tab[data-tab-id]'))
+            .filter((button) => button.dataset.tabId !== drag.id)
+            .map((button) => {
+              const rect = button.getBoundingClientRect();
+              return { id: button.dataset.tabId!, center: rect.left + rect.width / 2 };
+            })
+          : [];
       }
       const tabs = quickTabsRef.current;
       if (!tabs) return;
+      const centers = tabDragCentersRef.current;
       const buttons = Array.from(tabs.querySelectorAll<HTMLElement>('.panel-quick-tab:not(.panel-quick-tab-new)'));
-      let toIndex = Math.max(0, buttons.length - 1);
-      for (let index = 0; index < buttons.length; index += 1) {
-        const rect = buttons[index].getBoundingClientRect();
-        if (event.clientX < rect.left + rect.width / 2) { toIndex = index; break; }
-      }
+      const maxIndex = Math.max(0, buttons.length - 1);
+      const toIndex = Math.min(maxIndex, centers.filter((item) => event.clientX > item.center).length);
       setTabDragOrder((current) => (current ? moveTab(current, drag.id, toIndex) : current));
     };
     const onEnd = () => {
       const drag = tabDragRef.current;
       if (!drag) return;
       tabDragRef.current = null;
+      tabDragCentersRef.current = [];
       if (!drag.moved) return;
       // Swallow the click the pointerup is about to send — this gesture was a
       // drag, not a tab switch.
@@ -2366,16 +2539,16 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
     }
   }
 
-  // 展开面板的左上角拖拽：面板锚在右下，向右下没有空间，所以向左上拖大。
-  // 尺寸每帧最多发一次；主进程按窗口布局重算并节流落盘。
-  // 拖动缩放用屏幕坐标而不是视口坐标：窗口左/上缘会跟着鼠标移动，视口坐标
-  // 会随窗口一起变，形成反馈回路——之前的高频抖动和「差一截」都来自这里。
+  // 展开面板的角上拖拽：拖动时只记录目标尺寸并给手柄一圈蓝色高光，窗口
+  // 不跟着指针实时变形；松开后再一次性 setPanelSize，减少重绘和内存压力。
+  // 用屏幕坐标而不是视口坐标，窗口变形后不会形成反馈回路。
   const resizeSession = useRef<{
     pointerId: number; grip: HTMLDivElement
     startScreenX: number; startScreenY: number; startW: number; startH: number
     lastSent: number; lastWidth: number; lastHeight: number
   } | null>(null);
   const [resizingPanel, setResizingPanel] = useState(false);
+  const resizeMovedRef = useRef(false);
   function beginPanelResize(event: ReactPointerEvent<HTMLDivElement>): void {
     if (!expanded || event.button !== 0) return;
     const rect = event.currentTarget.closest('.panel-bubble')?.getBoundingClientRect();
@@ -2383,6 +2556,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
     event.preventDefault();
     if (resizeSession.current) endPanelResize();
     const grip = event.currentTarget;
+    grip.style.transition = 'none'
     grip.setPointerCapture(event.pointerId);
     resizeSession.current = {
       pointerId: event.pointerId, grip,
@@ -2390,9 +2564,26 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
       startW: rect.width, startH: rect.height, lastSent: 0,
       lastWidth: Math.round(rect.width), lastHeight: Math.round(rect.height)
     };
+    resizeMovedRef.current = false;
     document.body.classList.add('is-resizing-panel');
     setResizingPanel(true);
+    petBridge().resizeGhost({ x: event.screenX, y: event.screenY });
   }
+  function beginWindowDrag(event: ReactPointerEvent<HTMLElement>, fromHeader = false): void {
+    // 顶栏空白也允许拖整组窗口；按钮、标签、输入框都留给它们自己。
+    if (event.button !== 0 || (!fromHeader && event.target !== event.currentTarget)) return;
+    const bridge = petBridge();
+    void bridge.beginDrag({ x: event.screenX, y: event.screenY });
+    const move = (e: PointerEvent): void => { void bridge.dragMove({ x: e.screenX, y: e.screenY }); };
+    const up = (): void => {
+      void bridge.endDrag();
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  }
+
   function movePanelResize(event: ReactPointerEvent<HTMLDivElement>): void {
     const session = resizeSession.current;
     if (!session || event.pointerId !== session.pointerId) return;
@@ -2403,26 +2594,46 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
       return;
     }
     const maxWidth = Math.max(PANEL_MIN_WIDTH, window.screen.availWidth - 20);
-    // 头像可以向下伸出工作区，面板顶要够得到工作区顶；多出来的部分由
-    // 主进程按头像底边裁掉，不会真的长到屏幕外。
     const maxHeight = Math.max(PANEL_MIN_HEIGHT, window.screen.availHeight);
     const width = Math.round(Math.min(maxWidth, Math.max(PANEL_MIN_WIDTH, session.startW + (session.startScreenX - event.screenX))));
-    const height = Math.round(Math.min(maxHeight, Math.max(PANEL_MIN_HEIGHT, session.startH + (session.startScreenY - event.screenY))));
-    if (width === session.lastWidth && height === session.lastHeight) return;
-    const now = performance.now();
-    if (now - session.lastSent < 16) return;
+    const heightDelta = direction === 'down'
+      ? event.screenY - session.startScreenY
+      : session.startScreenY - event.screenY;
+    const height = Math.round(Math.min(maxHeight, Math.max(PANEL_MIN_HEIGHT, session.startH + heightDelta)));
+    // 只记目标尺寸；窗口在松开鼠标时才变形。手柄和那圈 L 线先跟着鼠标走，
+    // 让人看清楚窗口会变到哪。
     session.lastWidth = width;
     session.lastHeight = height;
-    session.lastSent = now;
-    void petBridge().setPanelSize(width, height);
+    const dx = Math.round(session.startW - width);
+    const dy = Math.round(direction === 'down' ? height - session.startH : session.startH - height);
+    session.grip.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
+    petBridge().resizeGhost({ x: event.screenX, y: event.screenY });
   }
   function endPanelResize(event?: ReactPointerEvent<HTMLDivElement>): void {
     const session = resizeSession.current;
     if (!session) return;
     resizeSession.current = null;
+    resizeMovedRef.current = false;
     setResizingPanel(false);
     document.body.classList.remove('is-resizing-panel');
     try { (event?.currentTarget ?? session.grip).releasePointerCapture(session.pointerId); } catch { /* 已释放 */ }
+    const grip = session.grip;
+    petBridge().resizeGhost(null);
+    const changed = session.lastWidth !== Math.round(session.startW) || session.lastHeight !== Math.round(session.startH);
+    // 先让窗口缩到目标尺寸；等它落定后再无动画地把手柄归位。若先清位移，
+    // 手柄会先弹回旧角、再被窗口带着跳到新角，看起来就是闪一下。
+    const settle = (): void => {
+      grip.style.transition = 'none';
+      grip.style.transform = '';
+      requestAnimationFrame(() => { grip.style.transition = ''; });
+    };
+    if (changed) {
+      void petBridge().setPanelSize(session.lastWidth, session.lastHeight)
+        .catch(() => undefined)
+        .finally(() => { window.setTimeout(settle, 30); });
+    } else {
+      settle();
+    }
   }
   // Pointer capture can be lost when the window itself moves under the cursor.
   // End the session from the window as well, so no ghost resize survives a
@@ -2455,10 +2666,10 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
   const ask = snapshot?.question ?? null;
   const plan = snapshot?.plan ?? null;
   const permission = snapshot?.permission ?? null;
-  const approvalMode = snapshot?.approvalMode ?? 'bypassPermissions';
+  const approvalMode = normalizeApprovalMode(snapshot?.approvalMode);
 
   return (
-    <section className={`panel-bubble${compactEmpty ? ' is-empty' : ''}${expanded ? ' is-expanded' : ''}${sideExpanded ? ' is-side-chat' : ''}${composerOpen || composerExit.closing || ask || plan ? ' is-composing' : ''}${attachments.length ? ' has-attachments' : ''}${modelPickerOpen ? ' is-choosing-model' : ''}`} style={compactEmpty && (composerOpen || composerExit.closing) ? { height: compactComposerHeight } : undefined} aria-label="交互气泡" hidden={!visible} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => {
+    <section className={`panel-bubble${compactEmpty ? ' is-empty' : ''}${expanded ? ' is-expanded' : ''}${sideExpanded ? ' is-side-chat' : ''}${composerOpen || composerExit.closing || ask || plan ? ' is-composing' : ''}${attachments.length ? ' has-attachments' : ''}${modelPickerOpen ? ' is-choosing-model' : ''}`} style={compactEmpty && (composerOpen || composerExit.closing) ? { height: compactComposerHeight } : undefined} aria-label="交互气泡" hidden={!visible} onPointerDown={beginWindowDrag} onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) event.preventDefault(); }} onDrop={(event) => {
       if (!event.dataTransfer.files.length) return;
       event.preventDefault();
       if (libraryOpen) return;
@@ -2499,7 +2710,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
         onClose={() => setTurnMenu(null)}
       />}
       <section className="panel-workspace" ref={workspaceRef}>
-        {!compactEmpty && <header className={`panel-chat-header${expanded ? ' is-browser' : ' is-numeric'}`} ref={sessionHeaderRef}>
+        {!compactEmpty && <header className={`panel-chat-header${expanded ? ' is-browser' : ' is-numeric'}`} ref={sessionHeaderRef} onPointerDown={(event) => { const target = event.target as HTMLElement; if (target.closest('button, a, nav, input, textarea, .panel-quick-tab')) return; beginWindowDrag(event, true); }}>
           <button type="button" className="panel-library-toggle" aria-label={expanded ? '会话库' : '会话菜单'} title={expanded ? '会话库' : '会话菜单'} aria-haspopup={expanded ? undefined : 'menu'} aria-expanded={expanded ? libraryOpen : sessionMenuOpen} onClick={expanded ? () => libraryOpen ? setLibraryOpen(false) : openLibrary() : () => setSessionMenuOpen((open) => !open)}><ConversationsIcon /></button>
           {!expanded && sessionMenuOpen && <div className="panel-session-menu" id="panel-session-menu" role="menu" aria-label="会话菜单"
             onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); setSessionMenuOpen(false); } }}>
@@ -2594,15 +2805,15 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
           <div className="panel-status-row">
             <span className={`panel-status panel-status-${status}`} role="status"><i />{statusLive ? <span className="panel-live-label">{taskLabels[status]}</span> : taskLabels[status]}</span>
             <SubagentTray subagents={snapshot?.subagents}
-              onBackgroundTask={(task) => {
+              onBackgroundTask={snapshot?.subagentControls === false ? undefined : (task) => {
                 const toolUseId = task.toolUseId;
                 if (!toolUseId) return;
                 void run(async (bridge) => { await bridge.backgroundTask(toolUseId, activeConversationIdRef.current ?? undefined); });
               }}
-              onStopTask={(task) => {
+              onStopTask={snapshot?.subagentControls === false ? undefined : (task) => {
                 void run(async (bridge) => { await bridge.stopTask(task.taskId, activeConversationIdRef.current ?? undefined); });
               }}
-              onMessageSubagent={(task, text) => {
+              onMessageSubagent={snapshot?.subagentControls === false ? undefined : (task, text) => {
                 const toolUseId = task.toolUseId;
                 if (!toolUseId) return;
                 void run(async (bridge) => { await bridge.messageSubagent(toolUseId, text, activeConversationIdRef.current ?? undefined); });
@@ -2614,6 +2825,8 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
           <TimelineNav marks={navMarkList} onJump={jumpToEntry} windowSize={expanded ? NAV_WINDOW_WIDE : NAV_WINDOW_COMPACT} baseWidth={expanded ? 12 : 8.8} />
           <div className="panel-feed" ref={feedRef} aria-label="对话与任务时间线" onScroll={(event) => {
             const feed = event.currentTarget;
+            // 切换对话后的程序滚动保持跟随，不算用户离开底部。
+            if (switchJumpRef.current) { followFeedRef.current = true; setFeedAtBottom(true); setQuoteSelection(null); return; }
             const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 48;
             followFeedRef.current = atBottom;
             setFeedAtBottom(atBottom);
@@ -2623,7 +2836,12 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
           }}>
             {sideExpanded && <p className="panel-side-intro">临时会话，记录不进入会话库</p>}
             {visibleGroups.map((group, index) => {
-              if (group.kind === 'single') return <EntryItem key={group.entry.id} entry={group.entry} running={false} onOpenImage={openImageViewer} onKill={killTurn} display={rowDisplay} />;
+              if (group.kind === 'single') {
+                if (group.entry.divider) {
+                  return <div key={group.entry.id} className="panel-timeline-divider"><span>{group.entry.text.split('\n')[0]}</span></div>;
+                }
+                return <EntryItem key={group.entry.id} entry={group.entry} running={false} onOpenImage={openImageViewer} onKill={killTurn} display={rowDisplay} />;
+              }
               const segments = segmentTurn(group.items);
               const isLiveTurn = index === latestTurnIndex && active;
               // 思考中：插话按顺序留在过程流里——那就是当时的现场，不提前
@@ -2643,7 +2861,9 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
               // "Latest reply" is the turn's final entry itself: a mid-turn
               const runAnchor = group.items[0];
               return <div className="panel-turn" key={group.user.id}>
-                <TimelineItem entry={group.user} display={rowDisplay} onOpenImage={openImageViewer} onKill={killTurn} onAvatarMenu={sideExpanded ? undefined : (event) => showTurnMenu(event, group.user.id, turnMenuTitle(group.user), isLiveTurn)} />
+                {group.user.divider
+                  ? <div className="panel-timeline-divider"><span>{group.user.text.split('\n')[0]}</span></div>
+                  : <TimelineItem entry={group.user} display={rowDisplay} onOpenImage={openImageViewer} onKill={killTurn} onAvatarMenu={sideExpanded ? undefined : (event) => showTurnMenu(event, group.user.id, turnMenuTitle(group.user), isLiveTurn)} />}
                 {/* 插话夹在自己的消息和这条回复之间，按条数叠成一列——它们是
                     消息，不是小鲸气泡里的东西；过程依旧整条可折叠。 */}
                 {asides.length > 0 && <div className="panel-turn-asides">
@@ -2719,11 +2939,18 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
           </button>}
         </div>
 
+        {!sideExpanded && snapshot?.steering && <div className="panel-queue panel-steering" aria-label="正在插话">
+          <div className="panel-queue-heading">正在插话</div>
+          <div className="panel-queue-list"><div className="panel-queue-item">
+            <span title={snapshot.steering.text}>{snapshot.steering.text}</span>
+          </div></div>
+        </div>}
+
         {pendingMessages.length > 0 && <div className="panel-queue" aria-label="待发送消息">
           <div className="panel-queue-heading">待发送 <strong>{pendingMessages.length}</strong></div>
           <div className="panel-queue-list">{pendingMessages.map((message) => <div key={message.id} className="panel-queue-item">
             <span title={message.text}>{message.text || `附件 ${message.attachments.length} 个`}</span>
-            <button type="button" aria-label={`引导：${message.text.slice(0, 20)}`} title="引导（插队发送）" onClick={() => { const id = sideExpanded ? sideSessionId : null; void run((bridge) => id ? bridge.steerSideQueuedMessage(id, message.id) : bridge.steerQueuedMessage(message.id)); }}><ReturnIcon /></button>
+            <button type="button" aria-label={`引导：${message.text.slice(0, 20)}`} title="插队发送（不打断当前回答，Ctrl+Enter）" onClick={() => { const id = sideExpanded ? sideSessionId : null; void run((bridge) => id ? bridge.steerSideQueuedMessage(id, message.id) : bridge.steerQueuedMessage(message.id)); }}><ReturnIcon /></button>
             <button type="button" aria-label={`修改待发送消息：${message.text.slice(0, 20)}`} title="修改" onClick={() => { void editQueuedMessage(message); }}><EditIcon /></button>
             <button type="button" aria-label={`移除待发送消息：${message.text.slice(0, 20)}`} title="从队列移除" onClick={() => { const id = sideExpanded ? sideSessionId : null; void run((bridge) => id ? bridge.removeSideQueuedMessage(id, message.id) : bridge.removeQueuedMessage(message.id)); }}>×</button>
           </div>)}</div>
@@ -2732,14 +2959,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
         {!compactEmpty && <TaskStrip key={sideExpanded ? sideSessionId : library?.activeConversationId} tasks={tasks}
           planMode={Boolean(snapshot?.planMode)} planSummary={sideExpanded ? undefined : snapshot?.approvedPlan} />}
 
-        {!compactEmpty && !sideExpanded && snapshot?.goal && <GoalBanner goal={snapshot.goal}
-          maxIterations={snapshot.conversationLibrary?.settings.goalMaxIterations}
-          maxMinutes={snapshot.conversationLibrary?.settings.goalMaxMinutes}
-          pausedReason={snapshot.queuePauseReason}
-          onResume={snapshot.queuePauseReason
-            ? () => { void run((bridge) => bridge.resumeQueue(activeConversationIdRef.current ?? undefined)); }
-            : undefined}
-          onClear={clearGoal} />}
+        {!compactEmpty && !sideExpanded && snapshot?.goal && <GoalBanner goal={snapshot.goal} onClear={clearGoal} />}
 
         <div className={`panel-compose-dock${composerOpen || composerExit.closing || ask || plan || permission ? ' is-open' : ''}`} ref={composeDockRef}>
           {ask ? (
@@ -2766,8 +2986,8 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
               if (event.key === 'Escape' && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
                 event.preventDefault();
                 event.stopPropagation();
+                // ESC 专门用来打断回复；不收起输入框，也不让面板折叠。
                 if (modelPickerOpen) setModelPickerOpen(false);
-                else closeComposer();
               }
             }}>
               <button type="button" className="panel-composer-collapse" aria-label="收起输入框" title="收起输入框" onClick={closeComposer}><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 5 10 10M15 5 5 15" /></svg></button>
@@ -2794,7 +3014,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                   maxLength={8000}
                   rows={1}
                   style={{ height: composerHeight }}
-                  placeholder={sideExpanded ? '在临时会话中提问…' : goalPrompting ? '写清目标与可验证的完成标准，回车设定' : '输入消息…'}
+                  placeholder={sideExpanded ? '在临时会话中提问…' : goalPrompting ? '写清目标与可验证的完成标准，回车设定' : '输入消息…（Enter 发送 · Ctrl+Enter 插话 · ESC 打断）'}
                   aria-controls={suggestionOpen ? 'panel-composer-suggestions' : undefined}
                   aria-expanded={suggestionOpen && (suggestionLoading || suggestionItems.length > 0)}
                   aria-activedescendant={suggestionOpen && suggestionItems.length > 0 ? `panel-suggestion-${suggestionSelected}` : undefined}
@@ -2840,8 +3060,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                   }}
                 />
               </div>
-              {voicePartial && (voicePhase === 'listening' || voicePhase === 'processing') &&
-                <div className="panel-voice-caption" role="status">{voicePartial}</div>}
+              <VoiceWaveform phase={voicePhase} />
               <div className="panel-composer-toolbar">
                 {compactEmpty && (library?.conversations.length ?? 0) > 1 && <button type="button" className="panel-tool-button panel-conversations-button" aria-label="会话库" title="会话库" onClick={openLibrary}><ConversationsIcon /></button>}
                 <div className="panel-model-picker-wrap" ref={modelPickerRef}>
@@ -2850,6 +3069,30 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                   </button>
                   <div className={`panel-model-menu${modelPickerOpen ? ' is-open' : ''}`} role="dialog" aria-label="模型与上下文" aria-hidden={!modelPickerOpen} inert={!modelPickerOpen}
                     onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); setModelPickerOpen(false); } }}>
+                    {/* 三个开关都属于这个左下角菜单：目标、计划、联网搜索。
+                        顺序固定，图标在前；菜单外面不再单独摆目标/计划按钮。 */}
+                    <div className="panel-popover-modes">
+                      <div className="panel-popover-heading">模式</div>
+                      <button type="button" role="switch" aria-checked={goalPrompting || Boolean(snapshot?.goal)} className={`panel-mode-toggle is-goal${goalPrompting || snapshot?.goal ? ' is-on' : ''}`} disabled={sideExpanded || snapshot?.mode !== 'claude_code'}
+                        title={goalPrompting || snapshot?.goal ? '关闭目标模式' : '打开后在输入框里写下目标并回车'}
+                        onClick={toggleGoal}>
+                        <span className="panel-mode-toggle-main"><span className="panel-mode-icon"><GoalIcon /></span><span>目标模式</span></span>
+                        <span className="panel-mode-switch" aria-hidden="true" />
+                      </button>
+                      <button type="button" role="switch" aria-checked={Boolean(snapshot?.planMode)} className={`panel-mode-toggle is-plan${snapshot?.planMode ? ' is-on' : ''}`} disabled={snapshot?.mode !== 'claude_code'}
+                        onClick={() => { void choosePlanMode(!snapshot?.planMode); }}>
+                        <span className="panel-mode-toggle-main"><span className="panel-mode-icon"><PlanIcon /></span><span>计划模式</span></span>
+                        <span className="panel-mode-switch" aria-hidden="true" />
+                      </button>
+                      <button type="button" role="switch" aria-checked={library?.settings.webSearchEnabled !== false}
+                        className={`panel-mode-toggle is-web${library?.settings.webSearchEnabled !== false ? ' is-on' : ''}`}
+                        disabled={sideExpanded || snapshot?.mode !== 'claude_code'}
+                        title={library?.settings.webSearchEnabled !== false ? '关闭后模型不会尝试联网搜索' : '打开后模型可以联网搜索'}
+                        onClick={() => { void run((bridge) => bridge.setWebSearchEnabled(library?.settings.webSearchEnabled === false)); }}>
+                        <span className="panel-mode-toggle-main"><span className="panel-mode-icon"><WebSearchIcon /></span><span>联网搜索</span></span>
+                        <span className="panel-mode-switch" aria-hidden="true" />
+                      </button>
+                    </div>
                     <div className="panel-popover-heading">模型</div>
                     <div className="panel-model-list" role="radiogroup" aria-label="选择模型配置">
                       {sideExpanded && <div className="panel-model-empty">临时会话沿用开启时的模型。回到主线可切换配置。</div>}
@@ -2864,31 +3107,6 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                         </button>))}
                       <button type="button" className="panel-model-manage" onClick={() => { void run((bridge) => bridge.openSettings()); }}>在设置中管理…</button>
                     </div>
-                    {/* Both modes are plain switches; the goal switch turns the
-                        composer itself into the goal prompt instead of a nested
-                        input, and a running goal shows under the task strip. */}
-                    <div className="panel-popover-modes">
-                      <div className="panel-popover-heading">模式</div>
-                      <button type="button" role="switch" aria-checked={Boolean(snapshot?.planMode)} className={`panel-mode-toggle${snapshot?.planMode ? ' is-on' : ''}`} disabled={snapshot?.mode !== 'claude_code'}
-                        onClick={() => { void choosePlanMode(!snapshot?.planMode); }}>
-                        <span>计划模式</span>
-                        <span className="panel-mode-switch" aria-hidden="true" />
-                      </button>
-                      <button type="button" role="switch" aria-checked={goalPrompting || Boolean(snapshot?.goal)} className={`panel-mode-toggle${goalPrompting || snapshot?.goal ? ' is-on' : ''}`} disabled={sideExpanded || snapshot?.mode !== 'claude_code'}
-                        title={goalPrompting || snapshot?.goal ? '关闭目标模式' : '打开后在输入框里写下目标并回车'}
-                        onClick={toggleGoal}>
-                        <span>目标模式</span>
-                        <span className="panel-mode-switch" aria-hidden="true" />
-                      </button>
-                      <button type="button" role="switch" aria-checked={library?.settings.webSearchEnabled !== false}
-                        className={`panel-mode-toggle${library?.settings.webSearchEnabled !== false ? ' is-on' : ''}`}
-                        disabled={sideExpanded || snapshot?.mode !== 'claude_code'}
-                        title={library?.settings.webSearchEnabled !== false ? '关闭后模型不会尝试联网搜索' : '打开后模型可以联网搜索'}
-                        onClick={() => { void run((bridge) => bridge.setWebSearchEnabled(library?.settings.webSearchEnabled === false)); }}>
-                        <span>允许联网搜索</span>
-                        <span className="panel-mode-switch" aria-hidden="true" />
-                      </button>
-                    </div>
                   </div>
                 </div>
                 {!sideExpanded && <div className="panel-effort-wrap" ref={effortMenuRef}>
@@ -2902,7 +3120,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                   </div>
                 </div>}
                 {snapshot?.mode === 'claude_code' && <div className="panel-approval-wrap" ref={approvalMenuRef}>
-                  <button type="button" className={`panel-tool-button panel-approval-button is-${approvalMode === 'acceptEdits' ? 'edits' : approvalMode === 'bypassPermissions' ? 'bypass' : 'default'}`}
+                  <button type="button" className={`panel-tool-button panel-approval-button is-${approvalMode === 'workspace-write' ? 'write' : approvalMode === 'danger-full-access' ? 'bypass' : approvalMode === 'selfEvolve' ? 'evolve' : 'readonly'}`}
                     aria-label={`审批模式：${APPROVAL_MODE_LABELS[approvalMode]}`}
                     aria-haspopup="dialog" aria-expanded={approvalMenuOpen}
                     title={`审批模式：${APPROVAL_MODE_LABELS[approvalMode]}`}
@@ -2950,8 +3168,8 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
                 </div>
                 <VoiceButton phase={voicePhase}
                   canListen={voiceReady && Boolean(voiceManagerRef.current?.available ?? voiceConfig?.siliconFlowAvailable)}
-                  disabled={Boolean(busy)} onToggle={toggleVoice} />
-                <button type={active && !draft.trim() && !attachments.length ? 'button' : 'submit'} className={`panel-send${sendingCurrent ? ' is-sending' : ''}`} disabled={(!active && !draft.trim() && !attachments.length) || Boolean(busy) || sendingCurrent || !snapshot || (contextCompacting && !(active && !draft.trim() && !attachments.length))} aria-label={goalPrompting ? '设定目标' : sendingCurrent ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务' : active ? '排队发送消息' : '发送消息'} title={goalPrompting ? '回车设定目标' : sendingCurrent ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务' : active ? snapshot?.mode === 'claude_code' ? 'Enter 排队发送，Ctrl+Enter 插队发送' : 'Enter 排队发送，Ctrl+Enter 优先排队' : '发送消息'} onClick={active && !draft.trim() && !attachments.length ? () => { void stop(); } : undefined}>
+                  disabled={Boolean(busy) && voicePhase === 'idle'} onToggle={toggleVoice} />
+                <button type={active && !draft.trim() && !attachments.length ? 'button' : 'submit'} className={`panel-send${sendingCurrent ? ' is-sending' : ''}`} disabled={(!active && !draft.trim() && !attachments.length) || Boolean(busy) || sendingCurrent || !snapshot || (contextCompacting && !(active && !draft.trim() && !attachments.length))} aria-label={goalPrompting ? '设定目标' : sendingCurrent ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务' : active ? '排队发送消息' : '发送消息'} title={goalPrompting ? '回车设定目标' : sendingCurrent ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务（ESC）' : active ? snapshot?.mode === 'claude_code' ? 'Enter 排队发送，Ctrl+Enter 插队发送' : 'Enter 排队发送，Ctrl+Enter 优先排队' : '发送消息（Enter）'} onClick={active && !draft.trim() && !attachments.length ? () => { void stop(); } : undefined}>
                   {sendingCurrent ? <span className="panel-send-spinner" aria-hidden="true" /> : active && !draft.trim() && !attachments.length ? <span className="panel-stop-square" /> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11m-5-5 5 5-5 5" /></svg>}
                 </button>
               </div>
@@ -2976,7 +3194,26 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run }: Pan
           <p>请先充分了解其中的风险，再决定是否开启。另一方面，AI Agent 的顺畅运行依赖宽松的审批；从任务完成效率出发，了解风险后开启是合理的。开启之后，建议在对话中为它设定明确、有效的行为边界与约束。</p>
           <div className="panel-bypass-actions">
             <button type="button" className="panel-bypass-cancel" onClick={() => setBypassConfirmOpen(false)}>取消</button>
-            <button type="button" className="panel-bypass-confirm" onClick={() => { void applyApprovalMode('bypassPermissions'); }}>我已了解风险，开启</button>
+            <button type="button" className="panel-bypass-confirm" onClick={() => { void applyApprovalMode('danger-full-access'); }}>我已了解风险，开启</button>
+          </div>
+        </section>
+      </div>}
+      {evolveConfirmOpen && <div className="panel-bypass-backdrop" onClick={() => setEvolveConfirmOpen(false)}>
+        <section className="panel-bypass panel-evolve-confirm" role="dialog" aria-modal="true" aria-labelledby="evolve-title" onClick={(event) => event.stopPropagation()}>
+          <h3 id="evolve-title">开启「自我进化」？这是最高权限。</h3>
+          <p><strong>这不是普通的完全访问。</strong>开启后，我可以在没有逐条确认的情况下修改自己的源码、运行构建和测试、打包新版本、重启应用，并在重启后继续执行任务。</p>
+          <p><strong>错误的自修改可能让应用无法启动、丢失未保存的工作，或被新版本带回旧问题。</strong>命令超时、步骤上限和重启次数只是保护，不是回滚。请先提交代码或做好备份，并只在明确知道要改什么时开启。</p>
+          <p>随时切回其他审批模式即可停用。但已经启动的重启和已排队命令不会因为切换模式而取消。</p>
+          <label className="panel-evolve-authorize">
+            <span>必须手动输入下面的短语才能开启：<code>{evolveAuthorizePhrase}</code></span>
+            <input type="text" value={evolveAuthorizeText} autoFocus spellCheck={false}
+              placeholder={evolveAuthorizePhrase}
+              onChange={(event) => setEvolveAuthorizeText(event.target.value)} />
+          </label>
+          <div className="panel-bypass-actions">
+            <button type="button" className="panel-bypass-cancel" onClick={() => setEvolveConfirmOpen(false)}>取消</button>
+            <button type="button" className="panel-bypass-confirm" disabled={evolveAuthorizeText.trim() !== evolveAuthorizePhrase}
+              onClick={() => { void applyApprovalMode('selfEvolve'); }}>授权并开启</button>
           </div>
         </section>
       </div>}

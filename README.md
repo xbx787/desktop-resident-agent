@@ -88,4 +88,7 @@ npm.cmd run dev
 - **Claude Code 引擎 / Claude Agent SDK**：© Anthropic PBC，保留所有权利。发布包内的 `claude.exe` 是 Anthropic 发布的原始二进制，未做修改；使用受 [Anthropic Legal and Compliance](https://code.claude.com/docs/en/legal-and-compliance) 及适用的 Commercial Terms of Service 约束。每个使用者需使用自己的 API Key；本项目不代付、不转售、不中介 Claude 用量。本项目与 Anthropic 无隶属或背书关系。
 - **模型端点**：默认使用用户自行配置的 DeepSeek Anthropic 兼容端点。该端点不是 Anthropic 提供或官方支持的推理路径，使用者需自行确认其用法符合适用条款。
 - **角色素材**：角色立绘来自公开角色页，权利归原作者或权利方所有，仅作个人桌面使用；公开分发前请确认授权或替换为原创素材。
+- **Live2D Cubism Core**：© Live2D Inc.，按 [Live2D Proprietary Software License Agreement](https://www.live2d.com/eula/live2d-proprietary-software-license-agreement_en.html) 作为 Redistributable Code 随应用分发。原始版权声明不得修改或移除；来源、获取日期和 SHA-256 见 `resources/live2d/NOTICE.md`。正式公开发布前请复核当前 Live2D 的分发条款。
+- **Arch-chan 模型**：CC0 1.0 Universal，来源 [Speykious/arch-chan](https://github.com/Speykious/arch-chan)，仅作 Live2D 技术预览，不是小鲸的默认形象或人设素材。
+- **pixi.js / pixi-live2d-display**：MIT 许可。
 - **其他依赖**：见 `package.json` 及各依赖自带的许可证文件。

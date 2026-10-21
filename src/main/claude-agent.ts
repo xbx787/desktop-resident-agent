@@ -8,11 +8,13 @@ import { parseAskQuestions } from './ask-questions'
 import { CLAUDE_BASE_URL, DEFAULT_CLAUDE_MODEL, claudeEnvironment, normalizeAutoCompactPercent } from './claude-code'
 import { createDeepSeekToolsServer, resolveDeepSeekToolsKey } from './deepseek-tools'
 import { createConversationToolsServer, type ConversationBridge } from './conversation-tools'
+import type { AgentKernel } from './agent-kernel'
+import { createEvolveToolsServer, type EvolveBridge } from './evolve-tools'
 import { startEffortProxy, type EffortProxy } from './effort-proxy'
 import { buildPersona } from './persona'
 import type { DialogueLine, ModelClient, ModelReply, ModelToolEvent } from './deepseek'
 import type { AgentGoal, ApprovalMode, AskAnswers, AskQuestionRequest, CompactionState, EffortLevel, PlanApprovalRequest, SubagentStatus, SubagentTask, TaskUsage, TimelineEntry, ToolPermissionRequest } from '../shared/contracts'
-import { AUTO_COMPACT_DEFAULT_PERCENT, isApprovalMode } from '../shared/contracts'
+import { AUTO_COMPACT_DEFAULT_PERCENT } from '../shared/contracts'
 import { toolLabel } from '../shared/tool-labels'
 
 
@@ -36,7 +38,8 @@ const IDLE_RELEASE_MS = 30 * 60_000
 const HISTORY_PROMPT_BUDGET = 80 * 1024
 const PERSONA_TAIL = [
   '你可以自主使用已启用的工具完成用户的请求，无需逐次申请批准。不要声称已经执行、读取或验证尚未得到工具结果的操作。',
-  '不要要求用户在对话中粘贴密钥或私密凭据。'
+  '不要要求用户在对话中粘贴密钥或私密凭据。',
+  '调用工具时，参数里的说明文字必须使用简体中文，尤其是 Bash/终端命令的 description 字段；命令本身保持原样，不要用英文写说明。'
 ].join('\n')
 /** 搜索关掉时写进人设：模型应该从一开始就不打算搜索，而不是试一次被拒。 */
 const NO_WEB_SEARCH_RULE = '当前已禁用联网搜索：不要调用 WebSearch、WebFetch、mcp__deepseek__search、mcp__deepseek__fetch，也不要尝试用其他方式联网。直接基于已有信息回答；信息不足时说明缺少哪些信息，不要反复尝试搜索。'
@@ -219,6 +222,15 @@ function replayLineContent(line: DialogueLine): string {
     clipUtf8(line.content.slice(at + context.length), 1_800)
 }
 
+/** The SDK still speaks its own four modes; map status reports back to the
+ *  DSH presets the app now stores. */
+function sdkModeToApprovalMode(mode: unknown): ApprovalMode | undefined {
+  if (mode === 'plan') return 'read-only'
+  if (mode === 'default' || mode === 'acceptEdits') return 'workspace-write'
+  if (mode === 'bypassPermissions') return 'danger-full-access'
+  return undefined
+}
+
 export class ClaudeAgentClient implements ModelClient {
   private agentQuery?: Query
   private messageChannel?: AgentMessageChannel
@@ -249,8 +261,10 @@ export class ClaudeAgentClient implements ModelClient {
   private planModeListener?: (on: boolean) => void
   /** The permission mode handed to the CLI. Kept separately from planMode so
    *  leaving plan can return to whatever mode the user was in before. */
-  private approvalMode: ApprovalMode = 'bypassPermissions'
-  private lastNonPlanMode: ApprovalMode = 'bypassPermissions'
+  private approvalMode: ApprovalMode = 'workspace-write'
+  private lastNonPlanMode: ApprovalMode = 'workspace-write'
+  /** Tools and persistence for the selfEvolve tier; absent in side chats. */
+  private evolveBridge?: EvolveBridge
   /** 联网搜索开关：关掉后工具直接从 query 的工具表里消失。 */
   private webSearchEnabled = true
   /** 上下文用到这个百分比时压缩；CLI 的自动压缩阈值与项目发送前的主动
@@ -261,6 +275,9 @@ export class ClaudeAgentClient implements ModelClient {
   private libraryPlugins: string[] = []
   private queryDirty = false
   private personaId = 'xiaojing'
+  private outputStyle?: string
+  private appendSystemPrompt?: string
+  private loadUserSettings = true
   private approvalModeListener?: (mode: ApprovalMode) => void
   private goalListener?: (goal: AgentGoal | null) => void
   private questionListener?: (question: AskQuestionRequest | null) => void
@@ -272,9 +289,19 @@ export class ClaudeAgentClient implements ModelClient {
   private readonly subagentTasks = new Map<string, SubagentTask>()
   /** task_started.tool_use_id → task_id; child frames name the former. */
   private readonly subagentByToolUse = new Map<string, string>()
+  /** Progress/patches/notifications that arrived before their task_started.
+   *  The SDK stream can interleave events; keeping them lets a late start
+   *  still show the work instead of dropping it. Bounded by map size. */
+  private readonly deferredSubagentEvents = new Map<string, SDKMessage[]>()
+  /** Child frames whose parent tool_use id has no task yet. Replayed after
+   *  task_started binds it, so an early frame is not lost either. */
+  private readonly deferredSubagentFrames = new Map<string, SDKMessage[]>()
   private subagentPublishTimer?: ReturnType<typeof setTimeout>
   private lastSubagentPublishAt = 0
   private readonly subagentCleanupTimers = new Set<ReturnType<typeof setTimeout>>()
+  /** Tasks closed by the turn-end fallback. A real terminal event may still
+   *  replace that guess; the set tells the handler it is allowed to. */
+  private readonly orphanedSubagents = new Set<string>()
   /** Host-side conversation-to-conversation message channel, if wired. */
   private conversationBridge?: ConversationBridge
   /** A parked AskUserQuestion: the CLI turn waits here until the panel answers. */
@@ -294,6 +321,10 @@ export class ClaudeAgentClient implements ModelClient {
     /** Side chats keep their transcript in this process only. */
     private readonly persistSession = true
   ) {}
+
+  setEvolveBridge(bridge: EvolveBridge): void {
+    this.evolveBridge = bridge
+  }
 
   /** Points the client at a saved model profile; undefined returns to the
    *  launch environment. Takes effect when the next query is built. */
@@ -504,7 +535,15 @@ export class ClaudeAgentClient implements ModelClient {
   /** Kept for the plan-mode switch: flipping it is the same control as picking
    *  "plan" in the approval menu. */
   async setPlanMode(on: boolean): Promise<boolean> {
-    return this.setApprovalMode(on ? 'plan' : this.lastNonPlanMode)
+    return this.setApprovalMode(on ? 'read-only' : this.lastNonPlanMode)
+  }
+
+  /** The SDK has no selfEvolve tier; it runs with full access and the app adds
+   *  restart / continuation on top. Never send the app-only value to the CLI. */
+  private sdkPermissionMode(mode: ApprovalMode): 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions' {
+    if (mode === 'read-only') return 'plan'
+    if (mode === 'workspace-write') return 'acceptEdits'
+    return 'bypassPermissions'
   }
 
   async setApprovalMode(mode: ApprovalMode): Promise<boolean> {
@@ -513,22 +552,22 @@ export class ClaudeAgentClient implements ModelClient {
     // Close it so the next one starts with the requested permission mode.
     if (this.agentQuery && !this.queryWarm) await this.closeQuery()
     else if (this.agentQuery) {
-      await this.agentQuery.setPermissionMode(mode)
+      await this.agentQuery.setPermissionMode(this.sdkPermissionMode(mode))
       this.applyApprovalMode(mode)
       return true
     }
     // Cold: remember the choice, but do not tell the panel it took effect —
     // only the SDK's init confirmation does that.
     this.approvalMode = mode
-    if (mode !== 'plan') this.lastNonPlanMode = mode
-    this.planMode = mode === 'plan'
+    if (mode !== 'read-only') this.lastNonPlanMode = mode
+    this.planMode = mode === 'read-only'
     return false
   }
 
   private applyApprovalMode(mode: ApprovalMode): void {
     this.approvalMode = mode
-    if (mode !== 'plan') this.lastNonPlanMode = mode
-    this.planMode = mode === 'plan'
+    if (mode !== 'read-only') this.lastNonPlanMode = mode
+    this.planMode = mode === 'read-only'
     this.planModeListener?.(this.planMode)
     this.approvalModeListener?.(mode)
   }
@@ -540,6 +579,34 @@ export class ClaudeAgentClient implements ModelClient {
   setPersonaId(id: string): void {
     if (this.personaId === id) return
     this.personaId = id
+    this.queryDirty = true
+    if (!this.activeTurn) void this.closeQuery()
+  }
+
+  /** Claude Code response style. Empty clears the override so the CLI's own
+   *  default applies; a change needs a fresh query. */
+  setOutputStyle(style?: string): void {
+    const next = style?.trim() || undefined
+    if (this.outputStyle === next) return
+    this.outputStyle = next
+    this.queryDirty = true
+    if (!this.activeTurn) void this.closeQuery()
+  }
+
+  /** Extra instructions appended after the persona prompt. */
+  setAppendSystemPrompt(text?: string): void {
+    const next = text?.trim() || undefined
+    if (this.appendSystemPrompt === next) return
+    this.appendSystemPrompt = next
+    this.queryDirty = true
+    if (!this.activeTurn) void this.closeQuery()
+  }
+
+  /** Whether the CLI may read ~/.claude settings (permissions, hooks,
+   *  output style). A change takes effect on the next query. */
+  setLoadUserSettings(on: boolean): void {
+    if (this.loadUserSettings === on) return
+    this.loadUserSettings = on
     this.queryDirty = true
     if (!this.activeTurn) void this.closeQuery()
   }
@@ -659,6 +726,7 @@ export class ClaudeAgentClient implements ModelClient {
     for (const [taskId, task] of this.subagentTasks) {
       if (task.status === 'running') continue
       this.subagentTasks.delete(taskId)
+      this.orphanedSubagents.delete(taskId)
       if (task.toolUseId) this.subagentByToolUse.delete(task.toolUseId)
       changed = true
     }
@@ -672,10 +740,31 @@ export class ClaudeAgentClient implements ModelClient {
       clearTimeout(this.subagentPublishTimer)
       this.subagentPublishTimer = undefined
     }
+    this.deferredSubagentEvents.clear()
+    this.deferredSubagentFrames.clear()
+    this.orphanedSubagents.clear()
     if (!this.subagentTasks.size && !this.subagentByToolUse.size) return
     this.subagentTasks.clear()
     this.subagentByToolUse.clear()
     this.publishSubagents(true)
+  }
+
+  /** A foreground child cannot outlive its turn. If the stream ends without a
+   *  notification, close it instead of leaving an icon spinning forever.
+   *  Background children keep running and are left untouched. */
+  private orphanForegroundSubagents(): void {
+    let changed = false
+    const now = new Date().toISOString()
+    for (const task of this.subagentTasks.values()) {
+      if (task.status !== 'running' || task.isBackgrounded === true) continue
+      task.status = 'stopped'
+      task.endedAt = now
+      task.summary ??= '随本轮结束，未收到完成通知。'
+      this.orphanedSubagents.add(task.taskId)
+      changed = true
+      this.scheduleSubagentCleanup(task)
+    }
+    if (changed) this.publishSubagents(true)
   }
 
   /** Task events name their subagent by task_id; child frames name the Task
@@ -685,25 +774,47 @@ export class ClaudeAgentClient implements ModelClient {
     if (message.subtype === 'task_started') {
       if (!isSubagentTask(message.task_type, message.subagent_type, message.ambient, message.skip_transcript)) return
       const existing = this.subagentTasks.get(message.task_id)
-      const task: SubagentTask = {
+      const task: SubagentTask = existing ?? {
         taskId: message.task_id,
         description: message.description,
         status: 'running',
-        startedAt: existing?.startedAt ?? new Date().toISOString(),
-        ...(message.tool_use_id ? { toolUseId: message.tool_use_id } : existing?.toolUseId ? { toolUseId: existing.toolUseId } : {}),
-        ...(message.subagent_type ? { subagentType: message.subagent_type } : {}),
-        ...(message.is_backgrounded !== undefined ? { isBackgrounded: message.is_backgrounded } : {}),
-        ...(message.parent_task_id ? { parentTaskId: message.parent_task_id } : {}),
-        ...(existing?.timeline?.length ? { timeline: existing.timeline } : {})
+        startedAt: new Date().toISOString()
       }
-      this.subagentTasks.set(task.taskId, task)
-      if (task.toolUseId) this.subagentByToolUse.set(task.toolUseId, task.taskId)
+      if (!existing) this.subagentTasks.set(task.taskId, task)
+      // A repeated start must not erase usage or a child timeline, and it must
+      // not reopen a task whose terminal event already arrived.
+      if (message.description) task.description = message.description
+      if (message.tool_use_id) {
+        task.toolUseId = message.tool_use_id
+        this.subagentByToolUse.set(message.tool_use_id, task.taskId)
+      }
+      if (message.subagent_type) task.subagentType = message.subagent_type
+      if (message.is_backgrounded !== undefined) task.isBackgrounded = message.is_backgrounded
+      if (message.parent_task_id) task.parentTaskId = message.parent_task_id
       this.publishSubagents(true)
+      if (task.toolUseId) {
+        const frames = this.deferredSubagentFrames.get(task.toolUseId)
+        if (frames) {
+          this.deferredSubagentFrames.delete(task.toolUseId)
+          for (const frame of frames) this.applySubagentFrame(task, frame)
+          // The replay is a start-time catch-up, not a streaming tick: publish
+          // it now so the detail pane never opens empty.
+          this.publishSubagents(true)
+        }
+      }
+      const deferred = this.deferredSubagentEvents.get(task.taskId)
+      if (deferred) {
+        this.deferredSubagentEvents.delete(task.taskId)
+        for (const event of deferred) this.handleSubagentEvent(event)
+      }
       return
     }
     if (message.subtype === 'task_progress') {
       const task = this.subagentTasks.get(message.task_id)
-      if (!task) return
+      if (!task) { this.deferSubagentEvent(message.task_id, message); return }
+      // Progress belongs to a live card. A late tick must not repaint a
+      // finished subagent as if it were still working.
+      if (task.status !== 'running') return
       if (message.tool_use_id && !task.toolUseId) {
         task.toolUseId = message.tool_use_id
         this.subagentByToolUse.set(message.tool_use_id, task.taskId)
@@ -718,31 +829,48 @@ export class ClaudeAgentClient implements ModelClient {
     }
     if (message.subtype === 'task_updated') {
       const task = this.subagentTasks.get(message.task_id)
-      if (!task) return
+      if (!task) { this.deferSubagentEvent(message.task_id, message); return }
       const patch = message.patch
       if (patch.description) task.description = patch.description
       if (patch.is_backgrounded !== undefined) task.isBackgrounded = patch.is_backgrounded
       if (patch.status) {
         const status = subagentStatus(patch.status)
-        if (status) {
+        // Terminal states are one-way: a late "running" patch cannot revive a
+        // task that already reported completion/failure. The one exception is
+        // a real terminal event arriving after the turn-end fallback guessed
+        // "stopped".
+        const revivingOrphan = this.orphanedSubagents.delete(task.taskId)
+        if (status && (task.status === 'running' || (revivingOrphan && status !== 'running'))) {
           task.status = status
           if (status !== 'running' && !task.endedAt) task.endedAt = new Date().toISOString()
         }
       }
-      if (patch.error) task.summary = patch.error
+      if (patch.error) {
+        task.summary = patch.error
+        if (task.status === 'running') {
+          task.status = 'failed'
+          if (!task.endedAt) task.endedAt = new Date().toISOString()
+        }
+      }
       this.publishSubagents(true)
       this.scheduleSubagentCleanup(task)
       return
     }
     if (message.subtype === 'task_notification') {
       const task = this.subagentTasks.get(message.task_id)
-      if (!task) return
-      task.status = message.status
-      task.endedAt = new Date().toISOString()
-      if (message.summary) task.summary = message.summary
+      if (!task) { this.deferSubagentEvent(message.task_id, message); return }
       if (message.tool_use_id && !task.toolUseId) {
         task.toolUseId = message.tool_use_id
         this.subagentByToolUse.set(message.tool_use_id, task.taskId)
+      }
+      const revivingOrphan = this.orphanedSubagents.delete(task.taskId)
+      if (task.status === 'running' || revivingOrphan) {
+        task.status = message.status
+        task.endedAt = new Date().toISOString()
+        if (message.summary) task.summary = message.summary
+      } else if (task.status === message.status && message.summary) {
+        // A repeated notification is idempotent: keep the first end time.
+        task.summary = message.summary
       }
       applySubagentUsage(task, message.usage)
       this.publishSubagents(true)
@@ -758,6 +886,18 @@ export class ClaudeAgentClient implements ModelClient {
     }
   }
 
+  /** Keeps at most 20 events per task and 64 tasks. A malformed stream must
+   *  not let this deferral map grow for the life of the process. */
+  private deferSubagentEvent(taskId: string, message: SDKMessage): void {
+    const events = this.deferredSubagentEvents.get(taskId) ?? []
+    if (events.length < 20) events.push(message)
+    this.deferredSubagentEvents.set(taskId, events)
+    if (this.deferredSubagentEvents.size > 64) {
+      const oldest = this.deferredSubagentEvents.keys().next().value
+      if (oldest !== undefined) this.deferredSubagentEvents.delete(oldest)
+    }
+  }
+
   /** A finished task stays in the snapshot long enough for the panel to show
    *  its ending; the renderer adds its own few seconds of retention after
    *  that. Removing it here keeps a long session from growing the payload. */
@@ -768,6 +908,7 @@ export class ClaudeAgentClient implements ModelClient {
       const current = this.subagentTasks.get(task.taskId)
       if (!current || current.status === 'running') return
       this.subagentTasks.delete(task.taskId)
+      this.orphanedSubagents.delete(task.taskId)
       if (current.toolUseId) this.subagentByToolUse.delete(current.toolUseId)
       this.publishSubagents(true)
     }, 30_000)
@@ -783,7 +924,23 @@ export class ClaudeAgentClient implements ModelClient {
     if (!parentId) return
     const taskId = this.subagentByToolUse.get(parentId)
     const task = taskId ? this.subagentTasks.get(taskId) : undefined
-    if (!task) return
+    if (!task) {
+      // The child spoke before task_started bound its tool_use id. Keep the
+      // frame and replay it from the start handler instead of dropping it.
+      const frames = this.deferredSubagentFrames.get(parentId) ?? []
+      if (frames.length < 30) frames.push(message)
+      this.deferredSubagentFrames.set(parentId, frames)
+      if (this.deferredSubagentFrames.size > 64) {
+        const oldest = this.deferredSubagentFrames.keys().next().value
+        if (oldest !== undefined) this.deferredSubagentFrames.delete(oldest)
+      }
+      return
+    }
+    this.applySubagentFrame(task, message)
+  }
+
+  private applySubagentFrame(task: SubagentTask, message: SDKMessage): void {
+    if (message.type !== 'assistant' && message.type !== 'user') return
     const timeline = task.timeline ?? (task.timeline = [])
     const now = new Date().toISOString()
     if (message.type === 'assistant') {
@@ -873,7 +1030,7 @@ export class ClaudeAgentClient implements ModelClient {
     // The CLI only sends calls that its own mode says need a human. In the
     // two asking modes park them on the panel; plan and bypass let them run.
     if (toolName === 'AskUserQuestion') return this.resolveQuestion(input, signal)
-    if (this.approvalMode === 'default' || this.approvalMode === 'acceptEdits') {
+    if (this.approvalMode === 'workspace-write') {
       return this.resolveToolApproval(toolName, input, signal)
     }
     return Promise.resolve({ behavior: 'allow' })
@@ -950,7 +1107,7 @@ export class ClaudeAgentClient implements ModelClient {
     }).then((approved): PermissionResult => {
       // Approving the plan is what lets the CLI leave plan mode; mirror that
       // locally at once instead of waiting for a later init/status frame.
-      if (approved === true && this.approvalMode === 'plan') this.applyApprovalMode(this.lastNonPlanMode)
+      if (approved === true && this.approvalMode === 'read-only') this.applyApprovalMode(this.lastNonPlanMode)
       return approved === true
         ? { behavior: 'allow' }
         : approved === false
@@ -1057,16 +1214,19 @@ export class ClaudeAgentClient implements ModelClient {
         pathToClaudeCodeExecutable: this.executable,
         env: claudeEnvironment(process.env, { apiKey: provider.apiKey, baseUrl, model: provider.model, smallModel: provider.smallModel, configDir: this.configDir, autoCompactPercent: this.autoCompactPercent, workspace: this.cwd, extraEnv: provider.extraEnv }),
         model: provider.model,
+        ...(this.outputStyle ? { outputStyle: this.outputStyle } : {}),
         systemPrompt: { type: 'preset', preset: 'claude_code',
-          append: [buildPersona(this.personaId, { userAddress: this.identity?.userName, assistantName: this.identity?.assistantName }), PERSONA_TAIL,
+          append: [buildPersona(this.personaId, { userAddress: this.identity?.userName, assistantName: this.identity?.assistantName }),
+            this.appendSystemPrompt ?? '', PERSONA_TAIL,
             this.webSearchEnabled ? '' : NO_WEB_SEARCH_RULE].filter(Boolean).join('\n') },
-        settingSources: ['user', 'project', 'local'],
+        settingSources: this.loadUserSettings ? ['user', 'project', 'local'] : ['project', 'local'],
         skills: 'all',
         strictMcpConfig: true,
         mcpServers: {
           ...this.mcpServers,
           ...this.libraryMcpServers,
           ...(this.conversationBridge ? { conversations: createConversationToolsServer(this.conversationBridge) } : {}),
+          ...(this.evolveBridge ? { evolve: createEvolveToolsServer(this.evolveBridge) } : {}),
           ...(deepseekTools ? { deepseek: deepseekTools } : {})
         },
         ...(this.libraryPlugins.length
@@ -1075,7 +1235,7 @@ export class ClaudeAgentClient implements ModelClient {
         disallowedTools: this.webSearchEnabled
           ? (deepseekTools ? ['WebSearch', 'WebFetch'] : undefined)
           : ['WebSearch', 'WebFetch', 'mcp__deepseek__search', 'mcp__deepseek__fetch'],
-        permissionMode: this.approvalMode,
+        permissionMode: this.sdkPermissionMode(this.approvalMode),
         planModeInstructions: PLAN_MODE_INSTRUCTIONS,
         allowDangerouslySkipPermissions: true,
         // CLI 2.1.210 会把 SDK 请求的 bypassPermissions 降级为 default（实测），
@@ -1191,17 +1351,22 @@ export class ClaudeAgentClient implements ModelClient {
     if (message.type === 'system' && message.subtype === 'init') {
       // The CLI can enter plan mode on its own (EnterPlanMode) and reports it
       // here; a mode change while already in plan comes back as the real mode.
-      if (message.permissionMode === 'plan') this.applyApprovalMode('plan')
-      else if (this.approvalMode === 'plan') this.applyApprovalMode(this.lastNonPlanMode)
+      if (message.permissionMode === 'plan') this.applyApprovalMode('read-only')
+      else if (this.approvalMode === 'read-only') this.applyApprovalMode(this.lastNonPlanMode)
       this.commands = [...message.slash_commands]
       this.skills = [...message.skills]
       this.terminalCommands = new Set((message.terminal_slash_commands ?? []).map((name) => name.replace(/^\//u, '').toLowerCase()))
     }
     // The CLI reports mid-session permission-mode changes (including leaving
     // plan when ExitPlanMode is approved) on its status channel.
-    if (message.type === 'system' && message.subtype === 'status' &&
-        isApprovalMode(message.permissionMode) && message.permissionMode !== this.approvalMode) {
-      this.applyApprovalMode(message.permissionMode)
+    if (message.type === 'system' && message.subtype === 'status') {
+      const reported = sdkModeToApprovalMode(message.permissionMode)
+      // The CLI reports selfEvolve as bypassPermissions (its closest mode).
+      // Keep the app-level tier instead of downgrading it on every status.
+      if (reported && reported !== this.approvalMode &&
+          !(this.approvalMode === 'selfEvolve' && reported === 'danger-full-access')) {
+        this.applyApprovalMode(reported)
+      }
     }
     if (message.type === 'system' && message.subtype === 'commands_changed') {
       this.commands = message.commands.map((command) => command.name)
@@ -1422,6 +1587,9 @@ export class ClaudeAgentClient implements ModelClient {
     turn.signal.removeEventListener('abort', turn.onAbort)
     if (error) turn.reject(error)
     else turn.resolve(reply!)
+    // A normal result means the blocking children already finished. Only an
+    // aborted or failed stream leaves them without an ending event.
+    if (error || turn.interruptedByUser) this.orphanForegroundSubagents()
     this.armIdleRelease()
   }
 

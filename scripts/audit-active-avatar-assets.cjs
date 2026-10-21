@@ -1,4 +1,5 @@
-// Checks the PNGs that avatar-art.ts and avatar-poses.ts actually render.
+// Checks the PNGs that avatar-rig.ts and avatar-poses.ts actually render.
+// avatar-art.ts is a compatibility facade now; the rig is the source of truth.
 // Unlike sprite-audit.cjs, this needs neither staging files nor Electron.
 // Run before packaging: node scripts/audit-active-avatar-assets.cjs
 const fs = require('node:fs')
@@ -110,25 +111,35 @@ function pngAlphaMetrics(file) {
 }
 
 function assetInventory(root = ROOT) {
-  const artFile = path.join(root, 'src', 'renderer', 'avatar-art.ts')
+  const artFile = path.join(root, 'src', 'renderer', 'avatar-rig.ts')
   const posesFile = path.join(root, 'src', 'renderer', 'avatar-poses.ts')
   const personaFile = path.join(root, 'src', 'shared', 'personas.ts')
+  const roleOf = (name) => name.includes('/personas/')
+    ? name.endsWith('-avatar.png') ? 'persona-avatar' : 'persona-body'
+    : name.includes('/poses/') ? 'pose'
+    : name.includes('ahoge-layer') ? 'ahoge'
+    : 'base-body'
   const refs = []
-  for (const [source, roleOf] of [
-    [artFile, (name) => name.includes('/personas/') ? name.endsWith('-avatar.png') ? 'persona-avatar' : 'persona-body' : name.includes('ahoge-layer') ? 'ahoge' : 'base-body'],
-    [posesFile, () => 'pose']
-  ]) {
+  for (const [source, roleOfAsset] of [[artFile, roleOf], [posesFile, () => 'pose']]) {
     const content = fs.readFileSync(source, 'utf8')
     for (const match of content.matchAll(/new URL\(['"](\.\/assets\/[^'"]+\.png)['"],\s*import\.meta\.url\)/g)) {
       const rel = match[1]
-      refs.push({ name: path.basename(rel), file: path.resolve(path.dirname(source), rel), role: roleOf(rel) })
+      refs.push({ name: path.basename(rel), file: path.resolve(path.dirname(source), rel), role: roleOfAsset(rel) })
     }
   }
+  // The rig and the pose legacy table intentionally point at the same PNGs.
+  // One real file may back several references as long as its role agrees.
+  const unique = new Map()
+  for (const ref of refs) {
+    const previous = unique.get(ref.file)
+    if (previous && previous.role !== ref.role) throw new Error(`${ref.name}: 同一素材承担了不同角色（${previous.role} / ${ref.role}）`)
+    if (!previous) unique.set(ref.file, ref)
+  }
+  refs.length = 0
+  refs.push(...unique.values())
   const ids = [...fs.readFileSync(personaFile, 'utf8').matchAll(/\bid:\s*'([^']+)'/g)].map((m) => m[1]).filter((id) => id !== 'xiaojing')
-  const keys = new Set(refs.map((r) => r.file))
-  if (keys.size !== refs.length) throw new Error('同一实际素材被配置了多次；检查 avatar-art.ts 和 avatar-poses.ts')
   if (refs.filter((r) => r.role === 'base-body').length !== 1 || refs.filter((r) => r.role === 'ahoge').length > 1) {
-    throw new Error('默认身体缺失或配置了多层呆毛；检查 avatar-art.ts')
+    throw new Error('默认身体缺失或配置了多层呆毛；检查 avatar-rig.ts')
   }
   if (refs.filter((r) => r.role === 'pose').length < 1) throw new Error('未发现实际使用的姿势图；检查 avatar-poses.ts')
   for (const id of ids) {

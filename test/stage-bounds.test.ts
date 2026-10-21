@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { AVATAR_STRIP, BUBBLE_BOTTOM, BUBBLE_MIN_HEIGHT, computeStageBounds, STAGE_HEIGHT, STAGE_WIDTH } from '../src/main/stage-bounds'
+import { AVATAR_STRIP, BUBBLE_BOTTOM, BUBBLE_MIN_HEIGHT, computeStageBounds, STAGE_HEIGHT, STAGE_WIDTH, TRIANGLE_ROOM } from '../src/main/stage-bounds'
 import { PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH } from '../src/shared/contracts'
 
 /** A 2048×1112 DIP work area (2560×1440 at 125%), the shape of the machine
@@ -76,5 +76,40 @@ describe('computeStageBounds', () => {
     const next = computeStageBounds(resting, work, true, { width: 100, height: 100 })
     expect(next.width).toBe(PANEL_MIN_WIDTH + 20)
     expect(next.height).toBe(PANEL_MIN_HEIGHT + BUBBLE_BOTTOM)
+  })
+})
+
+describe('computeStageBounds downward', () => {
+  /** 人物在上半屏的中间偏左：底边 460，下面还有 652px。 */
+  const high = { x: 800, y: 240, width: 200, height: 220 }
+
+  it('collapsed hangs the stage from the avatar bottom edge', () => {
+    const next = computeStageBounds(high, work, false, undefined, 'down')
+    expect(next.y).toBe(high.y + high.height)
+    expect(next.height).toBe(STAGE_HEIGHT)
+    expect(next.x + next.width).toBe(high.x + high.width)
+  })
+
+  it('expanded fills the room below the avatar', () => {
+    const next = computeStageBounds(high, work, true, undefined, 'down')
+    expect(next.y).toBe(high.y + high.height)
+    expect(next.height).toBe(work.y + work.height - (high.y + high.height))
+  })
+
+  it('honours a user-chosen panel size and keeps the top edge on the avatar', () => {
+    const next = computeStageBounds(high, work, true, { width: 700, height: 500 }, 'down')
+    expect(next.width).toBe(700 + 20)
+    expect(next.height).toBe(500 + TRIANGLE_ROOM)
+    expect(next.y).toBe(high.y + high.height)
+    expect(next.x + next.width).toBe(high.x + high.width)
+  })
+
+  it('stops a big panel at the work-area bottom but keeps the usable minimum', () => {
+    const next = computeStageBounds(high, work, true, { width: 500, height: 4000 }, 'down')
+    expect(next.height).toBe(work.y + work.height - (high.y + high.height))
+    const shortWork = { x: 0, y: 0, width: 1280, height: 700 }
+    const nearBottom = { x: 300, y: 420, width: 200, height: 220 }
+    const squeezed = computeStageBounds(nearBottom, shortWork, true, { width: 500, height: 4000 }, 'down')
+    expect(squeezed.height).toBe(BUBBLE_MIN_HEIGHT + TRIANGLE_ROOM)
   })
 })

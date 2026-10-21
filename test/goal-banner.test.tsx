@@ -16,43 +16,38 @@ afterEach(async () => {
   container = undefined
 })
 
+async function mount(element: React.ReactElement): Promise<HTMLDivElement> {
+  container = document.createElement('div')
+  document.body.appendChild(container)
+  root = createRoot(container)
+  await act(async () => root!.render(element))
+  return container
+}
+
 describe('GoalBanner', () => {
-  it('shows the condition, hides the round count at zero, and clears through the icon button', async () => {
+  it('只留靶子图标、条件文本和停止按钮，不再显示轮数与阶段标签', async () => {
     const onClear = vi.fn()
-    container = document.createElement('div')
-    document.body.appendChild(container)
-    root = createRoot(container)
-    await act(async () => root!.render(<GoalBanner goal={{ condition: '把目标模式做完', phase: 'requested', startedAt: new Date().toISOString() }} onClear={onClear} />))
-    expect(container.querySelector('.panel-goal-banner-condition')?.textContent).toContain('把目标模式做完')
-    expect(container.querySelector('.panel-goal-banner-meta')?.textContent).toBe('已请求')
-    await act(async () => container!.querySelector<HTMLButtonElement>('.panel-goal-stop')!.click())
+    const host = await mount(<GoalBanner goal={{ condition: '把目标模式做完', phase: 'confirmed', startedAt: new Date().toISOString(), iterations: 3 }} onClear={onClear} />)
+    expect(host.querySelector('.panel-goal-banner-icon svg')).toBeTruthy()
+    expect(host.querySelector('.panel-goal-banner-condition')?.textContent).toBe('把目标模式做完')
+    expect(host.textContent).not.toContain('目标：')
+    expect(host.querySelector('.panel-goal-banner-meta')).toBeNull()
+    expect(host.querySelector('.panel-goal-banner-budget')).toBeNull()
+    expect(host.querySelector('.panel-goal-banner-reason')).toBeNull()
+    expect(host.querySelector('.panel-goal-resume')).toBeNull()
+    await act(async () => host.querySelector<HTMLButtonElement>('.panel-goal-stop')!.click())
     expect(onClear).toHaveBeenCalledTimes(1)
   })
 
-  it('shows the round count once the stop hook has advanced it', async () => {
-    container = document.createElement('div')
-    document.body.appendChild(container)
-    root = createRoot(container)
-    await act(async () => root!.render(<GoalBanner goal={{ condition: '写完测试', phase: 'confirmed', startedAt: new Date().toISOString(), iterations: 3 }} onClear={() => undefined} />))
-    expect(container.querySelector('.panel-goal-banner-meta')?.textContent).toContain('已推进 3 轮')
-  })
-
-  it('shows the remaining budget, the last stop reason, and can resume a paused queue', async () => {
-    const onResume = vi.fn()
-    container = document.createElement('div')
-    document.body.appendChild(container)
-    root = createRoot(container)
-    const startedAt = new Date(Date.now() - 10 * 60_000).toISOString()
-    await act(async () => root!.render(<GoalBanner goal={{ condition: '写完测试', phase: 'confirmed',
-      startedAt, iterations: 3, lastReason: '还有 2 个用例未通过' }}
-      maxIterations={10} maxMinutes={60} pausedReason="目标达到 10 轮上限，已停止" onResume={onResume}
-      onClear={() => undefined} />))
-    const budget = container.querySelector('.panel-goal-banner-budget')?.textContent ?? ''
-    expect(budget).toContain('剩 7 轮')
-    expect(budget).toContain('剩 50 分钟')
-    expect(container.querySelector('.panel-goal-banner-reason')?.textContent).toContain('还有 2 个用例未通过')
-    expect(container.querySelector('.panel-goal-banner-pause')?.textContent).toContain('目标达到 10 轮上限')
-    await act(async () => container!.querySelector<HTMLButtonElement>('.panel-goal-resume')!.click())
-    expect(onResume).toHaveBeenCalledTimes(1)
+  it('点击条件文本展开全文，再点收起', async () => {
+    const host = await mount(<GoalBanner goal={{ condition: '一个很长很长的目标条件，需要点开才能看到全文', phase: 'confirmed', startedAt: new Date().toISOString() }} onClear={() => undefined} />)
+    const condition = host.querySelector<HTMLButtonElement>('.panel-goal-banner-condition')!
+    expect(condition.getAttribute('aria-expanded')).toBe('false')
+    expect(host.querySelector('.panel-goal-banner')?.classList.contains('is-expanded')).toBe(false)
+    await act(async () => condition.click())
+    expect(condition.getAttribute('aria-expanded')).toBe('true')
+    expect(host.querySelector('.panel-goal-banner')?.classList.contains('is-expanded')).toBe(true)
+    await act(async () => condition.click())
+    expect(condition.getAttribute('aria-expanded')).toBe('false')
   })
 })

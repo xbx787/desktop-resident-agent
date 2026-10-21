@@ -186,7 +186,7 @@ describe('composer submissions stay with their conversation', () => {
     expect(otherEditor.value).toBe('B 的下一条')
   })
 
-  it('does not close the composer when Escape belongs to the Chinese IME', async () => {
+  it('never closes the composer on Escape; the key only interrupts', async () => {
     await render('a')
     const editor = await openComposer()
     await act(async () => editor.dispatchEvent(new KeyboardEvent('keydown', {
@@ -194,6 +194,6 @@ describe('composer submissions stay with their conversation', () => {
     })))
     expect(host.querySelector('.panel-composer')?.className).not.toContain('is-closing')
     await act(async () => editor.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })))
-    expect(host.querySelector('.panel-composer')?.className).toContain('is-closing')
+    expect(host.querySelector('.panel-composer')?.className).not.toContain('is-closing')
   })
 })

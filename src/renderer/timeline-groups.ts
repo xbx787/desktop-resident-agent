@@ -80,6 +80,16 @@ export function groupTimeline(entries: TimelineEntry[], liveTurnStartMs?: number
       groups.push({ kind: 'single', entry })
       continue
     }
+    // 重启分割条：它开启一个新 turn，后面的思考/命令/回复都挂在头像列右侧。
+    if (entry.kind === 'user' && entry.divider) {
+      const turn: TurnGroup = { kind: 'turn', user: entry, items: [] }
+      turns.push(turn)
+      groups.push(turn)
+      current = turn
+      const sent = Date.parse(entry.time)
+      currentMs = Number.isFinite(sent) ? sent : Number.NEGATIVE_INFINITY
+      continue
+    }
     if (entry.kind === 'user') {
       if (current && isSteered(entry)) {
         current.items.push(entry)

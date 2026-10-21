@@ -38,6 +38,10 @@ export class VoiceManager {
   private replyBaselineRevision = -1
   private lastRevision = 0
   private replyTimer: ReturnType<typeof setTimeout> | undefined
+  /** The voice request is waiting for its turn to finish. This is bookkeeping
+   *  for auto-speak, not a button state: the microphone must go back to idle
+   *  as soon as the recording has been sent. */
+  private awaitingReply = false
 
   constructor(
     private readonly bridge: PetAPI,
@@ -64,15 +68,17 @@ export class VoiceManager {
     if (this.destroyed) return
     this.engine.stopSpeaking()
     this.pendingVoiceText = ''
+    this.callbacks.onPartial?.('')
     this.setPhase('listening')
     this.engine.startListen()
   }
 
-  /** Stops recording and lets the ASR engine transcribe. */
+  /** Stops recording and lets the ASR engine transcribe. The spinner stays
+   *  only for that short upload/transcription window. */
   stop(): void {
     if (this.destroyed) return
     this.engine.stopListen()
-    this.setPhase('idle')
+    this.setPhase('processing')
   }
 
   /** Drops the recording (or the pending reply) without sending anything. */
@@ -81,6 +87,8 @@ export class VoiceManager {
     this.engine.cancelListen()
     this.engine.stopSpeaking()
     this.pendingVoiceText = ''
+    this.awaitingReply = false
+    this.clearReplyTimer()
     this.setPhase('idle')
   }
 
@@ -113,18 +121,22 @@ export class VoiceManager {
   updateFromSnapshot(snapshot: AppSnapshot): void {
     if (this.destroyed) return
     this.lastRevision = Math.max(this.lastRevision, snapshot.timelineRevision)
-    if (snapshot.taskStatus === 'done' && this.phase === 'processing') {
+    if (this.awaitingReply && snapshot.taskStatus === 'done') {
       if (snapshot.timelineRevision <= this.replyBaselineRevision) return
       if (!this.matchesPendingVoiceTurn(snapshot)) return
       const reply = this.extractAssistantReply(snapshot)
       this.pendingVoiceText = ''
+      this.awaitingReply = false
+      this.clearReplyTimer()
       if (!this.autoSpeak || !reply || !this.engine.speak(reply)) {
         this.setPhase('idle')
       }
       return
     }
-    if (['failed', 'cancelled'].includes(snapshot.taskStatus) && this.phase === 'processing') {
+    if (this.awaitingReply && ['failed', 'cancelled'].includes(snapshot.taskStatus)) {
       this.pendingVoiceText = ''
+      this.awaitingReply = false
+      this.clearReplyTimer()
       this.setPhase('idle')
     }
   }
@@ -186,18 +198,29 @@ export class VoiceManager {
       this.setPhase('speaking')
       return
     }
-    if (this.phase === 'listening' || this.phase === 'speaking') this.setPhase('idle')
+    // The ASR engine also reports idle when a stop produced no final text
+    // (Web Speech with an empty recording). Without this the transcribing
+    // spinner would have nothing left to end it.
+    if (this.phase === 'listening' || this.phase === 'speaking' || this.phase === 'processing') this.setPhase('idle')
   }
 
   private async submit(text: string): Promise<void> {
     if (this.destroyed || !text.trim()) return
     this.pendingVoiceText = normalized(text)
     this.replyBaselineRevision = this.lastRevision
+    this.awaitingReply = true
     this.setPhase('processing')
     try {
       await this.callbacks.onRequestText?.(text)
+      // The message is on its way. Waiting for the model belongs to the
+      // conversation, not to the microphone button: stop spinning here, and
+      // let auto-speak listen for the finished turn in the background.
+      if (this.phase === 'processing') this.setPhase('idle')
+      this.startReplyTimer()
     } catch (error) {
       this.pendingVoiceText = ''
+      this.awaitingReply = false
+      this.clearReplyTimer()
       this.callbacks.onError?.(error instanceof Error ? error.message : '发送语音消息失败。')
       this.setPhase('idle')
     }
@@ -224,8 +247,6 @@ export class VoiceManager {
   private setPhase(next: VoiceManagerPhase): void {
     if (this.phase === next) return
     this.phase = next
-    if (next === 'processing') this.startReplyTimer()
-    else this.clearReplyTimer()
     this.syncAvatarState(next)
     this.callbacks.onPhaseChange?.(next)
   }
@@ -234,7 +255,8 @@ export class VoiceManager {
     this.clearReplyTimer()
     this.replyTimer = setTimeout(() => {
       this.pendingVoiceText = ''
-      this.setPhase('idle')
+      this.awaitingReply = false
+      this.replyTimer = undefined
     }, REPLY_TIMEOUT_MS)
   }
 

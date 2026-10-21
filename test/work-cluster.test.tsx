@@ -56,10 +56,10 @@ describe('WorkCluster', () => {
   it('shows the folded summary header with the facts, and no restated request', () => {
     const items = [thought('t1', 0, 12), tool('x1', 'Bash', 12)]
     const html = render(<WorkCluster items={items} running={false} renderEntry={entry} />)
-    // The row carries the operation count and the elapsed clock.
+    // 行上只留操作数，不再有动作和耗时。
     expect(html).not.toContain('<span>思考 00:12</span>')
-    expect(html).toContain('1 项操作')
-    expect(html).toContain('<span>00:12</span>')
+    expect(html).toContain('共 1 项操作')
+    expect(html).not.toContain('<span>00:12</span>')
     // A finished work stretch keeps its own label; the outer fold is the
     // thinking-chain row.
     expect(html).toContain('已工作')

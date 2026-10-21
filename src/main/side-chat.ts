@@ -64,7 +64,7 @@ export class SideChatController {
   private readonly publishedStatuses = new Map<string, TaskStatus>()
 
   constructor(
-    private readonly createRuntime: (onChange: () => void, persistSession?: boolean) => AgentRuntime,
+    private readonly createRuntime: (sessionId: string, onChange: () => void, persistSession?: boolean) => AgentRuntime,
     private readonly source: () => SideChatSource,
     private readonly memoryContext: () => Promise<string>,
     private readonly onChange: () => void = () => {},
@@ -107,6 +107,7 @@ export class SideChatController {
     runtime.setModelProfile(profile)
     runtime.setIdentity({ userName: settings.userName, assistantName: settings.assistantName })
     runtime.setPersona(settings.personaId ?? 'xiaojing')
+    runtime.syncPromptSettings(settings.outputStyle, settings.appendSystemPrompt, settings.loadUserSettings !== false)
     runtime.setEffort(settings.effort)
     runtime.setGoalBudget(settings.goalMaxIterations, settings.goalMaxMinutes)
     runtime.setMemoryContextProvider(this.memoryContext)
@@ -151,7 +152,7 @@ export class SideChatController {
       return this.getSnapshot()
     }
     const sessionId = randomUUID()
-    const runtime = this.createRuntime(() => {
+    const runtime = this.createRuntime(sessionId, () => {
       const side = this.sides.get(parent.parentConversationId!)
       if (!side || side.sessionId !== sessionId) return
       this.changed(side)
@@ -299,6 +300,7 @@ export class SideChatController {
     const message: PendingMessage = { id: randomUUID(), text: clean, attachments: structuredClone(attachments), createdAt: new Date().toISOString() }
     if (wasPaused || strategy === 'steer') side.pending.unshift(message)
     else side.pending.push(message)
+    if (strategy === 'steer') await side.runtime.steerInterrupt()
     this.changed(side)
     this.scheduleDrain(side)
   }
@@ -354,7 +356,11 @@ export class SideChatController {
       this.changed(side)
       return
     }
-    if (!steered) side.pending.unshift(message)
+    if (!steered) {
+      side.pending.unshift(message)
+      // DSH 没有原生 steer，用打断当前回合计入这条插队消息。
+      await side.runtime.steerInterrupt()
+    }
     this.changed(side)
     this.scheduleDrain(side)
   }

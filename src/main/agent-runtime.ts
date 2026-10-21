@@ -1,16 +1,50 @@
-import { isApprovalMode, type AgentGoal, type ApprovalMode, type AppSnapshot, type AskAnswers, type ContextUsageSnapshot, type EffortLevel, type ModelMode, type ModelProfile, type ProposedAction, type SubagentTask, type TimelineEntry, type ToolPermissionRequest, type UserAttachment } from '../shared/contracts'
+import { normalizeApprovalMode, type AgentCapabilities, type AgentGoal, type ApprovalMode, type AppSnapshot, type AskAnswers, type ContextUsageSnapshot, type EffortLevel, type ModelMode, type ModelProfile, type ProposedAction, type SubagentTask, type TimelineEntry, type ToolPermissionRequest, type UserAttachment } from '../shared/contracts'
+import { promises as fs } from 'node:fs'
+import path from 'node:path'
+import type { AgentKernel } from './agent-kernel'
+import type { EvolveBridge } from './evolve-tools'
 import { isImageAttachmentName } from '../shared/image-preview'
 import { publicErrorText } from '../shared/error-copy'
 import { getPeakStatus, usageSpendYuan } from '../shared/deepseek-pricing'
 import { toolLabel } from '../shared/tool-labels'
 import { AgentTurnError } from './agent-errors'
-import type { DialogueLine, ModelClient, ModelReply, ModelToolEvent } from './deepseek'
+import type { DialogueLine, ModelClient, ModelImage, ModelReply, ModelToolEvent } from './deepseek'
 import type { ConversationRecord } from './conversation-store'
 import { NoteStore, type NoteDraft } from './note-store'
 import { attachmentContext, expandFileMentions, validAttachmentList } from './local-context'
 import type { ConversationBridge, ConversationTarget } from './conversation-tools'
 
 const DEMO_HINT = '演示模式仅支持「记录：内容」的测试笔记流程。'
+
+/** 图片输入的格式与上限；超过上限或读不到时退化为“路径提示”，不阻断发送。 */
+const PROMPT_IMAGE_MIME: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif'
+}
+const MAX_PROMPT_IMAGES = 4
+const MAX_PROMPT_IMAGE_BYTES = 4 * 1024 * 1024
+
+async function readPromptImages(attachments: readonly UserAttachment[]): Promise<ModelImage[]> {
+  const images: ModelImage[] = []
+  for (const item of attachments) {
+    if (images.length >= MAX_PROMPT_IMAGES) break
+    if (!item.path || !isImageAttachmentName(item.name)) continue
+    const mimeType = PROMPT_IMAGE_MIME[path.extname(item.name).toLowerCase()]
+    if (!mimeType) continue
+    try {
+      const stat = await fs.stat(item.path)
+      if (!stat.isFile() || stat.size <= 0 || stat.size > MAX_PROMPT_IMAGE_BYTES) continue
+      const data = (await fs.readFile(item.path)).toString('base64')
+      images.push({ name: item.name, mimeType, data })
+    } catch {
+      // 读不到就当没有这张图；附件路径仍会出现在文本提示里。
+    }
+  }
+  return images
+}
 
 /** The pictures among a message's attachments, ready for the timeline. */
 function messageImages(attachments: readonly UserAttachment[]): Array<{ name: string; path: string }> | undefined {
@@ -51,22 +85,39 @@ export class AgentRuntime {
   private draft?: NoteDraft
   private activeRequest?: AbortController
   private currentTurnUserId?: string
+  /** 上一轮的用户消息 id：停止后补到的用量要写回它。 */
+  private lastTurnUserId?: string
   private generation = 0
   private contextGeneration = 0
   private sdkSessionId: string | null = null
   private personaId = 'xiaojing'
+  private outputStyle?: string
+  private appendSystemPrompt?: string
+  private loadUserSettings = true
   private personaRevision = 0
   private thinkingOpen = false
   private goalMaxIterations = 30
-  private goalMaxMinutes = 180
+  /** Deprecated: goals no longer stop on a wall-clock budget. Kept only so old
+   *  records and settings still parse. */
+  private goalMaxMinutes = 0
   private goalTimer?: ReturnType<typeof setTimeout>
   private queuePauseReason: string | null = null
   private goalSessionInvalidated = false
+  /** Kernels without a native goal driver (DSH) run the loop here. */
+  private readonly localGoalKernel: boolean
+  /** Set when a local goal round ended with work left; send after the turn. */
+  private pendingGoalContinuation = false
+  /** 插队发送用：DSH 没有原生 steer，只能打断当前回合，队列里的消息随后接上。 */
+  private steerInterruptPending = false
+  /** 插队消息先压着，等下一次思考开始时再贴到时间线。 */
+  private deferredSteer?: { text: string; attachments: UserAttachment[] }
+  /** 正在等回显的插话：同一会话同时只允许一条，避免覆盖上一条。 */
+  private pendingSteer?: { text: string; messageId?: string; startedAt: string }
   /** The controller's own goal-clear path (interrupt + /goal clear turn). */
   private goalClearHandler?: () => void
   private memoryContextProvider?: () => Promise<string>
   /** Remembers which asking mode to return to when plan mode ends. */
-  private lastNonPlanApproval: ApprovalMode = 'bypassPermissions'
+  private lastNonPlanApproval: ApprovalMode = 'workspace-write'
   /** Which conversation this runtime owns; assigned by the controller at creation. */
   conversationId = ''
   /** Entries changed since the publisher's last take (upsert by id). */
@@ -76,23 +127,26 @@ export class AgentRuntime {
 
   constructor(
     private readonly store: NoteStore,
-    model: ModelClient | undefined,
+    model: AgentKernel | undefined,
     private readonly onChange: () => void = () => {},
-    claudeCodeModel?: ModelClient,
-    private readonly workspaceRoot?: string
+    claudeCodeModel?: AgentKernel,
+    private readonly workspaceRoot?: string,
+    evolveHooks?: Omit<EvolveBridge, 'enabled'>
   ) {
     this.configuredModel = model
     this.claudeCodeModel = claudeCodeModel
     this.model = claudeCodeModel ?? model
+    this.localGoalKernel = (claudeCodeModel as { goalMode?: string } | undefined)?.goalMode === 'local'
     claudeCodeModel?.setGoalListener?.((goal) => this.observeGoal(goal))
+    claudeCodeModel?.setSteerEchoListener?.((messageId) => this.settleSteerEcho(messageId))
     claudeCodeModel?.setPlanModeListener?.((on) => {
       this.state.planMode = on
       this.emit()
     })
     // The CLI can enter/leave plan mode on its own (EnterPlanMode); mirror it.
     claudeCodeModel?.setApprovalModeListener?.((mode) => {
-      this.state.approvalMode = mode
-      this.state.planMode = mode === 'plan'
+      this.state.approvalMode = normalizeApprovalMode(mode)
+      this.state.planMode = this.state.approvalMode === 'read-only'
       this.emit()
     })
     // A tool call parked in default/acceptEdits mode. While any interaction
@@ -135,12 +189,24 @@ export class AgentRuntime {
       avatarState: 'idle',
       taskStatus: 'idle',
       effort: 'max',
-      approvalMode: 'bypassPermissions',
+      approvalMode: 'workspace-write',
       permission: null,
       contextCompactingAuto: false,
       timeline: [],
       subagents: [],
+      subagentControls: Boolean(claudeCodeModel && (
+        typeof (claudeCodeModel as { backgroundTask?: unknown }).backgroundTask === 'function' ||
+        typeof (claudeCodeModel as { stopTask?: unknown }).stopTask === 'function'
+      )),
       timelineRevision: 0
+    }
+    // The tools stay registered for the runtime's lifetime; only the approval
+    // tier decides whether they do anything.
+    if (claudeCodeModel && evolveHooks) {
+      claudeCodeModel.setEvolveBridge?.({
+        ...evolveHooks,
+        enabled: () => this.state.approvalMode === 'selfEvolve'
+      })
     }
   }
 
@@ -182,22 +248,22 @@ export class AgentRuntime {
 
   /** Planned-first sessions: research and propose before touching anything. */
   async setPlanMode(on: boolean): Promise<void> {
-    await this.setApprovalMode(on ? 'plan' : this.lastNonPlanApproval)
+    await this.setApprovalMode(on ? 'read-only' : this.lastNonPlanApproval)
   }
 
   /** Claude Code's permission modes, switched through the query's control
    *  channel. A cold query records the choice for the next session. */
   async setApprovalMode(mode: ApprovalMode): Promise<void> {
-    if ((this.state.approvalMode ?? 'bypassPermissions') === mode) return
+    if ((this.state.approvalMode ?? 'workspace-write') === mode) return
     const client = this.claudeCodeModel
     // Older clients (and test doubles) only know the plan switch.
     const fallbackToPlan = !client?.setApprovalMode && Boolean(client?.setPlanMode) &&
-      (mode === 'plan' || mode === 'bypassPermissions')
+      (mode === 'read-only' || mode === 'danger-full-access')
     if (this.state.mode !== 'claude_code' || !client || (!client.setApprovalMode && !fallbackToPlan)) {
       throw new Error('当前模型不支持审批模式。')
     }
     try {
-      const confirmed = client.setApprovalMode ? await client.setApprovalMode(mode) : await client.setPlanMode?.(mode === 'plan')
+      const confirmed = client.setApprovalMode ? await client.setApprovalMode(mode) : await client.setPlanMode?.(mode === 'read-only')
       if (confirmed === false) {
         // Cold query: the choice only shows once the SDK's init confirms it.
         return
@@ -209,8 +275,8 @@ export class AgentRuntime {
     // Switch silently: the button already shows the new mode, and a system
     // line for every flip buried the conversation it was supposed to explain.
     this.state.approvalMode = mode
-    this.state.planMode = mode === 'plan'
-    if (mode !== 'plan') this.lastNonPlanApproval = mode
+    this.state.planMode = mode === 'read-only'
+    if (mode !== 'read-only') this.lastNonPlanApproval = mode
     this.emit()
   }
 
@@ -286,13 +352,14 @@ export class AgentRuntime {
 
   setGoalBudget(maxIterations: number, maxMinutes: number): void {
     if (!Number.isSafeInteger(maxIterations) || maxIterations < 1 || maxIterations > 300 ||
-        !Number.isSafeInteger(maxMinutes) || maxMinutes < 1 || maxMinutes > 1440) {
+        !Number.isSafeInteger(maxMinutes) || maxMinutes < 0 || maxMinutes > 1440) {
       throw new Error('目标预算必须在允许范围内。')
     }
     if (this.goalMaxIterations === maxIterations && this.goalMaxMinutes === maxMinutes) return
     this.goalMaxIterations = maxIterations
     this.goalMaxMinutes = maxMinutes
-    this.armGoalTimer()
+    // Time limits are no longer enforced; the iteration budget remains.
+    this.clearGoalTimer()
     this.checkGoalBudget()
   }
 
@@ -323,6 +390,47 @@ export class AgentRuntime {
     this.emit()
   }
 
+  /** DSH has no native goal driver, so `/goal` becomes a local loop: the
+   *  first prompt carries the objective, each finished round increments the
+   *  counter, and the model ends the goal with a `[[GOAL_DONE]]` marker. */
+  private trackLocalGoal(text: string): string | 'handled' | null {
+    const match = /^\/goal(?:\s+([\s\S]+))?$/iu.exec(text.trim())
+    if (!match) return null
+    const condition = match[1]?.trim() ?? ''
+    if (!condition) {
+      this.add('system', this.state.goal
+        ? `当前目标：${this.state.goal.condition}\n已推进 ${this.state.goal.iterations ?? 0} 轮，没有轮数上限。`
+        : '当前没有目标。用法：/goal 目标条件。')
+      return 'handled'
+    }
+    if (/^clear$/iu.test(condition)) {
+      this.state.goal = null
+      this.pendingGoalContinuation = false
+      this.queuePauseReason = null
+      this.add('system', '已清除目标。')
+      this.emit()
+      return 'handled'
+    }
+    this.goalSessionInvalidated = false
+    this.state.goal = {
+      condition,
+      phase: 'confirmed',
+      startedAt: new Date().toISOString(),
+      iterations: 0
+    }
+    this.emit()
+    return this.goalPrompt(condition, false)
+  }
+
+  private goalPrompt(condition: string, continuation: boolean): string {
+    const lead = continuation ? `继续执行目标：${condition}` : `目标：${condition}`
+    return [
+      lead,
+      '',
+      '（目标模式：持续执行直到目标完成。每轮结束时，如果目标已经完成，在最终回复的最后单独一行写 [[GOAL_DONE]]；否则继续执行下一步，不要停下来询问确认。目标未完成时不要写这个标记。）'
+    ].join('\n')
+  }
+
   private observeGoal(goal: AgentGoal | null): void {
     if (this.goalSessionInvalidated) return
     if (goal === null) {
@@ -336,8 +444,7 @@ export class AgentRuntime {
     this.state.goal = { condition: goal.condition, phase: 'confirmed', startedAt,
       ...(goal.iterations !== undefined ? { iterations: goal.iterations } : {}),
       ...(goal.lastReason ? { lastReason: goal.lastReason } : {}),
-      ...(goal.iterations === undefined ? { statusMessage: 'CLI 未提供轮数，仍按时间上限保护。' } : {}) }
-    this.armGoalTimer()
+      ...(goal.iterations === undefined ? { statusMessage: 'CLI 未提供轮数。' } : {}) }
     this.emit()
     this.checkGoalBudget()
   }
@@ -348,29 +455,29 @@ export class AgentRuntime {
   }
 
   private armGoalTimer(): void {
+    // Goals are bounded by iterations, not wall-clock time. Keep the method so
+    // old call sites remain, but never arm a stop timer.
     this.clearGoalTimer()
-    const goal = this.state.goal
-    if (!goal || this.queuePauseReason) return
-    const elapsed = Date.now() - Date.parse(goal.startedAt)
-    const remaining = this.goalMaxMinutes * 60_000 - (Number.isFinite(elapsed) ? elapsed : 0)
-    this.goalTimer = setTimeout(() => this.checkGoalBudget(), Math.max(0, remaining))
-    this.goalTimer.unref?.()
   }
 
   private checkGoalBudget(): void {
+    // 目标没有轮数或时间上限：只以模型的 [[GOAL_DONE]] 或用户停止结束。
     const goal = this.state.goal
     if (!goal || this.queuePauseReason) return
-    if (goal.iterations !== undefined && goal.iterations >= this.goalMaxIterations) {
-      this.exceedGoalBudget(`目标达到 ${this.goalMaxIterations} 轮上限，已停止；待发送消息仍保留。`)
-    } else if (Date.now() - Date.parse(goal.startedAt) >= this.goalMaxMinutes * 60_000) {
-      this.exceedGoalBudget(`目标达到 ${this.goalMaxMinutes} 分钟上限，已停止；待发送消息仍保留。`)
-    }
   }
 
   /** Stop alone leaves the CLI's goal armed, so the next message would resume
    *  the same loop. Budget exhaustion also clears the goal through the
    *  controller's own /goal clear path. */
   private exceedGoalBudget(reason: string): void {
+    if (this.localGoalKernel) {
+      this.state.goal = null
+      this.pendingGoalContinuation = false
+      this.add('system', reason)
+      this.stop()
+      this.emit()
+      return
+    }
     this.stop(reason)
     try { this.goalClearHandler?.() } catch { /* stop already paused the queue */ }
   }
@@ -393,13 +500,23 @@ export class AgentRuntime {
     // what lets callers observe intermediate states like a running task's
     // metrics without them mutating underfoot.
     const { timeline, ...rest } = this.state
+    const capabilities = this.getCapabilities()
     return {
       ...structuredClone(rest),
+      ...(Object.keys(capabilities).length ? { capabilities } : {}),
+      ...(this.workspaceRoot ? { workspace: this.workspaceRoot } : {}),
       timeline,
       // Pause state lives outside the cloned snapshot: it changes with the
       // controller's queue, not with the conversation record.
       ...(this.queuePauseReason ? { queuePauseReason: this.queuePauseReason } : {})
     }
+  }
+
+  /** 当前内核握手后确认的能力；还不知道时返回空对象。 */
+  getCapabilities(): AgentCapabilities {
+    const model = this.model as (ModelClient & { imageInputSupport?: () => boolean | undefined }) | undefined
+    const imageInput = model?.imageInputSupport?.()
+    return imageInput === undefined ? {} : { imageInput }
   }
 
   async getContextUsage(): Promise<ContextUsageSnapshot> {
@@ -446,28 +563,94 @@ export class AgentRuntime {
   /** Adds guidance to the active SDK turn at its next native execution boundary. */
   async steerMessage(rawText: string, attachments: UserAttachment[] = [], sessionContext = ''): Promise<boolean> {
     if (!this.isBusy() || this.state.mode !== 'claude_code') return false
+    // 一次只允许一条待确认的插话。但回显可能一直不来（或 id 对不上），
+    // 不能让一次插话把整轮锁死：消息已经贴回时间线，或等满 20 秒，就放行。
+    if (this.pendingSteer) {
+      if (Date.now() - Date.parse(this.pendingSteer.startedAt) < 20_000) return false
+      this.pendingSteer = undefined
+    }
     const generation = this.generation
     if (!validAttachmentList(attachments)) return false
     const text = rawText.trim()
     const context = attachmentContext(attachments)
     const prompt = [text, context].filter(Boolean).join('\n\n')
     if (!prompt || prompt.length > 8_000) return false
-    const model = this.model as (ModelClient & { steer?: (text: string) => Promise<boolean> | boolean }) | undefined
+    const model = this.model as (ModelClient & {
+      steer?: (text: string) => Promise<boolean | { accepted: boolean; messageId?: string }> | boolean | { accepted: boolean; messageId?: string }
+    }) | undefined
     if (!model?.steer) return false
     const expandedText = this.workspaceRoot
       ? await expandFileMentions(text, this.workspaceRoot, { maxFileBytes: 32 * 1024, maxTotalBytes: 48 * 1024 })
       : { prompt: text }
     if (generation !== this.generation || !this.isBusy()) return false
     const expandedPrompt = [expandedText.prompt, context, sessionContext].filter(Boolean).join('\n\n')
-    if (!await model.steer(expandedPrompt)) return false
+    let outcome: boolean | { accepted: boolean; messageId?: string }
+    try {
+      outcome = await model.steer(expandedPrompt)
+    } catch {
+      // 无法确认投递：不重发，交给调用方退回队列。
+      this.addSystem('插话投递未能确认，消息已退回待发送队列。', 'error')
+      return false
+    }
     if (generation !== this.generation || !this.isBusy()) return false
+    const accepted = typeof outcome === 'boolean' ? outcome : outcome.accepted
+    if (!accepted) {
+      this.addSystem('插话未能投递，消息已退回待发送队列。', 'error')
+      return false
+    }
     this.history.push({ role: 'user', content: prompt, ...(sessionContext ? { sessionContext } : {}) })
-    // Native guidance continues the same SDK task in place: the message joins
-    // the running turn — no second avatar, no rail mark — and the turn's
-    // footer stays on the user line that actually started it.
+    // 插队消息先压着：等模型下一次思考开始时再贴到时间线，视觉上就是
+    // “用户说完，第二条思考马上接上”。投递本身仍然是即时的。
+    this.deferredSteer = { text, attachments }
+    // 消息已投递给模型、还没轮到显示：队列区先挂一条“正在插话”。
+    const startedAt = new Date().toISOString()
+    this.pendingSteer = {
+      text,
+      startedAt,
+      ...(typeof outcome === 'object' && outcome.messageId ? { messageId: outcome.messageId } : {})
+    }
+    this.state.steering = { text: text.slice(0, 80), startedAt }
+    this.emit()
+    return true
+  }
+
+  /** DSH 把 steer 的用户消息写进会话后回显；收到后结束待确认状态。 */
+  private settleSteerEcho(messageId: string): void {
+    const pending = this.pendingSteer
+    if (!pending) return
+    if (pending.messageId !== undefined && messageId !== undefined && pending.messageId !== messageId) return
+    this.pendingSteer = undefined
+    this.emit()
+  }
+
+  /** 把压着的插队消息贴回时间线（在下一段思考开始之前）。 */
+  private flushDeferredSteer(): void {
+    const pending = this.deferredSteer
+    if (!pending) return
+    this.deferredSteer = undefined
+    // 已经贴回时间线，说明这一句真的进了回合：可以接受下一次插话了。
+    this.pendingSteer = undefined
+    this.state.steering = undefined
+    const { text, attachments } = pending
     const steered = this.add('user', attachments.length ? `${text || '请阅读附件并帮助我。'}\n附件：${attachments.map(({ name }) => name).join('、')}` : text, messageImages(attachments))
     steered.interrupted = true
     this.markTimelineDirty(steered)
+  }
+
+  /** DSH 内核没有“往当前任务里注入一句话”的能力，插队只能取消这一轮：
+   *  调用方先把消息插到队列最前，这里发出打断，回合结束后 drain 立刻发它。
+   *  返回 true 表示打断已发出；没有可打断的回合时返回 false。 */
+  async steerInterrupt(): Promise<boolean> {
+    if (!this.isBusy()) return false
+    const model = this.model as (ModelClient & { interrupt?: () => Promise<void> | void }) | undefined
+    if (!model?.interrupt) return false
+    this.steerInterruptPending = true
+    try {
+      await model.interrupt()
+    } catch {
+      this.steerInterruptPending = false
+      return false
+    }
     return true
   }
 
@@ -501,7 +684,9 @@ export class AgentRuntime {
     // an SDK event before we call it active or count another iteration.
     this.clearGoalTimer()
     this.state.goal = record.goal
-      ? { ...record.goal, phase: 'unverified', statusMessage: '会话恢复后尚未收到 CLI 目标状态确认。' }
+      ? this.localGoalKernel
+        ? { ...record.goal, phase: 'confirmed' }
+        : { ...record.goal, phase: 'unverified', statusMessage: '会话恢复后尚未收到 CLI 目标状态确认。' }
       : null
     this.queuePauseReason = null
     this.draft = undefined
@@ -517,13 +702,13 @@ export class AgentRuntime {
     // The approval mode survives the restart: the client records the preference
     // and builds the next query with it; the CLI re-reports the real state on
     // init. Records written before the mode existed fall back to planMode.
-    const savedMode: ApprovalMode = isApprovalMode(record.approvalMode)
-      ? record.approvalMode
-      : record.planMode ? 'plan' : 'bypassPermissions'
+    const savedMode: ApprovalMode = normalizeApprovalMode(
+      record.approvalMode ?? (record.planMode ? 'plan' : undefined)
+    )
     this.state.approvalMode = savedMode
-    this.state.planMode = savedMode === 'plan'
-    if (savedMode !== 'plan') this.lastNonPlanApproval = savedMode
-    if (mode === 'claude_code' && savedMode !== 'bypassPermissions') {
+    this.state.planMode = savedMode === 'read-only'
+    if (savedMode !== 'read-only') this.lastNonPlanApproval = savedMode
+    if (mode === 'claude_code' && savedMode !== 'danger-full-access') {
       void Promise.resolve(this.claudeCodeModel?.setApprovalMode?.(savedMode)).catch(() => undefined)
     }
 
@@ -544,11 +729,11 @@ export class AgentRuntime {
       // built with, and planMode stays for records from before it existed.
       goal: this.state.goal,
       planMode: this.state.planMode,
-      approvalMode: this.state.approvalMode ?? 'bypassPermissions'
+      approvalMode: this.state.approvalMode ?? 'workspace-write'
     }
   }
 
-  async sendMessage(rawText: string, attachments: UserAttachment[] = [], sessionContext = ''): Promise<void> {
+  async sendMessage(rawText: string, attachments: UserAttachment[] = [], sessionContext = '', displayText?: string, hiddenUser = false, divider = false): Promise<void> {
     const text = rawText.trim()
     if (!validAttachmentList(attachments)) {
       this.addSystem('附件数量或大小超过限制。', 'error')
@@ -559,8 +744,13 @@ export class AgentRuntime {
       return
     }
     const context = attachmentContext(attachments)
-    const prompt = [text, context].filter(Boolean).join('\n\n')
+    let prompt = [text, context].filter(Boolean).join('\n\n')
     if (!prompt) return
+    if (this.state.mode === 'claude_code' && this.localGoalKernel) {
+      const localGoal = this.trackLocalGoal(text)
+      if (localGoal === 'handled') return
+      if (localGoal) prompt = [localGoal, context].filter(Boolean).join('\n\n')
+    }
     if (prompt.length > 8_000) {
       this.addSystem('单条消息目前最多 8000 字。', 'error')
       return
@@ -572,7 +762,7 @@ export class AgentRuntime {
 
     const goalBeforeRef = this.state.goal
     const goalBefore = goalBeforeRef ? structuredClone(goalBeforeRef) : null
-    if (this.state.mode === 'claude_code') this.trackGoal(text)
+    if (this.state.mode === 'claude_code' && !this.localGoalKernel) this.trackGoal(text)
     const goalChanged = this.state.goal !== goalBeforeRef
     const goalTracked = this.state.goal
     this.generation += 1
@@ -585,7 +775,24 @@ export class AgentRuntime {
     this.state.taskStatus = 'planning'
     this.state.avatarState = 'thinking'
     this.history.push({ role: 'user', content: prompt, ...(sessionContext ? { sessionContext } : {}) })
-    this.currentTurnUserId = this.add('user', attachments.length ? `${text || '请阅读附件并帮助我。'}\n附件：${attachments.map(({ name }) => name).join('、')}` : text, messageImages(attachments)).id
+    this.currentTurnUserId = hiddenUser
+      // 目标续轮不新增可见条目：挂到最近一次用户轮次下，整段连续工作只保留
+      // 重启恢复时的那一条「继续执行目标」，它会随着后续消息自然上移。
+      ? (() => {
+        const timeline = this.state.timeline
+        for (let index = timeline.length - 1; index >= 0; index -= 1) {
+          if (timeline[index].kind === 'user') return timeline[index].id
+        }
+        return this.add('system', '已重启，继续执行目标').id
+      })()
+      : (() => {
+        const entry = this.add('user', displayText ?? (attachments.length ? `${text || '请阅读附件并帮助我。'}\n附件：${attachments.map(({ name }) => name).join('、')}` : text), messageImages(attachments))
+        if (divider) {
+          entry.divider = true
+          this.markTimelineDirty(entry)
+        }
+        return entry.id
+      })()
 
     if (!this.model) {
       const noteBody = /^(?:记录|记下|测试笔记)\s*[:：]\s*([\s\S]+)$/u.exec(text)?.[1]?.trim()
@@ -628,6 +835,9 @@ export class AgentRuntime {
       }
       if (abort.signal.aborted || currentGeneration !== this.generation) return
       const personaRevision = this.personaRevision
+      // 没有图片附件时不要多一个 await，保持原本的同步时序。
+      const hasImageAttachment = attachments.some((item) => item.path && isImageAttachmentName(item.name))
+      const promptImages = hasImageAttachment ? await readPromptImages(attachments) : []
       const reply = await this.model.respond(modelHistory, abort.signal, (partial, segment) => {
         if (segment !== undefined && segment !== progressSegment) {
           progressSegment = segment
@@ -653,9 +863,20 @@ export class AgentRuntime {
         if (event.phase === 'start') progressEntryId = undefined
         this.recordToolEvent(event, currentGeneration)
       }, (usage) => {
-        if (currentGeneration !== this.generation || !this.state.taskMetrics) return
+        if (!this.state.taskMetrics) return
+        const live = currentGeneration === this.generation
+        // 停止之后 DSH 才把最后一笔用量落盘：也要补到刚结束的那一轮，
+        // 否则界面会一直显示“用量未记录”。
+        if (!live && this.state.taskStatus !== 'cancelled') return
         this.state.taskMetrics.usedTokens = usage.total
         this.state.taskMetrics.usage = usage
+        if (!live) {
+          const user = this.state.timeline.find((entry) => entry.id === this.lastTurnUserId && entry.kind === 'user')
+          if (user) {
+            user.metrics = structuredClone(this.state.taskMetrics)
+            this.markTimelineDirty(user)
+          }
+        }
         this.emit()
       }, (partial, segment) => {
         if (currentGeneration !== this.generation || !partial) return
@@ -664,9 +885,14 @@ export class AgentRuntime {
           thinkingEntryId = undefined
         }
         if (!thinkingEntryId) {
+          if (this.deferredSteer) this.flushDeferredSteer()
           this.closeThinkingEntries()
           thinkingEntryId = crypto.randomUUID()
-          const entry: TimelineEntry = { id: thinkingEntryId, time: new Date().toISOString(), kind: 'thinking', text: partial }
+          // 第一段思考从回合开始（还在“正在理解你的需求”那一刻）算起，
+          // 把理解需求的时间也计入思考时长；之后的思考段各从自己开始。
+          const firstThought = !this.state.timeline.some((item) => item.kind === 'thinking')
+          const startedAt = firstThought ? (this.state.taskMetrics?.startedAt ?? new Date().toISOString()) : new Date().toISOString()
+          const entry: TimelineEntry = { id: thinkingEntryId, time: startedAt, kind: 'thinking', text: partial }
           this.state.timeline.push(entry)
           this.markTimelineDirty(entry)
         } else {
@@ -678,7 +904,7 @@ export class AgentRuntime {
         }
         this.thinkingOpen = true
         this.emit()
-      })
+      }, promptImages)
       if (currentGeneration !== this.generation) return
       this.handleModelReply(reply, progressEntryId)
       // A persona changed during this turn. Its result belongs to the old
@@ -702,6 +928,26 @@ export class AgentRuntime {
     } finally {
       if (currentGeneration === this.generation) this.activeRequest = undefined
     }
+    if (currentGeneration === this.generation && this.pendingGoalContinuation) {
+      this.pendingGoalContinuation = false
+      this.scheduleGoalContinuation()
+    }
+  }
+
+  /** Sends the next local goal round after the current turn has fully settled.
+   *  A zero-delay timer keeps the recursive send off this call stack. */
+  private scheduleGoalContinuation(): void {
+    const goal = this.state.goal
+    if (!goal || goal.phase === 'stopping' || this.queuePauseReason) return
+    setTimeout(() => {
+      const current = this.state.goal
+      if (!current || current.phase === 'stopping' || this.queuePauseReason) return
+      if (this.isBusy()) return
+      void this.sendMessage(this.goalPrompt(current.condition, true), [], '', undefined, true)
+        .catch((error: unknown) => {
+          this.addSystem(error instanceof Error ? error.message : '目标继续失败。', 'error')
+        })
+    }, 0)
   }
 
   async approveAction(id: string): Promise<void> {
@@ -743,9 +989,9 @@ export class AgentRuntime {
 
   /** Forwards the panel's answer (or skip) to the model that parked the question. */
   async answerQuestion(id: string, answers: AskAnswers | null): Promise<void> {
-    const model = this.model as (ModelClient & { answerQuestion?: (id: string, answers: AskAnswers | null) => boolean }) | undefined
+    const model = this.model as (ModelClient & { answerQuestion?: (id: string, answers: AskAnswers | null) => boolean | Promise<boolean> }) | undefined
     if (!model?.answerQuestion) throw new Error('当前没有等待回答的问题。')
-    if (!model.answerQuestion(id, answers)) throw new Error('这个问题已经失效。')
+    if (!await model.answerQuestion(id, answers)) throw new Error('这个问题已经失效。')
   }
 
   /** Forwards the panel's verdict on a parked plan to the model that asked. */
@@ -792,7 +1038,8 @@ export class AgentRuntime {
 
   /** 本对话用 @ 添加的库；下一次 query 生效。 */
   setLibraries(mcpServers: Record<string, unknown>, plugins: string[]): void {
-    this.claudeCodeModel?.setLibraries?.(mcpServers, plugins)
+    const clients = new Set([this.model, this.claudeCodeModel, this.configuredModel])
+    for (const client of clients) client?.setLibraries?.(mcpServers, plugins)
   }
 
   /** Switch the instructions on both model paths. An old SDK transcript also
@@ -822,6 +1069,51 @@ export class AgentRuntime {
     this.configuredModel?.setIdentity?.(identity)
   }
 
+  /** Prompt-shaping settings restored with a runtime. They update the client
+   *  but must not discard a resumed SDK session. */
+  syncPromptSettings(outputStyle?: string, appendSystemPrompt?: string, loadUserSettings = true): void {
+    this.outputStyle = outputStyle?.trim() || undefined
+    this.appendSystemPrompt = appendSystemPrompt?.trim() || undefined
+    this.loadUserSettings = loadUserSettings
+    this.claudeCodeModel?.setOutputStyle?.(this.outputStyle)
+    this.claudeCodeModel?.setAppendSystemPrompt?.(this.appendSystemPrompt)
+    this.claudeCodeModel?.setLoadUserSettings?.(loadUserSettings)
+  }
+
+  /** Whether the CLI reads ~/.claude settings. No session invalidation: the
+   *  client rebuilds its next query on its own. */
+  setLoadUserSettings(on: boolean): void {
+    if (this.loadUserSettings === on) return
+    this.loadUserSettings = on
+    this.claudeCodeModel?.setLoadUserSettings?.(on)
+  }
+
+  /** A user change to the response style or extra instructions. The CLI
+   *  records the system prompt on a session's first request and keeps it on
+   *  resume, so the next turn must start a fresh session to see the change. */
+  setOutputStyle(style?: string): void {
+    const next = style?.trim() || undefined
+    if (this.outputStyle === next) return
+    this.outputStyle = next
+    this.claudeCodeModel?.setOutputStyle?.(next)
+    this.invalidateSdkPrompt()
+  }
+
+  setAppendSystemPrompt(text?: string): void {
+    const next = text?.trim() || undefined
+    if (this.appendSystemPrompt === next) return
+    this.appendSystemPrompt = next
+    this.claudeCodeModel?.setAppendSystemPrompt?.(next)
+    this.invalidateSdkPrompt()
+  }
+
+  private invalidateSdkPrompt(): void {
+    this.contextGeneration += 1
+    this.sdkSessionId = null
+    this.state.contextUsage = { status: 'unavailable' }
+    this.emit()
+  }
+
   /** `silent` is for app quit/restart: it stops the turn and keeps the
    *  transcript, but writes no "已停止思考" notice — closing the app should
    *  not look like the user stopped the task. */
@@ -831,9 +1123,15 @@ export class AgentRuntime {
       return
     }
     if (!this.isBusy() && !this.state.goal) return
+    // 停止时把还没露面的插话消息贴出来，别让它悄悄丢掉。
+    this.flushDeferredSteer()
+    this.pendingSteer = undefined
     if (this.state.goal) {
-      this.state.goal = { ...this.state.goal, phase: 'unverified',
-        statusMessage: reason ?? '已请求停止，但 CLI 尚未确认目标清除；可用 /goal 查询。' }
+      this.pendingGoalContinuation = false
+      this.state.goal = this.localGoalKernel
+        ? { ...this.state.goal, phase: 'confirmed', statusMessage: reason ?? '目标已暂停；发送新消息可继续。' }
+        : { ...this.state.goal, phase: 'unverified',
+            statusMessage: reason ?? '已请求停止，但 CLI 尚未确认目标清除；可用 /goal 查询。' }
       this.clearGoalTimer()
       if (!silent) this.queuePauseReason = reason ?? '任务已停止；待发送消息仍保留，发送新消息可继续。'
     }
@@ -842,6 +1140,10 @@ export class AgentRuntime {
       return
     }
     this.generation += 1
+    // 停止前把已经建好的模型会话记下来：否则这条记录没有 session id，
+    // 下一条消息会新开一个空会话，模型就丢了上下文。
+    const liveSession = (this.model as (ModelClient & { currentSessionId?: () => string | null }) | undefined)?.currentSessionId?.()
+    if (liveSession) this.sdkSessionId = liveSession
     this.activeRequest?.abort()
     this.activeRequest = undefined
     // Stop interrupts the running turn only; the CLI session stays resumable
@@ -855,7 +1157,11 @@ export class AgentRuntime {
     this.closeThinkingEntries()
     if (silent) this.dropRunningTools()
     else this.finishRunningTools('已停止')
-    if (!silent) this.add('system', reason ?? (this.state.mode === 'claude_code' ? '已停止思考；正在执行的外部动作可能仍会完成。' : '任务已停止，待批准的操作已取消。'))
+    if (!silent) {
+      // 不再写「已停止思考」：停止本身就是结果，不需要再补一句解释。
+      const notice = reason ?? (this.state.mode === 'claude_code' ? '' : '任务已停止，待批准的操作已取消。')
+      if (notice) this.add('system', notice)
+    }
   }
 
   /** Releases the SDK query as well as cancelling the current turn. Closing a
@@ -923,10 +1229,31 @@ export class AgentRuntime {
   }
 
   private handleModelReply(reply: ModelReply, progressEntryId?: string): void {
+    // 回合直接收尾、没有第二条思考时，插队消息在最终回复前补上。
+    this.flushDeferredSteer()
+    // 回合结束还没等到回显的插话，视为已完成，别把下一条插话卡住。
+    this.pendingSteer = undefined
     this.closeThinkingEntries()
     // 生成时长随本轮记录落盘：账单的 token/s 按它算（不含工具执行与等待）。
     if (reply.generationMs !== undefined && this.state.taskMetrics) {
       this.state.taskMetrics.generationMs = reply.generationMs
+    }
+    if (this.localGoalKernel && this.state.goal && !reply.interrupted) {
+      const raw = reply.text ?? ''
+      const done = /\[\[GOAL_DONE\]\]/u.test(raw)
+      if (done) reply.text = raw.replace(/\[\[GOAL_DONE\]\]/gu, '').trimEnd()
+      const goal = this.state.goal
+      const iterations = (goal.iterations ?? 0) + 1
+      if (done) {
+        this.state.goal = null
+        this.pendingGoalContinuation = false
+        this.add('system', `目标已完成（${iterations} 轮）。`)
+      } else {
+        // 没有轮数上限：只要没写 [[GOAL_DONE]] 就继续下一轮。
+        this.state.goal = { ...goal, phase: 'confirmed', iterations }
+        this.pendingGoalContinuation = true
+      }
+      this.emit()
     }
     if (this.state.mode === 'claude_code' && reply.sdkSessionId) this.sdkSessionId = reply.sdkSessionId
     if (reply.compacted) this.add('system', '上下文已自动压缩，可继续当前会话。')
@@ -948,7 +1275,14 @@ export class AgentRuntime {
       // the SDK's own Esc would otherwise surface as "运行失败".
       this.state.taskStatus = 'cancelled'
       this.state.avatarState = 'idle'
-      this.add('system', '已由人工中止；会话和待发送消息都保留。')
+      if (this.steerInterruptPending) {
+        // 插队：这不是人工中止，队列里的那条消息马上接上，不写中止提示。
+        this.steerInterruptPending = false
+        this.finishRunningTools('已打断')
+        this.emit()
+      } else {
+        this.add('system', '已由人工中止；会话和待发送消息都保留。')
+      }
     } else {
       this.state.taskStatus = 'done'
       // 'success', not 'idle': the portrait reads it as "the reply just
@@ -1163,6 +1497,7 @@ export class AgentRuntime {
         user.metrics = structuredClone(this.state.taskMetrics)
         this.markTimelineDirty(user)
       }
+      this.lastTurnUserId = this.currentTurnUserId
       this.currentTurnUserId = undefined
     }
     // The consumer pulls a snapshot when it is ready to publish one; building one here

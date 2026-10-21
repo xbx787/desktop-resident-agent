@@ -3,8 +3,9 @@ import type { AvatarBox, AvatarSize } from '../shared/contracts';
 import { avatarArtFor } from './avatar-art';
 import { avatarDisplaySize } from './avatar-geometry';
 
-export function WhalePortrait({ gestureRef, idleRef, swapRef, ahogeRef, artworkUrl, size, personaId, onBoxChange }: {
+export function WhalePortrait({ gestureRef, entryRef, idleRef, swapRef, ahogeRef, artworkUrl, size, personaId, onBoxChange }: {
   gestureRef?: Ref<HTMLDivElement>;
+  entryRef?: Ref<HTMLDivElement>;
   idleRef?: Ref<HTMLDivElement>;
   swapRef?: Ref<HTMLDivElement>;
   ahogeRef?: Ref<HTMLImageElement>;
@@ -52,15 +53,19 @@ export function WhalePortrait({ gestureRef, idleRef, swapRef, ahogeRef, artworkU
 
   return (
     <div className="avatar-gesture" ref={gestureRef}>
-      <div className="avatar-idle-motion" ref={idleRef}>
-        <div className="avatar-breath">
-          <div className="avatar-swap" ref={swapRef}>
-            <div className="avatar-portrait">
-              {art.body && <img ref={baseRef} className="avatar-artwork" src={art.body} alt=""
-                draggable={false} onLoad={schedule} style={{ opacity: artworkUrl ? 0 : 1 }} />}
-              {artworkUrl && <img className="avatar-artwork avatar-artwork-variant" src={artworkUrl} alt="" draggable={false} />}
-              {art.ahoge && !artworkUrl && <img className="avatar-ahoge" ref={ahogeRef} src={art.ahoge}
-                alt="" draggable={false} />}
+      <div className="avatar-entry-motion" ref={entryRef}>
+        <div className="avatar-idle-motion" ref={idleRef}>
+          <div className="avatar-state-loop">
+            <div className="avatar-look">
+              <div className="avatar-breath">
+                <div className="avatar-swap" ref={swapRef}>
+                  <div className="avatar-portrait">
+                    {art.body && <img ref={baseRef} className="avatar-artwork" src={art.body} alt=""
+                      draggable={false} onLoad={schedule} style={{ opacity: artworkUrl ? 0 : 1 }} />}
+                    {artworkUrl && <img className="avatar-artwork avatar-artwork-variant" src={artworkUrl} alt="" draggable={false} />}
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
         </div>

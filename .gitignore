@@ -14,3 +14,7 @@ data/
 
 # Scratch space for document work; never tracked.
 .tmp-docwork/
+.tmp/
+.tmp-*/
+__pycache__/
+*.pyc

@@ -3,7 +3,6 @@ import type { TimelineEntry } from '../shared/contracts'
 import { toolLabel } from '../shared/tool-labels'
 import { thinkingDurationText, thinkingElapsedSeconds } from './thinking-item'
 import { toolArgumentPreview } from './tool-arguments'
-import { formatDuration } from './duration'
 import { sameTimelineEntry, type TurnSegment } from './timeline-groups'
 
 export interface WorkFacts {
@@ -55,11 +54,10 @@ export function workPhrase(name: string, done = true): string {
   return done ? `执行了${label}` : `执行${label}`
 }
 
+/** The live work label is the action name only — no command text, no colon.
+ *  Details stay inside the tool rows where they can be read in full. */
 export function workAction(tool: { name: string; detail: string }): string {
-  const phrase = workPhrase(tool.name, false)
-  if (tool.name.trim().toLowerCase() !== 'bash') return phrase
-  const detail = tool.detail.replace(/\s+/gu, ' ').trim()
-  return detail ? `${phrase}：${detail.length > 40 ? `${detail.slice(0, 40)}…` : detail}` : phrase
+  return workPhrase(tool.name, false)
 }
 
 function toolSummaryOf(names: string[]): string {
@@ -97,9 +95,8 @@ export function workFacts(items: TimelineEntry[], nowMs: number, running: boolea
  *  clock but drops the action list. */
 export function workFactsParts(facts: WorkFacts, running: boolean): string[] {
   const parts: string[] = []
-  if (running && facts.lastTool) parts.push(workAction(facts.lastTool))
-  if (facts.toolCount > 0) parts.push(`${facts.toolCount} 项操作`)
-  if (facts.elapsedSeconds !== null && facts.elapsedSeconds >= 1) parts.push(formatDuration(facts.elapsedSeconds))
+  // 只留“共 N 项操作”：不再显示正在执行的具体动作，也不显示耗时。
+  if (facts.toolCount > 0) parts.push(`共 ${facts.toolCount} 项操作`)
   return parts
 }
 

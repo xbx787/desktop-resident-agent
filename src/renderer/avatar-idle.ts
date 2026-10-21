@@ -26,6 +26,16 @@ export function nextFidgetDelay(random: () => number = Math.random): number {
   return 18000 + random() * 27000
 }
 
+/** One fidget pass. The shared behaviour clock owns the cadence; this only
+ *  plays the animation and returns a cancel function for the clock. */
+export function playIdleFidget(el: Element | null, reduced = prefersReducedMotion()): () => void {
+  if (!el || reduced) return () => {}
+  const target = el as Element & { animate?: HTMLElement['animate'] }
+  if (typeof target.animate !== 'function') return () => {}
+  const animation = target.animate(idleFidgetFrames(), idleFidgetTiming())
+  return () => animation.cancel()
+}
+
 /** Starts the fidget clock on `el` and returns a stop function. While the
  *  window is hidden a fidget would be wasted — the clock skips that turn and
  *  schedules the next one instead. Reduced motion (or a missing element)

@@ -183,6 +183,7 @@ export function SubagentTray({ subagents, onBackgroundTask, onStopTask, onMessag
         <span className={`panel-subagent-state is-${openTask.status}`}>{STATUS_LABEL[openTask.status]}</span>
       </div>
       <p className="panel-subagent-desc" title={openTask.description}>{openTask.description}</p>
+      {openTask.summary && <p className="panel-subagent-summary" title={openTask.summary}>{openTask.summary}</p>}
       <p className="panel-subagent-meta">
         {openTask.lastToolName ? `最近：${toolLabel(openTask.lastToolName)}` : '等待输出'}
         {' · '}{openTask.toolUses ?? 0} 次工具 · {elapsedText(openTask)}

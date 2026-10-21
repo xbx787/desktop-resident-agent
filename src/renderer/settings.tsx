@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { ConversationSettings, GrowthProposal, ModelProfile } from '../shared/contracts'
+import type { AgentCapabilities, ConversationSettings, GrowthProposal, ModelProfile } from '../shared/contracts'
 import { LIBRARY_KINDS, LIBRARY_LABELS, LIBRARY_MARKET_LABELS, type LibraryItem, type LibraryKind, type LibrarySnapshot } from '../shared/libraries'
 import { PERSONA_PRESETS } from '../shared/personas'
 import { personaAvatarUrl } from './avatar-art'
@@ -84,8 +84,10 @@ export function SettingsPage() {
   const [tabsDraft, setTabsDraft] = useState('5')
   const [goalIterationsDraft, setGoalIterationsDraft] = useState('30')
   const [goalMinutesDraft, setGoalMinutesDraft] = useState('180')
+  const [appendPromptDraft, setAppendPromptDraft] = useState('')
   const [busy, setBusy] = useState(false)
   const [version, setVersion] = useState('')
+  const [capabilities, setCapabilities] = useState<AgentCapabilities | null>(null)
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null)
   const [userNameDraft, setUserNameDraft] = useState('')
   const [assistantNameDraft, setAssistantNameDraft] = useState('')
@@ -126,6 +128,9 @@ export function SettingsPage() {
     void window.whaleSettings.version().then((current) => {
       if (active) setVersion(current)
     }).catch(() => undefined)
+    void window.whaleSettings.capabilities?.().then((current) => {
+      if (active) setCapabilities(current)
+    }).catch(() => undefined)
     return () => { active = false }
   }, [])
 
@@ -139,6 +144,7 @@ export function SettingsPage() {
       setGoalMinutesDraft(String(current.goalMaxMinutes))
       setUserNameDraft(current.userName)
       setAssistantNameDraft(current.assistantName)
+      setAppendPromptDraft(current.appendSystemPrompt ?? '')
     }).catch((cause: unknown) => {
       if (active) setNotice({ text: errorMessage(cause), error: true })
     })
@@ -293,6 +299,7 @@ export function SettingsPage() {
       setTabsDraft(String(current.visibleConversationTabs))
       setGoalIterationsDraft(String(current.goalMaxIterations))
       setGoalMinutesDraft(String(current.goalMaxMinutes))
+      setAppendPromptDraft(current.appendSystemPrompt ?? '')
       setNotice({ text: '已保存', error: false })
     } catch (cause) {
       setNotice({ text: errorMessage(cause), error: true })
@@ -311,11 +318,17 @@ export function SettingsPage() {
     void update({ visibleConversationTabs: value })
   }
 
+  function saveAppendPrompt(): void {
+    const next = appendPromptDraft.trim()
+    if (next === (settings?.appendSystemPrompt ?? '')) return
+    void update({ appendSystemPrompt: next })
+  }
+
   function saveGoalBudget(): void {
     const goalMaxIterations = Number(goalIterationsDraft)
     const goalMaxMinutes = Number(goalMinutesDraft)
     if (!Number.isInteger(goalMaxIterations) || goalMaxIterations < 1 || goalMaxIterations > 300 ||
-      !Number.isInteger(goalMaxMinutes) || goalMaxMinutes < 1 || goalMaxMinutes > 1440) {
+      !Number.isInteger(goalMaxMinutes) || goalMaxMinutes < 0 || goalMaxMinutes > 1440) {
       setNotice({ text: '目标轮数应为 1–300，时长应为 1–1440 分钟。', error: true })
       return
     }
@@ -580,14 +593,6 @@ export function SettingsPage() {
             <option value={0}>关闭</option><option value={7}>7 天</option><option value={14}>14 天</option><option value={30}>30 天</option>
           </select>
         </div>
-        <div className="settings-row settings-budget-row">
-          <div className="settings-copy"><label id="goal-budget-label">目标模式上限</label><p>达到轮数或时长上限即停止目标，待发送消息会保留。</p></div>
-          <form aria-labelledby="goal-budget-label" onSubmit={(event) => { event.preventDefault(); saveGoalBudget() }}>
-            <label htmlFor="goal-iterations">轮数<input id="goal-iterations" type="number" min="1" max="300" step="1" value={goalIterationsDraft} disabled={!settings || busy} onChange={(event) => setGoalIterationsDraft(event.target.value)} /></label>
-            <label htmlFor="goal-minutes">分钟<input id="goal-minutes" type="number" min="1" max="1440" step="1" value={goalMinutesDraft} disabled={!settings || busy} onChange={(event) => setGoalMinutesDraft(event.target.value)} /></label>
-            <button type="submit" disabled={!settings || busy || (goalIterationsDraft === String(settings.goalMaxIterations) && goalMinutesDraft === String(settings.goalMaxMinutes))}>应用</button>
-          </form>
-        </div>
         <div className="settings-row">
           <div className="settings-copy"><label id="auto-title-label">标题自动生成</label><p>首行标题始终会写；关闭后不再请模型润色。</p></div>
           <button type="button" role="switch" aria-labelledby="auto-title-label" aria-checked={settings?.enableAutoTitleGeneration ?? true}
@@ -599,6 +604,70 @@ export function SettingsPage() {
           <button type="button" role="switch" aria-labelledby="timestamps-label" aria-checked={settings?.showMessageTimestamps ?? true}
             className={`settings-switch${settings?.showMessageTimestamps ?? true ? ' is-on' : ''}`} disabled={!settings || busy}
             onClick={() => { void update({ showMessageTimestamps: !(settings?.showMessageTimestamps ?? true) }) }} />
+        </div>
+        <div className="settings-row">
+          <div className="settings-copy"><label id="load-user-settings-label">加载 Claude 用户设置</label><p>读取 ~/.claude 里的权限、hooks 和输出风格；关闭后只使用项目和本应用设置。</p></div>
+          <button type="button" role="switch" aria-labelledby="load-user-settings-label" aria-checked={settings?.loadUserSettings !== false}
+            className={`settings-switch${settings?.loadUserSettings !== false ? ' is-on' : ''}`} disabled={!settings || busy}
+            onClick={() => { void update({ loadUserSettings: !(settings?.loadUserSettings !== false) }) }} />
+        </div>
+        <div className="settings-row">
+          <div className="settings-copy"><label htmlFor="output-style">回答风格</label><p>Claude 的正式回答风格；修改后下一轮会用新风格开始模型会话。</p></div>
+          <select id="output-style" className="settings-wide-select" value={settings?.outputStyle ?? ''} disabled={!settings || busy}
+            onChange={(event) => { void update({ outputStyle: event.target.value }) }}>
+            <option value="">跟随 CLI 默认</option>
+            <option value="default">默认</option>
+            <option value="Explanatory">解释型</option>
+            <option value="Learning">学习型</option>
+            {settings?.outputStyle && !['default', 'Explanatory', 'Learning'].includes(settings.outputStyle) &&
+              <option value={settings.outputStyle}>{settings.outputStyle}</option>}
+          </select>
+        </div>
+        <div className="settings-row settings-prompt-row">
+          <div className="settings-copy"><label htmlFor="append-prompt">附加指令</label><p>追加在人设之后，用来约束回答方式或补充项目约定。修改后下一条消息开始新的模型会话。</p></div>
+          <form onSubmit={(event) => { event.preventDefault(); saveAppendPrompt() }}>
+            <textarea id="append-prompt" rows={4} maxLength={4000} value={appendPromptDraft} disabled={!settings || busy}
+              placeholder="例如：回答先给结论，代码改动保持最小。"
+              onChange={(event) => setAppendPromptDraft(event.target.value)} />
+            <button type="submit" disabled={!settings || busy || appendPromptDraft.trim() === (settings?.appendSystemPrompt ?? '')}>应用</button>
+          </form>
+        </div>
+        <div className="settings-row">
+          <div className="settings-copy"><label id="auto-scroll-label">自动跟随</label><p>新内容到达时自动滚到最新；关闭后可用回到底部键。</p></div>
+          <button type="button" role="switch" aria-labelledby="auto-scroll-label" aria-checked={settings?.autoScroll ?? true}
+            className={`settings-switch${settings?.autoScroll ?? true ? ' is-on' : ''}`} disabled={!settings || busy}
+            onClick={() => { void update({ autoScroll: !(settings?.autoScroll ?? true) }) }} />
+        </div>
+        <div className="settings-row">
+          <div className="settings-copy"><label id="expand-edits-label">默认展开文件编辑</label><p>编辑类工具行打开时直接显示改动，不用再点一次。</p></div>
+          <button type="button" role="switch" aria-labelledby="expand-edits-label" aria-checked={settings?.expandFileEditsByDefault ?? false}
+            className={`settings-switch${settings?.expandFileEditsByDefault ? ' is-on' : ''}`} disabled={!settings || busy}
+            onClick={() => { void update({ expandFileEditsByDefault: !(settings?.expandFileEditsByDefault ?? false) }) }} />
+        </div>
+        <div className="settings-row">
+          <div className="settings-copy"><label htmlFor="session-sort">会话排序</label><p>会话库和顶部标签的排列方式。</p></div>
+          <select id="session-sort" className="settings-wide-select" value={settings?.sessionSort ?? 'updated'} disabled={!settings || busy}
+            onChange={(event) => { void update({ sessionSort: event.target.value as ConversationSettings['sessionSort'] }) }}>
+            <option value="updated">最近更新</option>
+            <option value="created">创建时间</option>
+          </select>
+        </div>
+        <div className="settings-row">
+          <div className="settings-copy"><label htmlFor="title-locale">标题语言</label><p>模型润色会话标题时使用的语言。</p></div>
+          <select id="title-locale" className="settings-wide-select" value={settings?.titleLocale ?? 'auto'} disabled={!settings || busy}
+            onChange={(event) => { void update({ titleLocale: event.target.value as ConversationSettings['titleLocale'] }) }}>
+            <option value="auto">跟随对话</option>
+            <option value="zh">中文</option>
+            <option value="en">English</option>
+          </select>
+        </div>
+        <div className="settings-row">
+          <div className="settings-copy"><label htmlFor="title-model">标题模型</label><p>润色会话标题时使用的 DeepSeek 模型。</p></div>
+          <select id="title-model" className="settings-wide-select" value={settings?.titleModel ?? 'deepseek-flash'} disabled={!settings || busy}
+            onChange={(event) => { void update({ titleModel: event.target.value }) }}>
+            <option value="deepseek-flash">快速（Flash）</option>
+            <option value="deepseek-chat">对话（Chat）</option>
+          </select>
         </div>
       </section>}
       {tab === 'appearance' && <section className="settings-section" role="tabpanel" id="settings-panel-appearance" aria-labelledby="settings-tab-appearance">
@@ -624,6 +693,49 @@ export function SettingsPage() {
             })}
           </div>
         </div>
+        <div className="settings-row">
+          <div className="settings-copy"><label>面板位置</label><p>聊天面板贴在人物的哪一侧，默认上方。左/右时面板与人物并排，不再随人物在屏幕上下半自动翻转。</p></div>
+          <div className="settings-size-picker" role="radiogroup" aria-label="面板位置">
+            {([['top', '上方'], ['bottom', '下方'], ['left', '左侧'], ['right', '右侧']] as const).map(([value, label]) => {
+              const active = (settings?.panelPlacement ?? 'top') === value
+              return <button key={value} type="button" role="radio" aria-checked={active}
+                className={`settings-size-option${active ? ' is-active' : ''}`} disabled={!settings || busy}
+                onClick={() => { void update({ panelPlacement: value }) }}>{label}</button>
+            })}
+          </div>
+        </div>
+        <div className="settings-row">
+          <div className="settings-copy"><label>主题</label><p>只作用于聊天面板；完成、进行、失败、等待、空闲这几个状态色两套主题共用，不跟着变。</p></div>
+          <div className="settings-size-picker" role="radiogroup" aria-label="面板主题">
+            {([['dark', '深色'], ['light', '浅色']] as const).map(([value, label]) => {
+              const active = (settings?.panelTheme ?? 'dark') === value
+              return <button key={value} type="button" role="radio" aria-checked={active}
+                className={`settings-size-option${active ? ' is-active' : ''}`} disabled={!settings || busy}
+                onClick={() => { void update({ panelTheme: value }) }}>{label}</button>
+            })}
+          </div>
+        </div>
+        <div className="settings-row">
+          <div className="settings-copy"><label htmlFor="avatar-renderer">人物渲染</label><p>Live2D 技术预览（Arch Chan）仅用于验证 Cubism 渲染链路，不是小鲸最终形象；可随时切回标准插画。</p></div>
+          <select id="avatar-renderer" className="settings-wide-select" value={settings?.avatarRenderer ?? 'sprite'} disabled={!settings || busy}
+            onChange={(event) => { void update({ avatarRenderer: event.target.value === 'live2d-preview' ? 'live2d-preview' : 'sprite' }) }}>
+            <option value="sprite">标准插画</option>
+            <option value="live2d-preview">Live2D 技术预览（Arch Chan）</option>
+          </select>
+        </div>
+        <div className="settings-row">
+          <div className="settings-copy"><label htmlFor="tool-row-detail">工具行信息</label><p>工具名后面显示多少内容：完整带参数和改动行数，简略只留很短的一截，仅名称只显示工具名。展开后的完整输入与输出不受影响。</p></div>
+          <select id="tool-row-detail" className="settings-wide-select" value={settings?.toolRowDetail ?? 'brief'} disabled={!settings || busy}
+            onChange={(event) => { void update({ toolRowDetail: event.target.value as NonNullable<ConversationSettings['toolRowDetail']> }) }}>
+            <option value="full">完整</option>
+            <option value="brief">简略</option>
+            <option value="name">仅名称</option>
+          </select>
+        </div>
+        <div className="settings-row">
+          <div className="settings-copy"><label>图片输入</label><p>当前模型是否支持直接看图。不支持时图片按文件引用发送，模型用读图工具打开。</p></div>
+          <span className="settings-capability">{capabilities ? (capabilities.imageInput ? '支持' : '不支持') : '还没握手'}</span>
+        </div>
       </section>}
       {tab === 'libraries' && <section className="settings-section settings-library-section" role="tabpanel" id="settings-panel-libraries" aria-labelledby="settings-tab-libraries">
         <div className="settings-library-kinds" role="tablist" aria-label="库">
@@ -640,7 +752,7 @@ export function SettingsPage() {
         <div className="settings-library-pane">
           <div className="settings-library-heading">
             <h2>{LIBRARY_LABELS[libraryKind]}库</h2>
-            <p>在对话里输入 @ 添加，添加后这个对话就会用它。</p>
+            <p>应用安装的条目用 @ 添加；本地已有的条目由 Claude 配置直接加载。</p>
           </div>
           {installedLibraries.length === 0
             ? <p className="settings-library-empty">还没有添加{LIBRARY_LABELS[libraryKind]}。到下面的{LIBRARY_MARKET_LABELS[libraryKind]}找一个。</p>
@@ -648,13 +760,15 @@ export function SettingsPage() {
                 {installedLibraries.map((item) => (
                   <div className="settings-library-item" key={item.id}>
                     <div className="settings-library-copy">
-                      <label>{item.name}{item.version && <span className="settings-library-version">v{item.version}</span>}</label>
+                      <label>{item.name}{item.version && <span className="settings-library-version">v{item.version}</span>}{item.external && <span className="settings-library-version">本地已有</span>}</label>
                       {item.description && <p>{item.description}</p>}
                       {item.license && <small>许可证：{item.license}</small>}
                     </div>
-                    <button type="button" disabled={libraryBusyId !== null} onClick={() => { void removeLibraryItem(item) }}>
-                      {libraryBusyId === item.id ? '移除中…' : '移除'}
-                    </button>
+                    {item.external
+                      ? <span className="settings-library-external">已在环境中</span>
+                      : <button type="button" disabled={libraryBusyId !== null} onClick={() => { void removeLibraryItem(item) }}>
+                          {libraryBusyId === item.id ? '移除中…' : '移除'}
+                        </button>}
                   </div>
                 ))}
               </div>}
@@ -893,8 +1007,14 @@ export function SettingsPage() {
             <div className="settings-quit-actions">
               <button type="button" onClick={() => setQuitAction(null)}>取消</button>
               <button type="button" className="is-danger" onClick={() => {
-                if (quitAction === 'restart') void window.whaleSettings.restart()
-                else void window.whaleSettings.quit()
+                if (quitAction === 'restart') {
+                  void window.whaleSettings.restart().then((waiting) => {
+                    if (waiting) setNotice({ text: '当前任务结束后会自动重启。', error: false })
+                    else setNotice({ text: '已取消重启，等你的新消息。', error: false })
+                  })
+                } else {
+                  void window.whaleSettings.quit()
+                }
               }}>{quitAction === 'restart' ? '确认重启' : '确认退出'}</button>
             </div>
           </div>

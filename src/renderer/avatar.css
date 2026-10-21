@@ -13,7 +13,22 @@ html, body, #root {
 }
 
 body.avatar-window { -webkit-user-select: none; user-select: none; }
-.avatar-stage { position: relative; width: 100%; height: 100%; }
+.avatar-stage {
+  --avatar-accent: 122 190 246;
+  --avatar-dot-x: 88%;
+  --avatar-dot-y: 9%;
+  --avatar-face-x: 50%;
+  --avatar-face-y: 35%;
+  --avatar-breath-duration: 4.8s;
+  --avatar-task-duration: 2.5s;
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+.avatar-stage[data-persona='rin'] { --avatar-breath-duration: 4.6s; --avatar-task-duration: 2.15s; }
+.avatar-stage[data-persona='rem'] { --avatar-breath-duration: 5.4s; --avatar-task-duration: 2.85s; }
+.avatar-stage[data-persona='yui'] { --avatar-breath-duration: 4.15s; --avatar-task-duration: 1.95s; }
+.avatar-stage[data-persona='yukino'] { --avatar-breath-duration: 5.8s; --avatar-task-duration: 3.05s; }
 
 .avatar-hit-target {
   position: absolute;
@@ -36,84 +51,148 @@ body.avatar-window { -webkit-user-select: none; user-select: none; }
 .avatar-hit-target:focus-visible { outline: 2px solid #9fe5d9; outline-offset: -3px; }
 /* The avatar lives in its own BrowserWindow. Its status pulse must be local;
    the panel's --panel-pulse-p variable never reaches this document. */
-.avatar-task-dot { position: absolute; z-index: 2; top: 9px; right: 12px; width: 8px; height: 8px; border-radius: 50%; pointer-events: none; }
-.avatar-task-dot.is-busy { background: #f3c36f; }
-.avatar-task-dot.is-waiting { background: #7bbaff; }
-.avatar-task-dot.is-done { background: #80d6a1; }
-.avatar-task-dot.is-failed { background: #f48790; }
+/* 右上角：每个对话一个状态点，按顶部标签顺序排成一排；当前对话略大。
+   正在运行或等待审批时，点排上方再出现三个跳动的思考点。 */
+/* 点排贴着人物右缘内侧，不再压在角色轮廓外；所有点同尺寸，当前对话只
+   用不透明度区分。`--avatar-w` 与命中区同源，人物大小档变化时一起走。 */
+/* 舞台（200×220）的直接子元素：top/right 都相对人物窗口。不要把它放回
+   `.avatar-hit-target` 里，否则会相对按钮（人物大小）定位，点落到头发上。
+   2px 的抬升是用户要求的观感微调，别并进状态锚点。 */
+.avatar-status-strip { position: absolute; z-index: 4; top: calc(var(--avatar-dot-y) + 20.2px); right: calc(88px - var(--avatar-w, 116.5px) / 2 + 2.4px); width: 0; height: 0; pointer-events: none; }
+/* 点不再排成一条直线：以 50px 为半径沿右上角转成弧形，每个点的偏移由
+   avatar.tsx 按角度算好写进变量。这个容器只提供锚点，不参与布局。 */
+.avatar-status-dots { display: contents; }
+/* 固定宽高 + 整设备像素取整：对话数变化时点不能被压成椭圆，圆边也不会
+   被 125% 缩放抹糊。translate 让 right/top 落成点的中心。 */
+.avatar-status-dot { position: absolute; right: var(--avatar-dot-right, 0px); top: var(--avatar-dot-top, 0px); transform: translate(50%, -50%); width: var(--avatar-dot-size, 7px); height: var(--avatar-dot-size, 7px); border-radius: 50%; background: #86b3f2; opacity: .88; }
+.avatar-status-dot.is-busy { background: #f3c36f; opacity: 1; }
+.avatar-status-dot.is-waiting { background: #b79cff; opacity: 1; }
+.avatar-status-dot.is-done { background: #80d6a1; opacity: .9; }
+.avatar-status-dot.is-failed { background: #f48790; opacity: 1; }
+.avatar-status-dot.is-cancelled { background: #9aa7bd; opacity: .9; }
+.avatar-status-dot.is-current { opacity: 1; }
+/* 不足五个对话时的空槽：只留一圈细边，五个点的位置保持不变。 */
+.avatar-status-dot.is-empty { background: transparent; border: 1px solid rgba(150, 190, 245, .5); opacity: .55; }
+/* 只呼吸透明度，不改尺寸：几个对话点必须始终等大。 */
 @keyframes avatar-task-pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: .58; transform: scale(.88); }
+  0%, 100% { opacity: 1; }
+  50% { opacity: .45; }
 }
 @media (prefers-reduced-motion: no-preference) {
-  .avatar-task-dot.is-pulsing { animation: avatar-task-pulse 2s ease-in-out infinite; }
+  .avatar-status-dot.is-pulsing { animation: avatar-task-pulse 2s ease-in-out infinite; }
 }
-/* All visual layers sit inside the immutable hit target. Gesture, idle,
-   breath, pose fade and ahoge own separate animation properties. */
+/* All visual layers sit inside the immutable hit target. Each channel owns a
+   separate transform so breathing, task, voice, idle and one-shot motion can
+   blend without overwriting one another. */
 .avatar-gesture { position: absolute; top: 6px; left: 0; width: var(--avatar-w, 116.5px); height: var(--avatar-h, 139.5px); pointer-events: none; }
-.avatar-idle-motion, .avatar-breath, .avatar-swap, .avatar-portrait { position: relative; width: 100%; height: 100%; pointer-events: none; }
+.avatar-entry-motion, .avatar-idle-motion, .avatar-state-loop, .avatar-look,
+.avatar-breath, .avatar-swap, .avatar-portrait { position: relative; width: 100%; height: 100%; pointer-events: none; }
 .avatar-idle-motion { z-index: 1; }
 .avatar-portrait { display: grid; place-items: center; }
 .avatar-artwork, .avatar-ahoge { grid-area: 1 / 1; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
-/* Base and ahoge use the exact same cropped canvas and transform together.
-   Voice cues live behind them instead of filtering/scaling only the body. */
-.avatar-gesture::before { content: ''; position: absolute; z-index: 0; left: 20%; top: 14%; width: 60%; height: 48%; border-radius: 50%; border: 1px solid transparent; opacity: 0; pointer-events: none; }
-.avatar-stage.is-working .avatar-gesture::before { border-color: rgba(243, 195, 111, .30); opacity: .36; }
-.avatar-stage.is-listening .avatar-gesture::before { border-color: rgba(129, 194, 249, .46); opacity: .55; }
-.avatar-stage.is-speaking .avatar-gesture::before { border-color: rgba(129, 194, 249, .58); opacity: .7; }
-.avatar-stage.is-waiting .avatar-gesture::before { border-color: rgba(128, 187, 255, .38); opacity: .45; }
-.avatar-stage.is-completed .avatar-gesture::before { border-color: rgba(128, 214, 161, .34); opacity: .42; }
-.avatar-stage.is-failed .avatar-gesture::before { border-color: rgba(244, 135, 144, .32); opacity: .4; }
 
-/* Quiet breathing only while idle. Working, voice and dragging stop it. */
+/* Breathing remains an independent low-amplitude channel in every state. */
 @keyframes whale-breath {
   0%, 100% { transform: translateY(0) scaleY(1); }
-  50% { transform: translateY(-1.3px) scaleY(1.004); }
+  50% { transform: translateY(-.6px) scaleY(1.0025); }
 }
-@keyframes avatar-voice-halo {
-  0%, 100% { opacity: .38; transform: scale(.96); }
-  50% { opacity: .72; transform: scale(1.03); }
-}
-@keyframes avatar-focus {
+@keyframes avatar-plan-loop {
   0%, 100% { transform: translateY(0) rotate(0deg); }
-  45% { transform: translateY(-.8px) rotate(-.22deg); }
+  48% { transform: translateY(-.45px) rotate(-.14deg); }
 }
-@keyframes avatar-wait {
-  0%, 100% { transform: translateY(0) rotate(0deg); }
-  50% { transform: translateY(-.5px) rotate(.45deg); }
-}
-@keyframes avatar-listen {
-  0%, 100% { transform: translateY(0) scale(1); }
-  50% { transform: translateY(-1px) scale(1.004); }
-}
-@keyframes avatar-speak {
+@keyframes avatar-execute-loop {
   0%, 100% { transform: translateY(0) scaleY(1); }
-  50% { transform: translateY(-1.2px) scaleY(1.006); }
+  50% { transform: translateY(-.65px) scaleY(1.002); }
 }
-@keyframes avatar-finish {
-  0% { transform: translateY(0) scale(1); }
-  42% { transform: translateY(-3px) scale(1.012); }
-  72% { transform: translateY(.6px) scale(.998); }
-  100% { transform: translateY(0) scale(1); }
+@keyframes avatar-verify-loop {
+  0%, 100% { transform: translateX(0) rotate(0deg); }
+  50% { transform: translateX(.35px) rotate(.16deg); }
 }
-@keyframes avatar-fail {
-  0% { transform: translateY(0) rotate(0deg); }
-  45% { transform: translateY(1.8px) rotate(-.55deg); }
-  100% { transform: translateY(1px) rotate(-.25deg); }
+@keyframes avatar-compact-loop {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(.45px) scale(.998); }
 }
+@keyframes avatar-wait-loop {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-.35px) rotate(.28deg); }
+}
+@keyframes avatar-listen-loop {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-.4px) rotate(-.12deg); }
+}
+@keyframes avatar-speak-loop {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  45% { transform: translateY(-.45px) rotate(.1deg); }
+}
+
 @media (prefers-reduced-motion: no-preference) {
-  .avatar-stage.is-idle .avatar-breath { transform-origin: 50% 100%; animation: whale-breath 4.4s ease-in-out infinite; }
-  .avatar-stage.is-working .avatar-breath { transform-origin: 50% 100%; animation: avatar-focus 2.35s ease-in-out infinite; }
-  .avatar-stage.is-waiting .avatar-breath { transform-origin: 50% 100%; animation: avatar-wait 2.8s ease-in-out infinite; }
-  .avatar-stage.is-listening .avatar-breath { transform-origin: 50% 100%; animation: avatar-listen 1.6s ease-in-out infinite; }
-  .avatar-stage.is-speaking .avatar-breath { transform-origin: 50% 100%; animation: avatar-speak .82s ease-in-out infinite; }
-  .avatar-stage.is-completed .avatar-breath { transform-origin: 50% 100%; animation: avatar-finish .72s cubic-bezier(.22, 1, .36, 1) 1; }
-  .avatar-stage.is-failed .avatar-breath { transform-origin: 50% 100%; animation: avatar-fail .55s ease-out 1 both; }
-  .avatar-stage.is-listening .avatar-gesture::before,
-  .avatar-stage.is-speaking .avatar-gesture::before { animation: avatar-voice-halo 2.2s ease-in-out infinite; }
+  .avatar-breath { transform-origin: 50% 100%; animation: whale-breath var(--avatar-breath-duration) ease-in-out infinite; }
+  .avatar-stage[data-task='planning'] .avatar-state-loop { animation: avatar-plan-loop var(--avatar-task-duration) ease-in-out infinite; }
+  .avatar-stage[data-task='executing'] .avatar-state-loop { animation: avatar-execute-loop var(--avatar-task-duration) ease-in-out infinite; }
+  .avatar-stage[data-task='verifying'] .avatar-state-loop { animation: avatar-verify-loop var(--avatar-task-duration) ease-in-out infinite; }
+  .avatar-stage[data-task='compacting'] .avatar-state-loop { animation: avatar-compact-loop 2.8s ease-in-out infinite; }
+  .avatar-stage[data-task='waiting'] .avatar-state-loop { animation: avatar-wait-loop var(--avatar-task-duration) ease-in-out infinite; }
+  .avatar-stage[data-voice='listening'] .avatar-look { animation: avatar-listen-loop 2.15s ease-in-out infinite; }
+  .avatar-stage[data-voice='speaking'] .avatar-look { animation: avatar-speak-loop 1.18s ease-in-out infinite; }
+  body.is-resting .avatar-breath { animation-play-state: paused; }
 }
-body.is-resting .avatar-breath { animation-play-state: paused; }
+.avatar-stage[data-interaction='panel'][data-voice='silent'] .avatar-look { transform: translateX(-.35px) rotate(-.1deg); transform-origin: 50% 58%; }
+.avatar-stage[data-interaction='dragging'] .avatar-state-loop,
+.avatar-stage[data-interaction='dragging'] .avatar-look { animation: none; transform: none; }
+
+/* Cute state cues replace the old large oval halo. They stay close to the
+   face, use each persona's accent and remain static under reduced motion. */
+.avatar-state-effects { position: absolute; z-index: 3; inset: 6px 0 0; color: rgb(var(--avatar-accent)); pointer-events: none; }
+.avatar-state-effects > span { position: absolute; display: none; }
+.avatar-listen-rings { left: calc(var(--avatar-face-x) - 35%); top: calc(var(--avatar-face-y) - 4%); width: 15px; height: 24px; }
+.avatar-listen-rings i { position: absolute; inset: 3px 2px; border: 1.5px solid currentColor; border-right: 0; border-top-color: transparent; border-bottom-color: transparent; border-radius: 50% 0 0 50%; opacity: .72; }
+.avatar-listen-rings i + i { inset: 0 -3px; opacity: .38; }
+.avatar-stage[data-voice='listening'] .avatar-listen-rings { display: block; }
+.avatar-speech-bars { left: calc(var(--avatar-face-x) + 24%); top: calc(var(--avatar-face-y) + 6%); align-items: end; gap: 2px; height: 13px; }
+.avatar-speech-bars i { display: block; width: 2px; height: 6px; border-radius: 2px; background: currentColor; }
+.avatar-speech-bars i:nth-child(2) { height: 11px; }
+.avatar-speech-bars i:nth-child(3) { height: 8px; }
+.avatar-stage[data-voice='speaking'] .avatar-speech-bars { display: flex; }
+.avatar-success-sparkles { inset: 0; }
+.avatar-success-sparkles i { position: absolute; width: 6px; height: 6px; }
+.avatar-success-sparkles i::before, .avatar-success-sparkles i::after { content: ''; position: absolute; top: 50%; left: 0; width: 100%; height: 1.5px; border-radius: 2px; background: currentColor; }
+.avatar-success-sparkles i::after { transform: rotate(90deg); }
+.avatar-success-sparkles i:nth-child(1) { left: 19%; top: 20%; }
+.avatar-success-sparkles i:nth-child(2) { right: 13%; top: 29%; transform: scale(.72); }
+.avatar-success-sparkles i:nth-child(3) { right: 22%; top: 11%; transform: scale(.48); }
+.avatar-stage[data-task='completed'] .avatar-success-sparkles { display: block; }
+.avatar-wait-mark { left: calc(var(--avatar-face-x) + 22%); top: calc(var(--avatar-face-y) - 27%); color: currentColor; font-size: var(--text-md); font-weight: 750; line-height: 1; }
+.avatar-stage[data-task='waiting'] .avatar-wait-mark { display: block; }
+
+@keyframes avatar-cue-rings { 0%, 100% { opacity: .25; transform: scale(.88); } 50% { opacity: .8; transform: scale(1); } }
+@keyframes avatar-cue-bars { 0%, 100% { transform: scaleY(.55); } 50% { transform: scaleY(1); } }
+@keyframes avatar-cue-spark { 0% { opacity: 0; transform: scale(.2) rotate(0); } 45% { opacity: 1; transform: scale(1.15) rotate(15deg); } 100% { opacity: .2; transform: scale(.72) rotate(30deg); } }
+@keyframes avatar-cue-wait { 0%, 100% { transform: rotate(0); } 45% { transform: rotate(8deg); } }
+@media (prefers-reduced-motion: no-preference) {
+  .avatar-listen-rings i { animation: avatar-cue-rings 1.75s ease-in-out infinite; }
+  .avatar-listen-rings i + i { animation-delay: .28s; }
+  .avatar-speech-bars i { transform-origin: 50% 100%; animation: avatar-cue-bars .72s ease-in-out infinite; }
+  .avatar-speech-bars i:nth-child(2) { animation-delay: -.24s; }
+  .avatar-speech-bars i:nth-child(3) { animation-delay: -.42s; }
+  .avatar-success-sparkles i { animation: avatar-cue-spark .9s cubic-bezier(.22, 1, .36, 1) both; }
+  .avatar-success-sparkles i:nth-child(2) { animation-delay: .1s; }
+  .avatar-success-sparkles i:nth-child(3) { animation-delay: .2s; }
+  .avatar-wait-mark { transform-origin: 50% 100%; animation: avatar-cue-wait 2.1s ease-in-out infinite; }
+}
 
 /* 余额窗口就是卡片本身：右侧留 8px 给小三角，高度由主进程按人物档位设置。 */
 body.balance-window .balance-peek { top: 0; left: 0; right: 8px; bottom: auto; width: auto; height: 100%; }
 body.balance-window .balance-peek::after { top: calc(50% - 6px); right: -6px; bottom: auto; border-right: 1px solid rgba(160, 192, 248, .30); border-top: 1px solid rgba(160, 192, 248, .30); border-bottom: 0; }
+
+/* 打包/重启请示的小批准卡：绿勾批准、红叉拒绝。 */
+.avatar-approval { position: absolute; right: 18px; bottom: 208px; z-index: 12; display: flex; align-items: center; gap: 10px; max-width: 300px; padding: 10px 12px; border-radius: 12px; background: rgba(16, 33, 66, .96); border: 1px solid rgba(150, 190, 255, .35); box-shadow: 0 10px 30px rgba(0, 0, 0, .45); color: #e8f1ff; }
+.avatar-approval-copy { display: grid; gap: 3px; min-width: 0; }
+.avatar-approval-copy strong { font-size: var(--text-sm); font-weight: 600; }
+.avatar-approval-copy span { font-size: var(--text-xs); color: #a9bfe2; overflow-wrap: anywhere; }
+.avatar-approval-actions { display: flex; gap: 6px; flex: none; }
+.avatar-approval-actions button { width: 28px; height: 28px; border: 0; border-radius: 9px; font-size: 1.25em; line-height: 1; cursor: pointer; }
+.avatar-approval-yes { background: rgba(60, 170, 110, .28); color: #7fe0a8; }
+.avatar-approval-yes:hover { background: rgba(60, 170, 110, .5); color: #b6ffd4; }
+.avatar-approval-no { background: rgba(200, 80, 90, .24); color: #ff9aa2; }
+.avatar-approval-no:hover { background: rgba(200, 80, 90, .45); color: #ffd0d4; }
+

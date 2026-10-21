@@ -6,11 +6,11 @@ import type { UserAttachment } from '../shared/contracts'
 
 const DEFAULT_FILE_LIMIT = 96 * 1024
 const DEFAULT_TOTAL_LIMIT = 192 * 1024
-const DEFAULT_IMAGE_LIMIT = 5 * 1024 * 1024
+const DEFAULT_IMAGE_LIMIT = 50 * 1024 * 1024
 const DROPPED_TEXT_LIMIT = 6 * 1024
 /** Dropped files have no size limit of their own, but a hover preview must not
  *  ship an unbounded blob into the renderer. */
-const PREVIEW_IMAGE_LIMIT = 12 * 1024 * 1024
+const PREVIEW_IMAGE_LIMIT = 24 * 1024 * 1024
 const MAX_REFERENCES = 5
 const MAX_DIRECTORY_ITEMS = 80
 const MAX_DIRECTORY_VISITS = 1_000
@@ -324,10 +324,10 @@ function decodeBase64Payload(input: string, maxBytes: number): Buffer {
   const match = /^data:[^;,]+;base64,/iu.exec(input)
   const encoded = match ? input.slice(match[0].length) : input
   if (!encoded || encoded.length > Math.ceil(maxBytes / 3) * 4 + 4 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded)) {
-    throw new Error('附件数据无效或超过大小限制。')
+    throw new Error(`附件数据无效或超过 ${Math.max(1, Math.round(maxBytes / 1024 / 1024))} MB 上限。`)
   }
   const bytes = Buffer.from(encoded, 'base64')
-  if (!bytes.length || bytes.length > maxBytes) throw new Error('附件数据无效或超过大小限制。')
+  if (!bytes.length || bytes.length > maxBytes) throw new Error(`附件数据无效或超过 ${Math.max(1, Math.round(maxBytes / 1024 / 1024))} MB 上限。`)
   return bytes
 }
 
@@ -387,9 +387,13 @@ export function validAttachmentList(value: unknown): value is UserAttachment[] {
 
 export function attachmentContext(attachments: readonly UserAttachment[]): string {
   return attachments.map(({ name, content, path: filePath }) => {
+    const isImage = /\.(?:png|jpe?g|gif|webp)$/iu.test(name)
     const source = filePath ? `\n本机绝对路径：${JSON.stringify(filePath)}\n如当前模型具有本地文件工具，可按需读取；先核对文件类型。` : ''
+    const imageHint = isImage && filePath
+      ? '\n这是一张图片；如果直接看不到图像内容，请用读图工具打开上面的路径。'
+      : ''
     const inline = content ? `\n文件内容：\n${content}` : ''
-    return `\n\n[用户附件：${name}]${source}${inline}`
+    return `\n\n[用户附件：${name}]${source}${imageHint}${inline}`
   }).join('')
 }
 
@@ -450,10 +454,10 @@ function decodeImageData(input: string, maxBytes: number): { bytes: Buffer; decl
   const declaredType = match?.[1]?.toLowerCase()
   const encoded = match ? input.slice(match[0].length) : input
   if (!encoded || encoded.length > Math.ceil(maxBytes / 3) * 4 + 4 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(encoded)) {
-    throw new Error('图片数据无效或超过大小限制。')
+    throw new Error(`图片数据无效或超过 ${Math.max(1, Math.round(maxBytes / 1024 / 1024))} MB 上限。`)
   }
   const bytes = Buffer.from(encoded, 'base64')
-  if (!bytes.length || bytes.length > maxBytes) throw new Error('图片数据无效或超过大小限制。')
+  if (!bytes.length || bytes.length > maxBytes) throw new Error(`图片数据无效或超过 ${Math.max(1, Math.round(maxBytes / 1024 / 1024))} MB 上限。`)
   return { bytes, declaredType }
 }
 

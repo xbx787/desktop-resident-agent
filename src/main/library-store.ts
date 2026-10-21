@@ -1,4 +1,4 @@
-import { existsSync, promises as fsp } from 'node:fs'
+import { existsSync, promises as fsp, readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import type { LibraryItem, LibraryKind, LibrarySnapshot } from '../shared/libraries'
 import { isLibraryKind } from '../shared/libraries'
@@ -35,15 +35,27 @@ function isInside(root: string, candidate: string): boolean {
 
 /** Index-backed storage for the three libraries. Installed code lives under
  *  data/libraries/<kind>/<id>; the index only records what is installed. */
+export interface LibraryEnvironment {
+  /** Claude's user directory; defaults to the OS home. */
+  homeDir?: string
+  /** Active workspace, scanned for a project-level .claude folder. */
+  workspace?: string
+}
+
 export class LibraryStore {
   private readonly root: string
   private readonly file: string
+  private readonly home?: string
+  private workspace?: string
   private installQueue: Promise<unknown>
   private cached: LibraryItem[] | null = null
 
-  constructor(dataRoot: string) {
+  constructor(dataRoot: string, environment: LibraryEnvironment = {}) {
     this.root = path.join(dataRoot, 'libraries')
     this.file = path.join(this.root, 'index.json')
+    // Discovery is opt-in: callers pass the real home, tests stay isolated.
+    this.home = environment.homeDir
+    this.workspace = environment.workspace
     this.installQueue = Promise.resolve()
   }
 
@@ -67,12 +79,141 @@ export class LibraryStore {
     this.cached = items
   }
 
+  /** Installed entries plus read-only entries found in the Claude config and
+   *  plugin directories. The scan runs on every call, so a skill dropped into
+   *  a known folder appears the next time the settings page asks. */
   async list(): Promise<LibraryItem[]> {
-    return [...await this.read()]
+    const items = [...await this.read()]
+    const seen = new Set(items.map((item) => `${item.kind}:${item.id}`))
+    for (const item of this.scanExternal()) {
+      const key = `${item.kind}:${item.id}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      items.push(item)
+    }
+    return items
+  }
+
+  private scanExternal(): LibraryItem[] {
+    if (!this.home) return []
+    const plugins = this.scanPlugins()
+    return [...this.scanMcp(), ...plugins, ...this.scanSkills(plugins)]
+  }
+
+  private scanMcp(): LibraryItem[] {
+    if (!this.home) return []
+    const files = [
+      { file: path.join(this.home, '.claude.json'), source: '~/.claude.json' },
+      ...(this.workspace ? [{ file: path.join(this.workspace, '.mcp.json'), source: '项目 .mcp.json' }] : [])
+    ]
+    const items: LibraryItem[] = []
+    for (const { file, source } of files) {
+      const servers = readJson(file)?.mcpServers
+      if (!servers || typeof servers !== 'object' || Array.isArray(servers)) continue
+      for (const [name, raw] of Object.entries(servers as Record<string, unknown>)) {
+        if (!raw || typeof raw !== 'object') continue
+        const server = raw as Record<string, unknown>
+        const url = typeof server.url === 'string' && server.url ? server.url : undefined
+        const command = typeof server.command === 'string' && server.command ? server.command : undefined
+        if (!url && !command) continue
+        const args = Array.isArray(server.args)
+          ? server.args.filter((arg): arg is string => typeof arg === 'string') : undefined
+        const env = server.env && typeof server.env === 'object' && !Array.isArray(server.env)
+          ? Object.keys(server.env as Record<string, unknown>) : undefined
+        items.push({
+          id: externalId('mcp', `${source}:${name}`),
+          kind: 'mcp',
+          name,
+          description: url ? '已在 Claude 配置中：HTTP MCP 服务器' : '已在 Claude 配置中：stdio MCP 服务器',
+          source,
+          launch: {
+            type: 'mcp',
+            ...(url ? { url } : { command: command!, ...(args?.length ? { args } : {}) }),
+            ...(env?.length ? { env } : {})
+          },
+          external: true
+        })
+      }
+    }
+    return items
+  }
+
+  private scanPlugins(): LibraryItem[] {
+    if (!this.home) return []
+    const registry = readJson(path.join(this.home, '.claude', 'plugins', 'installed_plugins.json'))
+    const plugins = registry?.plugins
+    if (!plugins || typeof plugins !== 'object' || Array.isArray(plugins)) return []
+    const items: LibraryItem[] = []
+    for (const [key, value] of Object.entries(plugins as Record<string, unknown>)) {
+      const install = Array.isArray(value) ? value[0] : value
+      if (!install || typeof install !== 'object') continue
+      const record = install as Record<string, unknown>
+      const installPath = typeof record.installPath === 'string' ? record.installPath : undefined
+      if (!installPath || !existsSync(installPath)) continue
+      const manifest = readJson(path.join(installPath, '.claude-plugin', 'plugin.json'))
+      const [name, marketplace] = key.split('@')
+      items.push({
+        id: externalId('plugin', key),
+        kind: 'plugin',
+        name: name || key,
+        description: typeof manifest?.description === 'string'
+          ? manifest.description.slice(0, 2_000)
+          : `已安装的 Claude 插件${marketplace ? `（${marketplace}）` : ''}`,
+        source: 'Claude 插件目录',
+        ...(typeof record.version === 'string' ? { version: record.version } : {}),
+        ...(typeof manifest?.license === 'string' ? { license: manifest.license } : {}),
+        ...(typeof manifest?.homepage === 'string' ? { homepage: manifest.homepage } : {}),
+        ...(typeof record.installedAt === 'string' ? { installedAt: record.installedAt } : {}),
+        path: installPath,
+        external: true
+      })
+    }
+    return items
+  }
+
+  private scanSkills(plugins: LibraryItem[]): LibraryItem[] {
+    const roots: Array<{ dir: string; source: string }> = [
+      ...(this.home ? [{ dir: path.join(this.home, '.claude', 'skills'), source: '~/.claude/skills' }] : []),
+      { dir: path.join(this.root, '..', 'claude', 'skills'), source: 'Claude 配置目录' },
+      ...(this.workspace ? [{ dir: path.join(this.workspace, '.claude', 'skills'), source: '项目 .claude/skills' }] : []),
+      ...plugins.filter((plugin) => plugin.path).map((plugin) => ({
+        dir: path.join(plugin.path!, 'skills'), source: `插件 ${plugin.name}`
+      }))
+    ]
+    const items: LibraryItem[] = []
+    for (const { dir, source } of roots) {
+      if (items.length >= 400) break
+      let entries: string[]
+      try { entries = readdirSync(dir) } catch { continue }
+      for (const entry of entries) {
+        if (items.length >= 400) break
+        const skillDir = path.join(dir, entry)
+        const manifest = path.join(skillDir, 'SKILL.md')
+        try {
+          if (!statSync(skillDir).isDirectory() || !existsSync(manifest)) continue
+        } catch { continue }
+        const meta = skillMeta(manifest, entry)
+        items.push({
+          id: externalId('skill', `${source}:${meta.name}`),
+          kind: 'skill',
+          name: meta.name,
+          description: meta.description,
+          source,
+          path: skillDir,
+          external: true
+        })
+      }
+    }
+    return items
   }
 
   async snapshot(): Promise<LibrarySnapshot> {
     return { items: await this.list(), busy: false }
+  }
+
+  /** Keeps the project-level .claude scan pointed at the current workspace. */
+  setWorkspace(workspace: string): void {
+    this.workspace = workspace
   }
 
   /** Installs one market entry. MCP entries are configuration only; skills
@@ -203,4 +344,39 @@ function validItem(value: unknown): value is LibraryItem {
 
 export function libraryId(kind: LibraryKind, sourceId: string): string {
   return `${sourceId}`.trim().slice(0, 300) || kind
+}
+
+function readJson(file: string): Record<string, unknown> | null {
+  try {
+    const value: unknown = JSON.parse(readFileSync(file, 'utf8'))
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+  } catch {
+    return null
+  }
+}
+
+/** Reads the small YAML frontmatter at the top of a SKILL.md. */
+function skillMeta(file: string, fallback: string): { name: string; description: string } {
+  try {
+    const text = readFileSync(file, 'utf8').slice(0, 16_000)
+    const block = /^---\r?\n([\s\S]*?)\r?\n---/u.exec(text)?.[1] ?? ''
+    const field = (key: string): string | undefined => {
+      const match = new RegExp(`^${key}:\\s*(.+)$`, 'mu').exec(block)
+      return match?.[1]?.trim().replace(/^["']|["']$/gu, '')
+    }
+    return {
+      name: field('name') || fallback,
+      description: (field('description') || '本地技能').slice(0, 2_000)
+    }
+  } catch {
+    return { name: fallback, description: '本地技能' }
+  }
+}
+
+/** A stable id for a discovered entry. The hash keeps same-named skills from
+ *  different folders distinct even when the readable part collapses. */
+function externalId(kind: LibraryKind, key: string): string {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < key.length; index += 1) hash = Math.imul(hash ^ key.charCodeAt(index), 0x01000193)
+  return `local-${kind}-${safeSegment(key)}-${(hash >>> 0).toString(36)}`
 }

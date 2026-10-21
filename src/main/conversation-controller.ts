@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { AppSnapshot, ApprovalMode, AskAnswers, ContextUsageSnapshot, ConversationBatchAction, ConversationBatchResult, ModelMode, ModelProfile, TimelineEntry, UserAttachment } from '../shared/contracts'
+import type { AgentCapabilities, AppSnapshot, ApprovalMode, AskAnswers, ContextUsageSnapshot, ConversationBatchAction, ConversationBatchResult, ModelMode, ModelProfile, TimelineEntry, UserAttachment } from '../shared/contracts'
 import { AUTO_COMPACT_DEFAULT_PERCENT } from '../shared/contracts'
 import { deleteTurnEntries, type AgentRuntime } from './agent-runtime'
 import type { DialogueLine } from './deepseek'
@@ -107,10 +107,10 @@ export class ConversationController {
 
   constructor(
     private readonly store: ConversationStore,
-    private readonly createRuntime: (onChange: () => void) => AgentRuntime,
+    private readonly createRuntime: (conversationId: string, onChange: () => void) => AgentRuntime,
     private readonly onChange: () => void = () => {},
     private readonly onBackgroundError: (error: unknown) => void = () => {},
-    private readonly generateTitle?: (source: string) => Promise<string | null>,
+    private readonly generateTitle?: (source: string, locale?: 'auto' | 'zh' | 'en', model?: string) => Promise<string | null>,
     /** Materialized on first load when no profile exists yet — the launch
      *  environment's own setup, so the model menu never starts empty. */
     private readonly seedProfile?: ModelProfile,
@@ -215,6 +215,19 @@ export class ConversationController {
       [...this.pending.values()].every((queue) => queue.length === 0)
   }
 
+  /** 除 exceptId 之外，是否还有对话在跑：回合、排队消息、临时会话或 drain。
+   *  重启请示用它判断“还有没有别人的任务”，不把请求者自己的回合算成别人。 */
+  hasRunningWorkExcept(exceptId?: string): boolean {
+    const ids = new Set<string>([...this.runtimes.keys(), ...this.pending.keys(), ...this.drains.keys()])
+    for (const id of ids) {
+      if (id === exceptId) continue
+      if (this.drains.has(id) || (this.pending.get(id)?.length ?? 0) > 0) return true
+      if (this.runtimes.get(id)?.isRunning()) return true
+      if (this.isSideBusy(id)) return true
+    }
+    return false
+  }
+
   /** Drops every live runtime after the workspace changed. Each conversation
    *  rebuilds its client on the next send, against the new cwd. Callers must
    *  check allConversationsIdle first. */
@@ -274,7 +287,7 @@ export class ConversationController {
     if (existing) return existing
     const rec = record ?? (await this.store.getConversation(id))
     if (!rec) throw new ConversationStoreError('NOT_FOUND', '找不到这个会话。')
-    const runtime = this.createRuntime(() => this.handleRuntimeChange())
+    const runtime = this.createRuntime(id, () => this.handleRuntimeChange())
     runtime.conversationId = id
     runtime.restoreConversation(rec)
     runtime.setModelProfile(this.activeProfile())
@@ -285,6 +298,7 @@ export class ConversationController {
       runtime.setWebSearch(this.library.settings.webSearchEnabled !== false)
       runtime.setPersona(this.library.settings.personaId ?? 'xiaojing')
       runtime.setAutoCompactPercent(this.library.settings.autoCompactPercent ?? AUTO_COMPACT_DEFAULT_PERCENT)
+      runtime.syncPromptSettings(this.library.settings.outputStyle, this.library.settings.appendSystemPrompt, this.library.settings.loadUserSettings !== false)
       runtime.setGoalBudget(this.library.settings.goalMaxIterations, this.library.settings.goalMaxMinutes)
     }
     // A budget-exceeded goal is cleared through the same /goal clear path the
@@ -343,6 +357,15 @@ export class ConversationController {
     for (const runtime of this.runtimes.values()) runtime.stop(undefined, silent)
   }
 
+  /** Closes model processes (DSH runtimes, SDK queries) after the final save.
+   *  Keep this separate from stopAll: stopping preserves the transcript, while
+   *  disposal releases the child processes and loopback servers. */
+  async disposeAll(): Promise<void> {
+    const runtimes = [...this.runtimes.values()]
+    this.runtimes.clear()
+    await Promise.allSettled(runtimes.map((runtime) => runtime.dispose()))
+  }
+
   /** Writes every live conversation's current timeline before the app exits.
    *  A turn persists when it finishes; without this, whatever happened since
    *  the last save vanished on restart. */
@@ -355,6 +378,11 @@ export class ConversationController {
         this.onBackgroundError(error)
       }
     }
+  }
+
+  /** 设置窗口要显示的内核能力。 */
+  getCapabilities(): AgentCapabilities {
+    return this.displayedRuntime()?.getCapabilities() ?? {}
   }
 
   getSnapshot(): ControllerSnapshot {
@@ -462,6 +490,7 @@ export class ConversationController {
       runtime.setWebSearch(this.library.settings.webSearchEnabled !== false)
       runtime.setPersona(this.library.settings.personaId ?? 'xiaojing')
       runtime.setAutoCompactPercent(this.library.settings.autoCompactPercent ?? AUTO_COMPACT_DEFAULT_PERCENT)
+      runtime.syncPromptSettings(this.library.settings.outputStyle, this.library.settings.appendSystemPrompt, this.library.settings.loadUserSettings !== false)
       runtime.setGoalBudget(this.library.settings.goalMaxIterations, this.library.settings.goalMaxMinutes)
     }
     this.emit()
@@ -498,7 +527,9 @@ export class ConversationController {
     // The first-line fallback title is always written; only the model pass
     // behind it is optional.
     if (!this.library?.settings.enableAutoTitleGeneration) return
-    const clean = await generate(source).then((title) => title?.trim() ?? null, () => null)
+    const locale = this.library?.settings.titleLocale ?? 'auto'
+    const model = this.library?.settings.titleModel ?? 'deepseek-flash'
+    const clean = await generate(source, locale, model).then((title) => title?.trim() ?? null, () => null)
     if (!clean || clean === fallback) return
     try {
       await this.serialize(async () => {
@@ -583,7 +614,18 @@ export class ConversationController {
   }
 
   /** Acknowledges once safely queued on disk; it never waits for the model. */
-  async sendMessage(text: string, attachments: UserAttachment[] = [], strategy: SendStrategy = 'queue', conversationId?: string): Promise<PendingMessage> {
+  /** 系统提示不冒充用户：进模型上下文和时间线，但不出用户头像和发言框。 */
+  async sendSystemMessage(text: string, conversationId?: string): Promise<void> {
+    await this.initialize()
+    const id = conversationId ?? this.activeId
+    if (!id) throw new ConversationStoreError('NOT_FOUND', '找不到这个会话。')
+    const target = await this.store.getConversation(id)
+    if (!target) throw new ConversationStoreError('NOT_FOUND', '找不到这个会话。')
+    const runtime = await this.ensureRuntime(id, target)
+    await runtime.sendMessage(text, [], '', undefined, true)
+  }
+
+  async sendMessage(text: string, attachments: UserAttachment[] = [], strategy: SendStrategy = 'queue', conversationId?: string, divider = false): Promise<PendingMessage> {
     await this.initialize()
     const id = conversationId ?? this.activeId
     if (!id) throw new ConversationStoreError('NOT_FOUND', '找不到这个会话。')
@@ -601,6 +643,7 @@ export class ConversationController {
     })
     const message: PendingMessage = {
       id: randomUUID(), text: clean, attachments: structuredClone(attachments), createdAt: new Date().toISOString(),
+      ...(divider ? { divider: true } : {}),
       ...(sessionContext ? { sessionContext } : {})
     }
     return this.serialize(async () => {
@@ -648,8 +691,7 @@ export class ConversationController {
           await this.persistConversation(id)
           return visiblePending(message)
         }
-        // Native steering is only available inside an active Claude Code turn.
-        // Otherwise place this guidance next, without stopping the turn or dropping queued work.
+        // 已有一条待确认的插话，或投递失败：消息留在队列，不覆盖、不打断当前回合。
         queue.unshift(message)
       } else if (!runtime.isRunning() && !queue.length && !this.drains.has(id)) {
         // Idle with an empty queue: hand the message to the drain as its seed
@@ -720,7 +762,7 @@ export class ConversationController {
           ? (next.text.split(/\r?\n/u, 1)[0].trim() || `附件：${next.attachments[0]?.name ?? '对话'}`).slice(0, 60)
           : undefined
         const beforeCount = runtime.exportConversationState().timeline.length
-        const run = runtime.sendMessage(next.text, next.attachments, next.sessionContext)
+        const run = runtime.sendMessage(next.text, next.attachments, next.sessionContext, undefined, false, next.divider === true)
         try {
           await this.persistConversation(id, title)
         } catch (error) {
@@ -837,6 +879,7 @@ export class ConversationController {
       const message = queue.splice(index, 1)[0]
       const runtime = this.runtimes.get(owner)
       if (!runtime || !await runtime.steerMessage(message.text, message.attachments, message.sessionContext)) {
+        // 已有待确认的插话或投递失败：退回队列，不覆盖也不打断。
         queue.unshift(message)
       }
       await this.persistConversation(owner)
@@ -985,6 +1028,7 @@ export class ConversationController {
     const runtime = this.runtimes.get(id)
     if (!runtime) return
     runtime.stop()
+    void runtime.dispose().catch(() => undefined)
     this.runtimes.delete(id)
     this.drains.delete(id)
     this.drainGenerations.delete(id)
@@ -1001,6 +1045,16 @@ export class ConversationController {
       if (patch.userName !== undefined || patch.assistantName !== undefined) {
         const identity = { userName: settings.userName, assistantName: settings.assistantName }
         for (const runtime of this.runtimes.values()) runtime.setIdentity(identity)
+      }
+      // Prompt-shaping changes must reach runtimes before refreshLibrary's
+      // quiet sync, so each runtime can discard a transcript that recorded
+      // the old system prompt.
+      if (patch.outputStyle !== undefined || patch.appendSystemPrompt !== undefined || patch.loadUserSettings !== undefined) {
+        for (const runtime of this.runtimes.values()) {
+          if (patch.outputStyle !== undefined) runtime.setOutputStyle(patch.outputStyle)
+          if (patch.appendSystemPrompt !== undefined) runtime.setAppendSystemPrompt(patch.appendSystemPrompt)
+          if (patch.loadUserSettings !== undefined) runtime.setLoadUserSettings(patch.loadUserSettings)
+        }
       }
       await this.refreshLibrary()
       if (patch.modelProfiles !== undefined || patch.activeModelProfileId !== undefined ||

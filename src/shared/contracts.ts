@@ -3,6 +3,20 @@ import type { LibraryItem } from './libraries'
 export type AvatarState = 'idle' | 'thinking' | 'listening' | 'speaking' | 'acting' | 'success' | 'error'
 export type ModelMode = 'demo' | 'live' | 'claude_code'
 export type BubbleLayout = 'empty' | 'composer' | 'composer_attachments' | 'composer_models' | 'full'
+/** 展开方向：人物在上半屏时窗口向下，在下半屏时窗口向上（跟随人物）。 */
+export type PanelDirection = 'up' | 'down'
+
+/** 聊天面板相对人物的位置；默认上方。 */
+export type PanelPlacement = 'top' | 'bottom' | 'left' | 'right'
+
+/** 聊天面板配色；状态色不随它变化。 */
+export type PanelTheme = 'dark' | 'light'
+/** Which agent runtime executes turns. `dsh` is a gray preview; Claude stays
+ *  the default until the DSH adapter passes full regression. */
+export type AgentKernelKind = 'claude_code' | 'dsh'
+export function isAgentKernelKind(value: unknown): value is AgentKernelKind {
+  return value === 'claude_code' || value === 'dsh'
+}
 
 /** Thinking depth: DeepSeek's Anthropic-format effort values plus "off".
  *  Their docs map medium→high, xhigh→high, so we offer only real stops. */
@@ -14,6 +28,18 @@ export type UiSize = 'small' | 'medium' | 'large'
 
 /** 桌面人物的大小档：小 = 当前 128px 长边，中 = 之前的 139.5px，大 = 152px。 */
 export type AvatarSize = 'small' | 'medium' | 'large'
+
+/** 工具行右侧信息的详细程度：full = 参数/改动行数都显示；brief = 只留很短
+ *  的参数预览；name = 只显示工具名和状态。 */
+export type ToolRowDetail = 'full' | 'brief' | 'name'
+
+/** The desktop portrait implementation. `live2d-preview` is deliberately a
+ * fixed technical preview rather than an arbitrary model URL. */
+export type AvatarRenderer = 'sprite' | 'live2d-preview'
+
+export function isAvatarRenderer(value: unknown): value is AvatarRenderer {
+  return value === 'sprite' || value === 'live2d-preview'
+}
 
 /** The portrait's visible rectangle inside the avatar window, in window
  *  coordinates. The renderer measures the trimmed artwork and reports it so
@@ -83,6 +109,9 @@ export interface TimelineEntry {
    *  that turn in place — no second avatar, no rail mark — instead of
    *  opening a block of its own. */
   interrupted?: boolean
+  /** A restart boundary: render as a line with the text in the middle and
+   *  start a new segment instead of showing a user bubble. */
+  divider?: boolean
   /** Image attachments the message carried, so the panel can show the pictures
    *  themselves instead of a file list. */
   images?: Array<{ name: string; path: string }>
@@ -206,18 +235,44 @@ export interface ConversationSettings {
   /** The expanded panel's size, as the user dragged it. Absent means "use the
    *  default full-height panel". The compact bubble keeps its fixed size. */
   panelSize?: { width: number; height: number }
+  /** 聊天面板贴在人物的哪一侧；缺省按“上方”。 */
+  panelPlacement?: PanelPlacement
+  /** 聊天面板的配色；缺省深色。状态色两套共用。 */
+  panelTheme?: PanelTheme
   /** The whole interface's type scale. "small" is the original look. */
   uiSize: UiSize
   /** 桌面人物的显示大小；命中区和窗口都跟着它走。 */
   avatarSize: AvatarSize
+  /** 工具行显示多少细节。缺省按 brief 处理。 */
+  toolRowDetail?: ToolRowDetail
+  /** 桌面人物的渲染实现。缺失或无效的旧数据回退到标准插画。 */
+  avatarRenderer?: AvatarRenderer
   /** 是否允许模型联网搜索/抓取。关闭时工具直接从工具列表移除，并在
    *  人设里明确告知不可搜索，避免模型反复尝试。 */
   webSearchEnabled?: boolean
   /** 当前人设预设（xiaojing / rin / rem / yui / yukino），同时决定人设文字、
    *  对话头像和桌面主角色。 */
   personaId?: string
+  /** Agent 内核；缺失表示 Claude Code。切换只影响之后创建的运行时。 */
+  agentKernel?: AgentKernelKind
   /** 上下文用到多少百分比时自动压缩，50–90，默认 80。 */
   autoCompactPercent?: number
+  /** Claude Code 的回答风格；空值表示跟随 CLI 默认。 */
+  outputStyle?: string
+  /** 追加在人设之后的额外指令，留空表示不加。 */
+  appendSystemPrompt?: string
+  /** 新内容到达时是否自动跟随到底部。默认开启。 */
+  autoScroll?: boolean
+  /** 文件编辑类工具行是否默认展开。默认关闭。 */
+  expandFileEditsByDefault?: boolean
+  /** 会话库排序：最近更新或创建时间。默认最近更新。 */
+  sessionSort?: 'updated' | 'created'
+  /** 自动生成标题时使用的语言；auto 跟随对话语言。 */
+  titleLocale?: 'auto' | 'zh' | 'en'
+  /** 自动生成标题使用的 DeepSeek 模型。 */
+  titleModel?: string
+  /** 是否加载 ~/.claude 的用户设置（权限、hooks、输出风格等）。默认开启。 */
+  loadUserSettings?: boolean
 }
 
 /** One named model endpoint. Main-process storage encrypts credentials;
@@ -281,6 +336,8 @@ export interface PendingMessage {
   text: string
   attachments: UserAttachment[]
   createdAt: string
+  /** A restart divider: opens a new segment but renders as a cut line. */
+  divider?: boolean
 }
 
 export interface ContextUsageSnapshot {
@@ -328,13 +385,28 @@ export interface TaskMetrics {
   generationMs?: number
 }
 
-/** Claude Code's permission modes, carried through unchanged. `default` asks
- *  before every sensitive tool call, `acceptEdits` lets file edits through,
- *  `plan` only researches and proposes, and `bypassPermissions` runs as-is. */
-export type ApprovalMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
+/** DSH's sandbox presets, plus the app's own self-evolution tier.
+ *
+ *  `read-only` forbids writes, `workspace-write` allows changes inside the
+ *  workspace and asks when DSH requests consent, `danger-full-access` runs
+ *  without sandbox prompts, and `selfEvolve` is full access plus app-level
+ *  source editing, packaging, restart, and cross-restart continuation. */
+export type ApprovalMode = 'read-only' | 'workspace-write' | 'danger-full-access' | 'selfEvolve'
 
 export function isApprovalMode(value: unknown): value is ApprovalMode {
-  return value === 'default' || value === 'acceptEdits' || value === 'plan' || value === 'bypassPermissions'
+  return value === 'read-only' || value === 'workspace-write' ||
+    value === 'danger-full-access' || value === 'selfEvolve'
+}
+
+/** Old records used Claude's names. Map them onto the DSH presets so a
+ *  conversation saved before the migration keeps its effective permission. */
+export function normalizeApprovalMode(value: unknown): ApprovalMode {
+  if (value === 'read-only' || value === 'workspace-write' ||
+      value === 'danger-full-access' || value === 'selfEvolve') return value
+  if (value === 'plan') return 'read-only'
+  if (value === 'default' || value === 'acceptEdits') return 'workspace-write'
+  if (value === 'bypassPermissions') return 'danger-full-access'
+  return 'workspace-write'
 }
 
 /** A compaction in progress: `auto` marks the CLI's own threshold-triggered
@@ -403,6 +475,12 @@ export interface WorkspaceFileOption {
   kind?: 'file' | 'directory'
 }
 
+/** 当前内核在握手后能确认的能力；缺省字段表示还不知道。 */
+export interface AgentCapabilities {
+  /** 模型是否声明了图片输入（true 才会把图片内联发给模型）。 */
+  imageInput?: boolean
+}
+
 export interface AppSnapshot {
   mode: ModelMode
   avatarState: AvatarState
@@ -421,8 +499,12 @@ export interface AppSnapshot {
   /** Which conversation this snapshot describes (the displayed one). The
    *  renderer resets its timeline-revision bookkeeping when it changes. */
   conversationId?: string
+  /** 工作区绝对路径；时间线用它把长路径缩成 `~/…`。 */
+  workspace?: string
   conversationLibrary?: ConversationLibraryState
   pendingMessages?: PendingMessage[]
+  /** 插话已投递给模型、还没轮到显示时，队列区用它提示“正在插话”。 */
+  steering?: { text: string; startedAt: string }
   contextUsage?: ContextUsageSnapshot
   contextCompacting?: boolean
   /** True while the CLI compacts on its own at the auto threshold; the status
@@ -447,6 +529,9 @@ export interface AppSnapshot {
   approvalMode?: ApprovalMode
   /** Live Task-tool subagents; absent or empty means none. */
   subagents?: SubagentTask[]
+  /** 当前内核是否支持后台运行/停止/转达子代理；缺省视为支持。DSH 只有
+   *  子代理工具调用，宿主没有这些控制，托盘据此隐藏按钮。 */
+  subagentControls?: boolean
   /** The last approved plan, kept after plan mode ends for the task strip. */
   approvedPlan?: string
   /** Why the queued messages stopped draining (goal budget, stop, persona). */
@@ -597,6 +682,12 @@ export interface PetAPI {
   hidePanel(): Promise<void>
   getPanelOpen(): Promise<boolean>
   onPanelOpen(callback: (open: boolean) => void): () => void
+  /** 面板相对人物展开的方向；人物越过屏幕中线时会变化。 */
+  getPanelDirection(): Promise<PanelDirection>
+  onPanelDirection(callback: (direction: PanelDirection) => void): () => void
+  /** 面板贴在人物的哪一侧（上/下/左/右）。 */
+  getPanelPlacement(): Promise<PanelPlacement>
+  onPanelPlacement(callback: (placement: PanelPlacement) => void): () => void
   showContextMenu(): Promise<void>
   setBalanceOpen(open: boolean): Promise<void>
   /** Flips the balance card from the main process, where the real state lives. */
@@ -610,6 +701,13 @@ export interface PetAPI {
   setBubbleExpanded(expanded: boolean): Promise<void>
   /** Resizes the expanded panel (the window follows on the main process). */
   setPanelSize(width: number, height: number): Promise<void>
+  /** 拖拽缩放手柄时，把全局悬浮手柄移到鼠标位置；null 表示收起。 */
+  resizeGhost(pos: { x: number; y: number } | null): void
+  /** 角色旁的小批准卡：打包/重启等请示用它，绿勾批准、红叉拒绝。 */
+  onApprovalRequest(callback: (request: { id: string; title: string; detail?: string }) => void): () => void
+  answerApproval(id: string, approved: boolean): void
+  /** 退出重启前让立绘做一个告别表情；宿主没提供时界面照常工作。 */
+  onFarewell?(callback: () => void): () => void
   /** Reports the trimmed portrait's rectangle so the hit shape follows it. */
   setAvatarBox(box: AvatarBox): Promise<void>
   setModelMode(mode: ModelMode): Promise<void>

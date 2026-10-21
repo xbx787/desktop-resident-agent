@@ -24,7 +24,7 @@ const snapshot: AppSnapshot = {
   mode: 'claude_code', avatarState: 'idle', taskStatus: 'idle',
   timeline: [{ id: 'u1', kind: 'user', time: '2026-10-15T10:00:00.000Z', text: '你好' }],
   timelineRevision: 1, modelReady: true, claudeCodeReady: true, conversationId: 'a',
-  approvalMode: 'default',
+  approvalMode: 'workspace-write',
   conversationLibrary: { settings, activeConversationId: 'a', conversations: [conversation] }
 }
 
@@ -72,12 +72,13 @@ describe('the approval-mode control', () => {
     const trigger = host.querySelector<HTMLElement>('.panel-approval-button')!
     // Icon only: the mode lives in the aria-label/title, not as a word on the bar.
     expect(trigger.textContent).toBe('')
-    expect(trigger.getAttribute('aria-label')).toBe('审批模式：手动审批')
+    expect(trigger.getAttribute('aria-label')).toBe('审批模式：工作区写入')
     await act(async () => { trigger.click() })
     const text = host.querySelector('.panel-approval-menu')?.textContent ?? ''
     expect(text).toContain('手动审批')
-    expect(text).toContain('允许所有编辑')
+    expect(text).toContain('工作区写入')
     expect(text).toContain('完全访问')
+    expect(text).toContain('自我进化')
     expect(text).not.toContain('计划模式')
   })
 
@@ -88,9 +89,29 @@ describe('the approval-mode control', () => {
     await act(async () => { host.querySelector<HTMLElement>('.panel-compose-trigger')!.click() })
     await act(async () => { host.querySelector<HTMLElement>('.panel-approval-button')!.click() })
     const picks = [...host.querySelectorAll<HTMLElement>('.panel-approval-pick')]
-    const edits = picks.find((item) => item.textContent?.includes('允许所有编辑'))!
-    await act(async () => { edits.click() })
-    expect(calls).toContainEqual(['setApprovalMode', 'acceptEdits'])
+    const readonly = picks.find((item) => item.textContent?.includes('手动审批'))!
+    await act(async () => { readonly.click() })
+    expect(calls).toContainEqual(['setApprovalMode', 'read-only'])
+  })
+
+
+  it('keeps goal, plan and web search in the lower-left menu with icons', async () => {
+    await act(async () => {
+      root.render(<PanelBubble visible snapshot={snapshot} error={null} run={async (action) => { await action(window.pet); return true }} />)
+    })
+    await act(async () => { host.querySelector<HTMLElement>('.panel-compose-trigger')!.click() })
+    await act(async () => { host.querySelector<HTMLElement>('.panel-model-button')!.click() })
+    const toggles = [...host.querySelectorAll<HTMLElement>('.panel-popover-modes .panel-mode-toggle')]
+    expect(toggles.map((item) => item.querySelector('.panel-mode-toggle-main')?.textContent))
+      .toEqual(['目标模式', '计划模式', '联网搜索'])
+    for (const toggle of toggles) expect(toggle.querySelector('.panel-mode-icon svg')).toBeTruthy()
+    // 菜单外面不再单独摆目标/计划按钮。
+    expect(host.querySelector('.panel-goal-button')).toBeNull()
+    expect(host.querySelector('.panel-plan-button')).toBeNull()
+    await act(async () => { toggles[0].click() })
+    expect(toggles[0].getAttribute('aria-checked')).toBe('true')
+    await act(async () => { toggles[1].click() })
+    expect(calls).toContainEqual(['setPlanMode', true])
   })
 
   it('warns before full access and only switches after the warning is acknowledged', async () => {
@@ -108,7 +129,34 @@ describe('the approval-mode control', () => {
     expect(warning?.textContent).toContain('开启「完全访问」')
     expect(warning?.textContent).toContain('风险')
     await act(async () => { host.querySelector<HTMLElement>('.panel-bypass-confirm')!.click() })
-    expect(calls).toContainEqual(['setApprovalMode', 'bypassPermissions'])
+    expect(calls).toContainEqual(['setApprovalMode', 'danger-full-access'])
+    expect(host.querySelector('.panel-bypass')).toBeNull()
+  })
+
+  it('warns before self-evolution and only switches after the warning is acknowledged', async () => {
+    await act(async () => {
+      root.render(<PanelBubble visible snapshot={snapshot} error={null} run={async (action) => { await action(window.pet); return true }} />)
+    })
+    await act(async () => { host.querySelector<HTMLElement>('.panel-compose-trigger')!.click() })
+    await act(async () => { host.querySelector<HTMLElement>('.panel-approval-button')!.click() })
+    const evolve = [...host.querySelectorAll<HTMLElement>('.panel-approval-pick')]
+      .find((item) => item.textContent?.includes('自我进化'))!
+    await act(async () => { evolve.click() })
+    expect(calls.some(([name]) => name === 'setApprovalMode')).toBe(false)
+    const warning = host.querySelector('.panel-bypass')
+    expect(warning?.textContent).toContain('开启「自我进化」')
+    expect(warning?.textContent).toContain('重启')
+    const confirm = host.querySelector<HTMLButtonElement>('.panel-bypass-confirm')!
+    expect(confirm.disabled).toBe(true)
+    const input = host.querySelector<HTMLInputElement>('.panel-evolve-authorize input')!
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
+    await act(async () => {
+      setValue.call(input, '我授权你自动进化')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(confirm.disabled).toBe(false)
+    await act(async () => { confirm.click() })
+    expect(calls).toContainEqual(['setApprovalMode', 'selfEvolve'])
     expect(host.querySelector('.panel-bypass')).toBeNull()
   })
 

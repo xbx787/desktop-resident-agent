@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { ConversationSettings, GrowthProposal, ModelProfile, VoiceJobProgress, VoiceSettingsPatch, VoiceSettingsPublic } from '../shared/contracts'
+import type { AgentCapabilities, ConversationSettings, GrowthProposal, ModelProfile, VoiceJobProgress, VoiceSettingsPatch, VoiceSettingsPublic } from '../shared/contracts'
 import type { LibraryItem, LibraryKind, LibrarySnapshot } from '../shared/libraries'
 import type { MemoryItem } from '../main/memory-service'
 
@@ -13,6 +13,8 @@ export interface SettingsAPI {
   get(): Promise<ConversationSettings>
   update(patch: Partial<ConversationSettings>): Promise<ConversationSettings>
   version(): Promise<string>
+  /** 当前内核握手后确认的能力（图片输入等）。 */
+  capabilities?(): Promise<AgentCapabilities>
   /** The directory the agent works in, and whether the user chose it. */
   workspace(): Promise<{ path: string; saved: boolean }>
   /** Opens the native folder picker; null when the user cancels. */
@@ -23,8 +25,9 @@ export interface SettingsAPI {
   close(): Promise<void>
   /** Quits the whole app; the conversation store is already on disk. */
   quit(): Promise<void>
-  /** Saves, closes, and launches the same executable again. */
-  restart(): Promise<void>
+  /** Saves, closes, and launches the same executable again; true while it is
+   *  waiting for the running turn to finish. */
+  restart(): Promise<boolean>
   /** Stores an avatar image (PNG/JPEG bytes) for `user` or `assistant`. */
   setAvatar(kind: 'user' | 'assistant', bytes: number[]): Promise<void>
   /** Data URL of the stored avatar, or null when none is set. */
@@ -68,6 +71,7 @@ const api: SettingsAPI = {
   get: () => ipcRenderer.invoke('pet:settings:get'),
   update: (patch) => ipcRenderer.invoke('pet:settings:update', patch),
   version: () => ipcRenderer.invoke('pet:settings:version'),
+  capabilities: () => ipcRenderer.invoke('pet:settings:capabilities'),
   workspace: () => ipcRenderer.invoke('pet:settings:workspace'),
   pickWorkspace: () => ipcRenderer.invoke('pet:settings:pick-workspace'),
   migrateWorkspace: (next) => ipcRenderer.invoke('pet:settings:migrate-workspace', next),

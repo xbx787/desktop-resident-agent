@@ -79,10 +79,17 @@ export function EventImages({ note, prompt, images, onOpen }: {
     {shown.length > 0 && <div className="panel-event-images">
       {shown.map((image) => {
         const url = resolved[image.path || image.name]!
-        return <button key={image.name} type="button" className="panel-event-image" aria-label={`查看图片 ${image.name}`} title={image.name}
-          onClick={() => onOpen(image.name, url)}>
-          <img src={url} alt={image.name} loading="lazy" />
-        </button>
+        return <div key={image.name} className="panel-event-image-wrap">
+          <button type="button" className="panel-event-image" aria-label={`查看图片 ${image.name}`} title={image.name}
+            onClick={() => onOpen(image.name, url)}>
+            <img src={url} alt={image.name} loading="lazy" />
+          </button>
+          {image.path && <button type="button" className="panel-event-image-open" title="用系统默认程序打开原图"
+            aria-label={`用系统默认程序打开原图 ${image.name}`}
+            onClick={(event) => { event.stopPropagation(); void petBridge().openPath(image.path) }}>
+            原图
+          </button>}
+        </div>
       })}
     </div>}
     <p>{prompt}</p>

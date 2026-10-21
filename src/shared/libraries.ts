@@ -50,6 +50,9 @@ export interface LibraryItem {
   subdir?: string
   installedAt?: string
   path?: string
+  /** Read-only entry discovered in an existing Claude/plugin directory. It is
+   *  shown in the library but never written to the app's index or removed. */
+  external?: boolean
 }
 
 export interface LibrarySnapshot {
@@ -94,6 +97,7 @@ export function isLibraryItem(value: unknown): value is LibraryItem {
       item.repo.split('/').every((segment) => segment !== '.' && segment !== '..'))) &&
     (item.ref === undefined || (typeof item.ref === 'string' && /^[\w./-]+$/u.test(item.ref))) &&
     (item.subdir === undefined || (typeof item.subdir === 'string' && item.subdir.length <= 300 && !item.subdir.includes('..'))) &&
+    (item.external === undefined || typeof item.external === 'boolean') &&
     launchValid(item.launch)
 }
 

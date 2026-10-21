@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "deepseek": {
+      "command": "node",
+      "args": ["D:/DesktopPetProject/scripts/deepseek-search-mcp.cjs"],
+      "env": {}
+    }
+  }
+}

@@ -10,6 +10,9 @@ export interface InboxMessage {
   conversationId?: string
   /** Source conversation; its title becomes the visible sender name. */
   sourceConversationId?: string
+  /** true = deliver as a normal user message and start a model turn.
+   *  false/absent keeps the original passive-notice behaviour. */
+  autoRun?: boolean
 }
 
 /** Validates one inbox file. Files are local data, never instructions. */
@@ -31,31 +34,35 @@ export function parseInboxMessage(raw: unknown): InboxMessage | null {
     ? record.conversationId.trim().slice(0, 80) : undefined
   const sourceConversationId = typeof record.sourceConversationId === 'string'
     ? record.sourceConversationId.trim().slice(0, 80) : undefined
+  const autoRun = record.autoRun === true
   if (!name || !badge) {
     if (!sourceConversationId) return null
     return {
       text,
       ...(conversationId ? { conversationId } : {}),
-      sourceConversationId
+      sourceConversationId,
+      ...(autoRun ? { autoRun: true } : {})
     }
   }
   return {
     from: { name, badge },
     text,
     ...(conversationId ? { conversationId } : {}),
-    ...(sourceConversationId ? { sourceConversationId } : {})
+    ...(sourceConversationId ? { sourceConversationId } : {}),
+    ...(autoRun ? { autoRun: true } : {})
   }
 }
 
-/** watchers drop a message into the current conversation as a visible notice.
- *  It never starts a model turn, so it cannot create a reply loop. */
+/** Watchers normally drop a message into the current conversation as a visible
+ *  notice. An explicit `autoRun: true` opts into a normal queued user message
+ *  instead, so an external scheduler can start a real model turn. */
 export class InboxWatcher {
   private timer: ReturnType<typeof setInterval> | undefined
   private polling = false
 
   constructor(
     private readonly directory: string,
-    private readonly controller: Pick<ConversationController, 'appendExternalMessage' | 'conversationSender'>,
+    private readonly controller: Pick<ConversationController, 'appendExternalMessage' | 'conversationSender' | 'sendMessage'>,
     private readonly intervalMs = 1_000
   ) {}
 
@@ -93,7 +100,13 @@ export class InboxWatcher {
             : undefined
           const from = resolved ?? message.from
           if (!from) throw new Error('unknown inbox sender')
-          await this.controller.appendExternalMessage(message.text, from, message.conversationId)
+          if (message.autoRun) {
+            // A normal user message: it starts a turn, shows in the transcript,
+            // and produces a reply. Meant for schedulers and self-evolution.
+            await this.controller.sendMessage(message.text, [], 'queue', message.conversationId)
+          } else {
+            await this.controller.appendExternalMessage(message.text, from, message.conversationId)
+          }
           await fsp.unlink(file)
         } catch {
           // Keep bad items for inspection instead of retrying them forever.
