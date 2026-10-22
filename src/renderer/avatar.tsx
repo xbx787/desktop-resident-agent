@@ -571,7 +571,7 @@ function Avatar() {
           }
         }}
       >
-        {live2dRequested && <div className="avatar-gesture">
+        {useLive2D && <div className="avatar-gesture">
               <Live2DPortrait manifest={live2dManifest} lanes={lanes}
                 reducedMotion={reducedMotion}
                 pointerPosition={live2dPointer}
