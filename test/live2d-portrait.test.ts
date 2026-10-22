@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import type { AvatarLanes } from '../src/renderer/avatar-lanes'
+import { live2dActionCandidates, live2dActionForLanes } from '../src/renderer/Live2DPortrait'
 import { resolveLocalLive2DResource } from '../src/renderer/live2d-manifest'
 
 describe('Live2DPortrait resource boundary', () => {
@@ -17,5 +19,38 @@ describe('Live2DPortrait resource boundary', () => {
     expect(resolveLocalLive2DResource('../live2d/model.model3.json', fileBase, 'model')).toBeNull()
     expect(resolveLocalLive2DResource('./live2d/model.model3.json', fileBase, 'core')).toBeNull()
     expect(resolveLocalLive2DResource('./live2d/core/live2dcubismcore.min.js', fileBase, 'model')).toBeNull()
+  })
+})
+
+describe('Live2D semantic action selection', () => {
+  it('maps every task lane, while voice and drag take precedence', () => {
+    const taskActions: Record<AvatarLanes['task'], ReturnType<typeof live2dActionForLanes>> = {
+      idle: 'idle',
+      received: 'acknowledge',
+      planning: 'thinking',
+      compacting: 'thinking',
+      waiting: 'waiting',
+      executing: 'working',
+      verifying: 'verifying',
+      completed: 'success',
+      failed: 'failure',
+      cancelled: 'failure'
+    }
+
+    for (const [task, expected] of Object.entries(taskActions) as Array<
+      [AvatarLanes['task'], ReturnType<typeof live2dActionForLanes>]
+    >) {
+      expect(live2dActionForLanes({ task, voice: 'silent', interaction: 'none' })).toBe(expected)
+    }
+    expect(live2dActionForLanes({ task: 'executing', voice: 'listening', interaction: 'none' }))
+      .toBe('listening')
+    expect(live2dActionForLanes({ task: 'executing', voice: 'speaking', interaction: 'none' }))
+      .toBe('speaking')
+    expect(live2dActionForLanes({ task: 'executing', voice: 'speaking', interaction: 'dragging' }))
+      .toBeNull()
+  })
+
+  it('uses the authored poke cue before compatibility fallbacks', () => {
+    expect(live2dActionCandidates('poke')).toEqual(['poke', 'acknowledge', 'idle'])
   })
 })

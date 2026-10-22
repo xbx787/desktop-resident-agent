@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Generate the tracked Arch-chan loop motions from their single definition. */
+/** Generate the tracked Arch-chan state motions from their single definition. */
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -13,7 +13,12 @@ const modelDir = path.join(projectRoot, 'resources', 'live2d', 'arch-chan')
 const outputs = {
   idle: path.join(modelDir, 'motions', 'idle.motion3.json'),
   thinking: path.join(modelDir, 'motions', 'thinking.motion3.json'),
-  working: path.join(modelDir, 'motions', 'working.motion3.json')
+  working: path.join(modelDir, 'motions', 'working.motion3.json'),
+  listening: path.join(modelDir, 'motions', 'listening.motion3.json'),
+  speaking: path.join(modelDir, 'motions', 'speaking.motion3.json'),
+  waiting: path.join(modelDir, 'motions', 'waiting.motion3.json'),
+  verifying: path.join(modelDir, 'motions', 'verifying.motion3.json'),
+  poke: path.join(modelDir, 'motions', 'poke.motion3.json')
 }
 
 function encoded(document) {

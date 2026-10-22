@@ -45,7 +45,9 @@ vi.mock('pixi-live2d-display/cubism4', () => ({
       const motionManager = {
         definitions: {
           Idle: [{}], Acknowledge: [{}], Thinking: [{}],
-          Working: [{}], Success: [{}], Failure: [{}]
+          Working: [{}], Verifying: [{}], Waiting: [{}],
+          Success: [{}], Failure: [{}], Listening: [{}],
+          Speaking: [{}], Poke: [{}]
         },
         stopAllMotions: vi.fn(),
         loadMotion: vi.fn(async () => loadedMotion)
@@ -57,12 +59,13 @@ vi.mock('pixi-live2d-display/cubism4', () => ({
         interactive: true,
         buttonMode: true,
         autoUpdate: true,
-        internalModel: { motionManager },
+        internalModel: { motionManager, focusController: { focus: vi.fn() } },
         scale: { set: vi.fn() },
         anchor: { set: vi.fn() },
         position: { set: vi.fn() },
         getLocalBounds: () => ({ width: 100, height: 100 }),
         motion: vi.fn(async () => true),
+        focus: vi.fn(),
         destroy: vi.fn()
       }
       runtime.models.push(model as unknown as Record<string, unknown>)
@@ -71,7 +74,7 @@ vi.mock('pixi-live2d-display/cubism4', () => ({
   }
 }))
 
-import { Live2DPortrait } from '../src/renderer/Live2DPortrait'
+import { Live2DPortrait, localLive2DPoint } from '../src/renderer/Live2DPortrait'
 import { live2dManifestFor } from '../src/renderer/live2d-manifest'
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -81,9 +84,21 @@ afterEach(() => {
   delete (window as Window & { Live2DCubismCore?: unknown }).Live2DCubismCore
   runtime.apps.length = 0
   runtime.models.length = 0
+  vi.useRealTimers()
+  vi.restoreAllMocks()
 })
 
 describe('Live2DPortrait lifecycle', () => {
+  it('converts client coordinates to the logical canvas size without multiplying by device pixel ratio', () => {
+    const rect = { left: 40, top: 60, width: 200, height: 300 }
+    expect(localLive2DPoint({ clientX: 140, clientY: 285 }, rect, { width: 100, height: 150 }))
+      .toEqual({ x: 50, y: 112.5 })
+    expect(localLive2DPoint({ clientX: -10, clientY: 900 }, rect, { width: 100, height: 150 }))
+      .toEqual({ x: 0, y: 150 })
+    expect(localLive2DPoint({ clientX: NaN, clientY: 20 }, rect)).toBeNull()
+    expect(localLive2DPoint({ clientX: 50, clientY: 70 }, { ...rect, width: 0 })).toBeNull()
+  })
+
   it('removes a failed Core script so the preview can retry, then destroys the model only once', async () => {
     const manifest = live2dManifestFor('arch-chan')
     expect(manifest).not.toBeNull()
@@ -188,6 +203,127 @@ describe('Live2DPortrait lifecycle', () => {
     })
     expect(model.motion).toHaveBeenLastCalledWith('Success', 0, 3)
     expect(model.internalModel.motionManager.stopAllMotions.mock.calls.length).toBeGreaterThanOrEqual(3)
+    await act(async () => root.unmount())
+  })
+
+  it('plays the one-shot Poke motion when the DOM gesture epoch changes', async () => {
+    const manifest = live2dManifestFor('arch-chan')!
+    const mount = document.createElement('div')
+    document.body.append(mount)
+    const root = createRoot(mount)
+    const lanes = { task: 'idle' as const, voice: 'silent' as const, interaction: 'none' as const }
+
+    await act(async () => {
+      root.render(<Live2DPortrait manifest={manifest} lanes={lanes} gestureEpoch={0} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const model = runtime.models.at(-1)! as { motion: ReturnType<typeof vi.fn> }
+    expect(model.motion).toHaveBeenLastCalledWith('Idle', 0, 1)
+
+    await act(async () => {
+      root.render(<Live2DPortrait manifest={manifest} lanes={lanes} gestureEpoch={1} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(model.motion).toHaveBeenLastCalledWith('Poke', 0, 3)
+    await act(async () => root.unmount())
+  })
+
+  it('hands a legacy poke fallback back to the active task loop', async () => {
+    vi.useFakeTimers()
+    const manifest = live2dManifestFor('arch-chan')!
+    const mount = document.createElement('div')
+    document.body.append(mount)
+    const root = createRoot(mount)
+    const lanes = { task: 'executing' as const, voice: 'silent' as const, interaction: 'none' as const }
+
+    await act(async () => {
+      root.render(<Live2DPortrait manifest={manifest} lanes={lanes} gestureEpoch={0} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const model = runtime.models.at(-1)! as {
+      motion: ReturnType<typeof vi.fn>
+      internalModel: { motionManager: { definitions: Record<string, unknown> } }
+    }
+    delete model.internalModel.motionManager.definitions.Poke
+    expect(model.motion).toHaveBeenLastCalledWith('Working', 0, 2)
+
+    await act(async () => {
+      root.render(<Live2DPortrait manifest={manifest} lanes={lanes} gestureEpoch={1} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(model.motion).toHaveBeenLastCalledWith('Acknowledge', 0, 2)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(850)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(model.motion).toHaveBeenLastCalledWith('Working', 0, 2)
+    await act(async () => root.unmount())
+  })
+
+  it('focuses from the visual canvas, suspends during drag and reduced motion, then resumes and recenters on leave', async () => {
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(100)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(150)
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      left: 40, top: 60, width: 200, height: 300
+    } as DOMRect)
+    const manifest = live2dManifestFor('arch-chan')!
+    const mount = document.createElement('div')
+    document.body.append(mount)
+    const root = createRoot(mount)
+    const lanes = { task: 'idle' as const, voice: 'silent' as const, interaction: 'none' as const }
+    const point = { clientX: 140, clientY: 285 }
+    await act(async () => {
+      root.render(<Live2DPortrait manifest={manifest} lanes={lanes} pointerPosition={point} />)
+    })
+    const model = runtime.models.at(-1)! as {
+      focus: ReturnType<typeof vi.fn>
+      autoUpdate: boolean
+      internalModel: { focusController: { focus: ReturnType<typeof vi.fn> } }
+    }
+    expect(model.focus).toHaveBeenLastCalledWith(50, 112.5)
+    model.focus.mockClear()
+
+    await act(async () => root.render(<Live2DPortrait manifest={manifest}
+      lanes={{ ...lanes, interaction: 'dragging' }} pointerPosition={point} />))
+    expect(model.focus).not.toHaveBeenCalled()
+    expect(model.internalModel.focusController.focus).toHaveBeenLastCalledWith(0, 0, true)
+    await act(async () => root.render(<Live2DPortrait manifest={manifest} lanes={lanes} pointerPosition={point} />))
+    expect(model.focus).toHaveBeenLastCalledWith(50, 112.5)
+    model.focus.mockClear()
+
+    await act(async () => root.render(<Live2DPortrait manifest={manifest} lanes={lanes} pointerPosition={point} reducedMotion />))
+    expect(model.focus).not.toHaveBeenCalled()
+    expect(model.autoUpdate).toBe(false)
+    await act(async () => root.render(<Live2DPortrait manifest={manifest} lanes={lanes} pointerPosition={point} />))
+    expect(model.focus).toHaveBeenLastCalledWith(50, 112.5)
+    expect(model.autoUpdate).toBe(true)
+
+    await act(async () => root.render(<Live2DPortrait manifest={manifest} lanes={lanes} pointerPosition={null} />))
+    expect(model.internalModel.focusController.focus).toHaveBeenLastCalledWith(0, 0, false)
+    await act(async () => root.unmount())
+  })
+
+  it('keeps pointer focus disabled for a model that has not opted in', async () => {
+    const base = live2dManifestFor('arch-chan')!
+    const manifest = { ...base, capabilities: { ...base.capabilities, pointerFocus: false } }
+    const mount = document.createElement('div')
+    document.body.append(mount)
+    const root = createRoot(mount)
+    await act(async () => root.render(<Live2DPortrait manifest={manifest}
+      lanes={{ task: 'idle', voice: 'silent', interaction: 'none' }}
+      pointerPosition={{ clientX: 80, clientY: 100 }} />))
+    const model = runtime.models.at(-1)! as {
+      focus: ReturnType<typeof vi.fn>
+      internalModel: { focusController: { focus: ReturnType<typeof vi.fn> } }
+    }
+    expect(model.focus).not.toHaveBeenCalled()
+    expect(model.internalModel.focusController.focus).not.toHaveBeenCalled()
     await act(async () => root.unmount())
   })
 })

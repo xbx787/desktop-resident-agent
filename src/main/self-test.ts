@@ -5,8 +5,10 @@
  *  `data/self-test/latest.json`. Nothing here opens extra windows or changes
  *  user settings; a failed check is reported, never auto-repaired. */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { live2dModelFor, live2dModelIds } from '../renderer/live2d-model-catalog'
+import { validateModelPackage } from '../../tools/live2d-motion/model-package.mjs'
 
 export interface SelfTestCheck {
   id: string
@@ -30,18 +32,46 @@ export interface SelfTestInput {
   settingsReady: boolean
 }
 
-interface ModelManifest {
-  FileReferences?: {
-    Moc?: string
-    Physics?: string
-    DisplayInfo?: string
-    Textures?: string[]
-    Motions?: Record<string, Array<{ File?: string }>>
-  }
-}
-
 function describe(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function isWithin(root: string, target: string): boolean {
+  const relative = path.relative(root, target)
+  return relative !== '' && !path.isAbsolute(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`)
+}
+
+/**
+ * The catalog catches models selectable by the renderer. Directory discovery
+ * additionally catches a model copied into the release resource tree before
+ * its catalog entry is added. Both are intentional release checks.
+ */
+function findBundledModelPaths(rendererRoot: string): string[] {
+  const live2dRoot = path.join(rendererRoot, 'live2d')
+  const modelPaths = new Set<string>()
+
+  for (const id of live2dModelIds) {
+    const definition = live2dModelFor(id)
+    if (!definition) throw new Error(`模型目录缺少 ${id} 的定义`)
+    const target = path.resolve(rendererRoot, definition.modelResource)
+    if (!isWithin(live2dRoot, target) || !target.toLowerCase().endsWith('.model3.json')) {
+      throw new Error(`模型目录中的 ${id} 路径无效：${definition.modelResource}`)
+    }
+    modelPaths.add(target)
+  }
+
+  const visit = (directory: string): void => {
+    if (!existsSync(directory)) return
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const target = path.join(directory, entry.name)
+      if (entry.isDirectory()) visit(target)
+      else if (entry.isFile() && entry.name.toLowerCase().endsWith('.model3.json')) modelPaths.add(target)
+    }
+  }
+  visit(live2dRoot)
+
+  if (modelPaths.size === 0) throw new Error('模型目录中没有 .model3.json')
+  return [...modelPaths].sort((left, right) => left.localeCompare(right))
 }
 
 export function runSelfTest(input: SelfTestInput): SelfTestResult {
@@ -67,22 +97,11 @@ export function runSelfTest(input: SelfTestInput): SelfTestResult {
     if (readFileSync(html).length === 0) throw new Error('avatar.html 为空')
   })
   check('live2d-model', () => {
-    const modelPath = path.join(input.rendererRoot, 'live2d', 'arch-chan', 'arch chan model0.model3.json')
-    const model = JSON.parse(readFileSync(modelPath, 'utf8')) as ModelManifest
-    const refs = model.FileReferences
-    if (!refs) throw new Error('model3 缺少 FileReferences')
-    const files = [
-      refs.Moc,
-      refs.Physics,
-      refs.DisplayInfo,
-      ...(refs.Textures ?? []),
-      ...Object.values(refs.Motions ?? {}).flatMap((group) => group.map((motion) => motion.File))
-    ].filter((file): file is string => typeof file === 'string' && file.length > 0)
-    if (files.length === 0) throw new Error('model3 没有引用任何文件')
-    const base = path.dirname(modelPath)
-    for (const file of files) {
-      const target = path.join(base, file)
-      if (!existsSync(target)) throw new Error(`模型引用缺失：${file}`)
+    for (const modelPath of findBundledModelPaths(input.rendererRoot)) {
+      const result = validateModelPackage(modelPath)
+      if (result.errors.length > 0) {
+        throw new Error(`模型包校验失败：${path.relative(input.rendererRoot, modelPath)}：${result.errors.join('；')}`)
+      }
     }
   })
   check('live2d-core', () => {

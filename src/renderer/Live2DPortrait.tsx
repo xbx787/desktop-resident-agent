@@ -30,13 +30,14 @@ export interface Live2DLocalPoint {
  */
 export function localLive2DPoint(
   point: Live2DClientPoint,
-  rect: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>
+  rect: Pick<DOMRect, 'left' | 'top' | 'width' | 'height'>,
+  viewport: { width: number; height: number } = rect
 ): Live2DLocalPoint | null {
-  if (![point.clientX, point.clientY, rect.left, rect.top, rect.width, rect.height].every(Number.isFinite)) return null
-  if (rect.width <= 0 || rect.height <= 0) return null
+  if (![point.clientX, point.clientY, rect.left, rect.top, rect.width, rect.height, viewport.width, viewport.height].every(Number.isFinite)) return null
+  if (rect.width <= 0 || rect.height <= 0 || viewport.width <= 0 || viewport.height <= 0) return null
   return {
-    x: Math.min(rect.width, Math.max(0, point.clientX - rect.left)),
-    y: Math.min(rect.height, Math.max(0, point.clientY - rect.top))
+    x: Math.min(1, Math.max(0, (point.clientX - rect.left) / rect.width)) * viewport.width,
+    y: Math.min(1, Math.max(0, (point.clientY - rect.top) / rect.height)) * viewport.height
   }
 }
 
@@ -52,6 +53,8 @@ export interface Live2DPortraitProps {
    * component never listens for pointer input itself.
    */
   pointerPosition?: Live2DClientPoint | null
+  /** Increments only after a completed DOM click, never during a drag. */
+  gestureEpoch?: number
   className?: string
   onReady?: (manifest: Live2DModelManifest) => void
   onError?: (error: Error) => void
@@ -138,20 +141,57 @@ function modelMotionGroups(model: RuntimeModel): Readonly<Record<string, unknown
   return model.internalModel?.motionManager?.definitions ?? {}
 }
 
+/**
+ * Models are authored independently. These fallbacks keep an older model
+ * useful while a richer Xiaojing package is being produced, without leaking
+ * model group names into the application state machine.
+ */
+const ACTION_FALLBACKS: Readonly<Record<Live2DAction, readonly Live2DAction[]>> = Object.freeze({
+  idle: ['idle'],
+  acknowledge: ['acknowledge', 'idle'],
+  thinking: ['thinking', 'idle'],
+  working: ['working', 'thinking', 'idle'],
+  verifying: ['verifying', 'working', 'thinking', 'idle'],
+  waiting: ['waiting', 'thinking', 'idle'],
+  success: ['success', 'acknowledge', 'idle'],
+  failure: ['failure', 'idle'],
+  listening: ['listening', 'thinking', 'idle'],
+  speaking: ['speaking', 'working', 'thinking', 'idle'],
+  poke: ['poke', 'acknowledge', 'idle']
+})
+
+export function live2dActionCandidates(action: Live2DAction): readonly Live2DAction[] {
+  return ACTION_FALLBACKS[action]
+}
+
+function motionForAction(
+  model: RuntimeModel,
+  manifest: Live2DModelManifest,
+  action: Live2DAction
+): { action: Live2DAction; motion: NonNullable<Live2DModelManifest['motions'][Live2DAction]> } | null {
+  const groups = modelMotionGroups(model)
+  for (const candidate of live2dActionCandidates(action)) {
+    const motion = manifest.motions[candidate]
+    if (motion && Object.hasOwn(groups, motion.group)) return { action: candidate, motion }
+  }
+  return null
+}
+
 /** Maps the app's task and voice lanes to intentionally generic Live2D
  * actions. A model without a matching action simply keeps its authored idle
  * behaviour; no CSS substitute is introduced here. */
 export function live2dActionForLanes(lanes: Pick<AvatarLanes, 'task' | 'voice' | 'interaction'>): Live2DAction | null {
   if (lanes.interaction === 'dragging') return null
-  if (lanes.voice === 'listening' || lanes.voice === 'speaking') return 'acknowledge'
+  if (lanes.voice === 'listening') return 'listening'
+  if (lanes.voice === 'speaking') return 'speaking'
   switch (lanes.task) {
     case 'idle': return 'idle'
     case 'received': return 'acknowledge'
     case 'planning':
-    case 'compacting':
-    case 'waiting': return 'thinking'
-    case 'executing':
-    case 'verifying': return 'working'
+    case 'compacting': return 'thinking'
+    case 'waiting': return 'waiting'
+    case 'executing': return 'working'
+    case 'verifying': return 'verifying'
     case 'completed': return 'success'
     case 'failed':
     case 'cancelled': return 'failure'
@@ -183,9 +223,10 @@ async function requestStateMotion(
   }
   const action = live2dActionForLanes(lanes)
   if (!action) return
-  const motion = manifest.motions[action]
-  if (!motion || !Object.hasOwn(modelMotionGroups(model), motion.group)) return
-  const request = `${motion.group}:${motion.index}:${motion.priority}:${motion.loop === true}`
+  const resolved = motionForAction(model, manifest, action)
+  if (!resolved) return
+  const { motion } = resolved
+  const request = `${action}:${resolved.action}:${motion.group}:${motion.index}:${motion.priority}:${motion.loop === true}`
   if (requestState.current.key === request) return
 
   const token = requestState.current.token + 1
@@ -213,6 +254,41 @@ async function requestStateMotion(
   }
 }
 
+async function requestGestureMotion(
+  model: RuntimeModel,
+  runtime: CubismRuntime,
+  manifest: Live2DModelManifest,
+  lanes: Pick<AvatarLanes, 'interaction'>,
+  reducedMotion: boolean,
+  requestState: { current: MotionRequestState }
+): Promise<{ token: number; restoreAfterMs: number } | null> {
+  const manager = model.internalModel?.motionManager
+  if (!manager || reducedMotion || lanes.interaction === 'dragging') return null
+  const resolved = motionForAction(model, manifest, 'poke')
+  if (!resolved) return null
+  const { motion } = resolved
+  const token = requestState.current.token + 1
+  requestState.current = {
+    key: `gesture:${resolved.action}:${motion.group}:${motion.index}:${motion.priority}`,
+    token
+  }
+  manager.stopAllMotions()
+  try {
+    const started = await model.motion(motion.group, motion.index, runtimePriority(runtime, motion.priority))
+    if (!started || requestState.current.token !== token) return null
+    // Older model packages may not yet author `Poke`.  Their semantic
+    // fallback can be an acknowledge or idle group, but it must never leave
+    // the current task loop permanently stopped after a click.  The richer
+    // package supplies its own duration; legacy fallbacks get one short,
+    // bounded hand-back to the currently active task state.
+    const restoreAfterMs = motion.restoreStateAfterMs ?? 850
+    return { token, restoreAfterMs }
+  } catch {
+    if (requestState.current.token === token) requestState.current.key = null
+    return null
+  }
+}
+
 function layoutModel(model: RuntimeModel, app: PIXI.Application, host: HTMLElement, viewport: Live2DViewport | undefined): void {
   const width = Math.max(1, Math.round(host.clientWidth))
   const height = Math.max(1, Math.round(host.clientHeight))
@@ -236,17 +312,25 @@ function applyPointerFocus(
   manifest: Live2DModelManifest,
   lanes: Pick<AvatarLanes, 'interaction'>,
   host: HTMLElement,
-  pointerPosition: Live2DClientPoint | null | undefined
+  pointerPosition: Live2DClientPoint | null | undefined,
+  reducedMotion: boolean
 ): void {
   // This remains model capability-gated and DOM-owned. In particular, do not
   // turn on Pixi interaction as a shortcut: it would compete with the native
   // drag/click owner and reintroduce the overlay pointer regressions.
-  if (!manifest.capabilities.pointerFocus || lanes.interaction === 'dragging') return
-  const point = pointerPosition
-    ? localLive2DPoint(pointerPosition, host.getBoundingClientRect())
-    : { x: host.clientWidth / 2, y: host.clientHeight / 2 }
-  if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return
+  if (!manifest.capabilities.pointerFocus) return
   try {
+    if (reducedMotion || lanes.interaction === 'dragging' || !pointerPosition) {
+      // focus(canvasCenter) is not neutral: this runtime normalizes every
+      // pointer into a direction, including a zero-length vector.
+      model.internalModel.focusController.focus(0, 0, reducedMotion || lanes.interaction === 'dragging')
+      return
+    }
+    const point = localLive2DPoint(pointerPosition, host.getBoundingClientRect(), {
+      width: host.clientWidth,
+      height: host.clientHeight
+    })
+    if (!point) return
     model.focus(point.x, point.y)
   } catch {
     // A malformed third-party model must be able to fall back to the sprite
@@ -269,6 +353,8 @@ export function Live2DPortrait({
   lanes,
   reducedMotion = false,
   viewport,
+  pointerPosition,
+  gestureEpoch = 0,
   className,
   onReady,
   onError
@@ -278,11 +364,13 @@ export function Live2DPortrait({
   const modelRef = useRef<RuntimeModel | null>(null)
   const runtimeRef = useRef<CubismRuntime | null>(null)
   const appRef = useRef<PIXI.Application | null>(null)
-  const stateRef = useRef({ lanes, reducedMotion, viewport })
+  const stateRef = useRef({ lanes, reducedMotion, viewport, pointerPosition })
   const onReadyRef = useRef(onReady)
   const onErrorRef = useRef(onError)
   const motionRequestState = useRef<MotionRequestState>({ key: null, token: 0 })
-  stateRef.current = { lanes, reducedMotion, viewport }
+  const gestureRestoreTimer = useRef<number | null>(null)
+  const lastGestureEpoch = useRef(gestureEpoch)
+  stateRef.current = { lanes, reducedMotion, viewport, pointerPosition }
   onReadyRef.current = onReady
   onErrorRef.current = onError
 
@@ -311,7 +399,11 @@ export function Live2DPortrait({
     appRef.current = app
     const resize = (): void => {
       const model = modelRef.current
-      if (model && !disposed) layoutModel(model, app, host, stateRef.current.viewport)
+      if (model && !disposed) {
+        layoutModel(model, app, host, stateRef.current.viewport)
+        applyPointerFocus(model, manifest, stateRef.current.lanes, host,
+          stateRef.current.pointerPosition, stateRef.current.reducedMotion)
+      }
       else app.renderer.resize(Math.max(1, host.clientWidth), Math.max(1, host.clientHeight))
     }
     if (typeof ResizeObserver !== 'undefined') {
@@ -341,6 +433,8 @@ export function Live2DPortrait({
         modelRef.current = model
         runtimeRef.current = runtime
         layoutModel(model, app, host, stateRef.current.viewport)
+        applyPointerFocus(model, manifest, stateRef.current.lanes, host,
+          stateRef.current.pointerPosition, stateRef.current.reducedMotion)
         void requestStateMotion(model, runtime, manifest, stateRef.current.lanes,
           stateRef.current.reducedMotion, motionRequestState)
         host.dataset.live2dReady = 'true'
@@ -355,6 +449,10 @@ export function Live2DPortrait({
 
     return () => {
       disposed = true
+      if (gestureRestoreTimer.current !== null) {
+        window.clearTimeout(gestureRestoreTimer.current)
+        gestureRestoreTimer.current = null
+      }
       observer?.disconnect()
       host.removeAttribute('data-live2d-ready')
       const model = modelRef.current
@@ -372,10 +470,45 @@ export function Live2DPortrait({
     const model = modelRef.current
     const runtime = runtimeRef.current
     if (model && runtime && manifest) {
+      if (gestureRestoreTimer.current !== null) {
+        window.clearTimeout(gestureRestoreTimer.current)
+        gestureRestoreTimer.current = null
+      }
       model.autoUpdate = !reducedMotion
       void requestStateMotion(model, runtime, manifest, lanes, reducedMotion, motionRequestState)
     }
   }, [manifest, lanes.task, lanes.voice, lanes.interaction, reducedMotion])
+
+  useEffect(() => {
+    const previous = lastGestureEpoch.current
+    lastGestureEpoch.current = gestureEpoch
+    if (gestureEpoch === previous) return
+    const model = modelRef.current
+    const runtime = runtimeRef.current
+    if (!model || !runtime || !manifest) return
+    if (gestureRestoreTimer.current !== null) {
+      window.clearTimeout(gestureRestoreTimer.current)
+      gestureRestoreTimer.current = null
+    }
+    void requestGestureMotion(model, runtime, manifest, lanes, reducedMotion, motionRequestState).then((restore) => {
+      if (!restore || modelRef.current !== model) return
+      gestureRestoreTimer.current = window.setTimeout(() => {
+        gestureRestoreTimer.current = null
+        if (modelRef.current !== model || motionRequestState.current.token !== restore.token) return
+        motionRequestState.current.key = null
+        void requestStateMotion(model, runtime, manifest, stateRef.current.lanes,
+          stateRef.current.reducedMotion, motionRequestState)
+      }, restore.restoreAfterMs)
+    })
+  }, [manifest, gestureEpoch, lanes.interaction, reducedMotion])
+
+  useEffect(() => {
+    const model = modelRef.current
+    const host = hostRef.current
+    if (model && host && manifest) {
+      applyPointerFocus(model, manifest, lanes, host, pointerPosition, reducedMotion)
+    }
+  }, [manifest, pointerPosition?.clientX, pointerPosition?.clientY, lanes.interaction, reducedMotion])
 
   useEffect(() => {
     const model = modelRef.current

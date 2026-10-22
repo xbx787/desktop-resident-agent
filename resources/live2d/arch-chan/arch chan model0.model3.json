@@ -20,17 +20,32 @@
 			"Acknowledge": [
 				{ "File": "motions/acknowledge.motion3.json" }
 			],
+			"Listening": [
+				{ "File": "motions/listening.motion3.json" }
+			],
+			"Speaking": [
+				{ "File": "motions/speaking.motion3.json" }
+			],
 			"Thinking": [
 				{ "File": "motions/thinking.motion3.json" }
 			],
 			"Working": [
 				{ "File": "motions/working.motion3.json" }
 			],
+			"Waiting": [
+				{ "File": "motions/waiting.motion3.json" }
+			],
+			"Verifying": [
+				{ "File": "motions/verifying.motion3.json" }
+			],
 			"Success": [
 				{ "File": "motions/success.motion3.json" }
 			],
 			"Failure": [
 				{ "File": "motions/failure.motion3.json" }
+			],
+			"Poke": [
+				{ "File": "motions/poke.motion3.json" }
 			]
 		}
 	},

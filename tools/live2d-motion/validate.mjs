@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-/** Independent static validator for XiaoJing's generated Cubism state loops. */
+/** Independent static validator for the generated Arch-chan Cubism state motions. */
 
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { validateModelPackage } from './model-package.mjs'
 
 const toolDir = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(toolDir, '../..')
@@ -11,10 +12,15 @@ const modelDir = path.join(projectRoot, 'resources', 'live2d', 'arch-chan')
 const modelPath = path.join(modelDir, 'arch chan model0.model3.json')
 const cdiPath = path.join(modelDir, 'Arch Chan Model0.cdi3.json')
 const physicsPath = path.join(modelDir, 'Arch Chan Model0.physics3.json')
-const expectedGroups = {
-  Idle: 'motions/idle.motion3.json',
-  Thinking: 'motions/thinking.motion3.json',
-  Working: 'motions/working.motion3.json'
+const expectedMotions = {
+  Idle: { file: 'motions/idle.motion3.json', loop: true },
+  Thinking: { file: 'motions/thinking.motion3.json', loop: true },
+  Working: { file: 'motions/working.motion3.json', loop: true },
+  Listening: { file: 'motions/listening.motion3.json', loop: true },
+  Speaking: { file: 'motions/speaking.motion3.json', loop: true },
+  Waiting: { file: 'motions/waiting.motion3.json', loop: true },
+  Verifying: { file: 'motions/verifying.motion3.json', loop: true },
+  Poke: { file: 'motions/poke.motion3.json', loop: false }
 }
 const EPSILON = 1e-6
 const SLOPE_ABSOLUTE_TOLERANCE = 0.05
@@ -162,6 +168,12 @@ function parseCurve(curve, duration, restricted, errors, label) {
 }
 
 function main() {
+  const packageResult = validateModelPackage(modelPath)
+  if (packageResult.errors.length) {
+    for (const error of packageResult.errors) console.error(`NG: ${error}`)
+    return 1
+  }
+  console.log(`checked model package: ${packageResult.files.length} local file references`)
   const errors = []
   const model = loadJson(modelPath)
   const cdi = loadJson(cdiPath)
@@ -178,7 +190,8 @@ function main() {
   const motions = model.FileReferences?.Motions ?? {}
   const resolvedModelDir = path.resolve(modelDir)
 
-  for (const [group, expectedRelativePath] of Object.entries(expectedGroups)) {
+  for (const [group, expected] of Object.entries(expectedMotions)) {
+    const expectedRelativePath = expected.file
     const entries = motions[group]
     if (!Array.isArray(entries) || entries.length !== 1) {
       errors.push(`${group}: expected exactly one motion entry`)
@@ -204,7 +217,7 @@ function main() {
     const curves = document.Curves
     const label = path.basename(motionPath)
     if (document.Version !== 3) errors.push(`${label}: Version must be 3`)
-    if (meta.Loop !== true) errors.push(`${label}: generated state motion must be a loop`)
+    if (meta.Loop !== expected.loop) errors.push(`${label}: Meta.Loop must be ${expected.loop}`)
     const duration = meta.Duration
     if (!finiteNumber(duration) || duration <= 0) {
       errors.push(`${label}: Duration must be a positive finite number`)
@@ -231,18 +244,20 @@ function main() {
       const parsed = parseCurve(curve, duration, Boolean(meta.AreBeziersRestricted), errors, curveLabel)
       segmentCount += parsed.segmentCount
       pointCount += parsed.pointCount
-      if (parsed.start !== null && Math.abs(parsed.start - parsed.end) > EPSILON) {
+      if (expected.loop && parsed.start !== null && Math.abs(parsed.start - parsed.end) > EPSILON) {
         errors.push(`${curveLabel}: loop seam changes value`)
       }
-      const slopeDifference = Math.abs(parsed.startSlope - parsed.endSlope)
-      const slopeTolerance = SLOPE_ABSOLUTE_TOLERANCE + SLOPE_RELATIVE_TOLERANCE * Math.max(
-        Math.abs(parsed.startSlope), Math.abs(parsed.endSlope)
-      )
-      if (slopeDifference > slopeTolerance) {
-        errors.push(`${curveLabel}: loop seam changes velocity (${parsed.endSlope.toFixed(3)}/s -> ${parsed.startSlope.toFixed(3)}/s)`)
+      if (expected.loop) {
+        const slopeDifference = Math.abs(parsed.startSlope - parsed.endSlope)
+        const slopeTolerance = SLOPE_ABSOLUTE_TOLERANCE + SLOPE_RELATIVE_TOLERANCE * Math.max(
+          Math.abs(parsed.startSlope), Math.abs(parsed.endSlope)
+        )
+        if (slopeDifference > slopeTolerance) {
+          errors.push(`${curveLabel}: loop seam changes velocity (${parsed.endSlope.toFixed(3)}/s -> ${parsed.startSlope.toFixed(3)}/s)`)
+        }
       }
     }
-    if ([...eyeBlinkParameters].some((parameterId) => !animated.has(parameterId))) {
+    if (expected.loop && [...eyeBlinkParameters].some((parameterId) => !animated.has(parameterId))) {
       errors.push(`${label}: long loop must contain both EyeBlink parameter curves`)
     }
     for (const [field, actual] of [
@@ -261,7 +276,9 @@ function main() {
     console.log(`NG: ${errors.length} violation(s)`)
     return 1
   }
-  console.log(`OK: ${Object.keys(expectedGroups).length} generated state loops passed independent validation`)
+  const loopCount = Object.values(expectedMotions).filter((motion) => motion.loop).length
+  const oneShotCount = Object.keys(expectedMotions).length - loopCount
+  console.log(`OK: ${loopCount} generated state loops and ${oneShotCount} generated one-shot motion passed independent validation`)
   return 0
 }
 

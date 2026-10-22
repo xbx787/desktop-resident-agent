@@ -107,12 +107,15 @@ describe('Arch-chan Live2D state motion fixtures', () => {
     const generated = execFileSync(process.execPath, [generator, '--check'], { cwd: root, encoding: 'utf8' })
     const validated = execFileSync(process.execPath, [validator], { cwd: root, encoding: 'utf8' })
     expect(generated).toContain('OK: resources')
-    expect(validated).toContain('OK: 3 generated state loops passed independent validation')
+    expect(validated).toContain('OK: 7 generated state loops and 1 generated one-shot motion passed independent validation')
   })
 
   it('covers every application action with an existing model motion', () => {
     const manifest = live2dManifestFor('arch-chan')!
-    const actions: Live2DAction[] = ['idle', 'acknowledge', 'thinking', 'working', 'success', 'failure']
+    const actions: Live2DAction[] = [
+      'idle', 'acknowledge', 'thinking', 'working', 'verifying', 'waiting',
+      'success', 'failure', 'listening', 'speaking', 'poke'
+    ]
     expect(Object.keys(manifest.motions).sort()).toEqual([...actions].sort())
 
     for (const action of actions) {

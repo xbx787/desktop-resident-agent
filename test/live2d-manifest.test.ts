@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   isLocalLive2DResource,
@@ -11,6 +13,32 @@ import {
 } from '../src/renderer/live2d-manifest'
 
 describe('Live2D resource manifest', () => {
+  it('matches every declared capability to the actual bundled model3', () => {
+    for (const id of live2dModelIds) {
+      const model = live2dModelFor(id)!
+      const document = JSON.parse(readFileSync(path.resolve(import.meta.dirname, '../resources', model.modelResource), 'utf8')) as {
+        FileReferences: {
+          Motions?: Record<string, unknown[]>
+          Expressions?: Array<{ Name: string }>
+        }
+        Groups?: Array<{ Target: string; Name: string; Ids: string[] }>
+        HitAreas?: Array<{ Name: string }>
+      }
+      expect(model.capabilities.motions).toEqual(Object.fromEntries(
+        Object.entries(document.FileReferences.Motions ?? {}).map(([group, entries]) => [group, entries.length])
+      ))
+      expect([...model.capabilities.expressions].sort()).toEqual(
+        (document.FileReferences.Expressions ?? []).map((entry) => entry.Name).sort()
+      )
+      const parameters = (name: string) => (document.Groups ?? [])
+        .filter((group) => group.Target === 'Parameter' && group.Name === name)
+        .flatMap((group) => group.Ids).sort()
+      expect([...model.capabilities.eyeBlinkParameters].sort()).toEqual(parameters('EyeBlink'))
+      expect([...model.capabilities.lipSyncParameters].sort()).toEqual(parameters('LipSync'))
+      expect([...model.capabilities.hitAreas].sort()).toEqual((document.HitAreas ?? []).map((entry) => entry.Name).sort())
+    }
+  })
+
   it('contains only local, bundled resources', () => {
     expect(live2dModelIds).toEqual(['arch-chan'])
     for (const id of live2dModelIds) {

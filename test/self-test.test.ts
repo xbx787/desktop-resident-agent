@@ -21,6 +21,7 @@ function fixture(): { dataRoot: string; rendererRoot: string } {
   writeFileSync(path.join(modelDir, 'textures', 'texture_00.png'), 'png')
   writeFileSync(path.join(modelDir, 'motions', 'idle.motion3.json'), '{}')
   writeFileSync(path.join(modelDir, 'arch chan model0.model3.json'), JSON.stringify({
+    Version: 3,
     FileReferences: {
       Moc: 'model.moc3',
       Physics: 'model.physics3.json',
@@ -56,5 +57,28 @@ describe('runSelfTest', () => {
     expect(model?.ok).toBe(false)
     expect(model?.detail).toContain('idle.motion3.json')
     expect(result.checks.find((check) => check.id === 'windows')?.ok).toBe(false)
+  })
+
+  it('validates an additional bundled model discovered from the resource directory', () => {
+    const input = fixture()
+    const futureDir = path.join(input.rendererRoot, 'live2d', 'future-model')
+    mkdirSync(path.join(futureDir, 'motions'), { recursive: true })
+    mkdirSync(path.join(futureDir, 'textures'), { recursive: true })
+    writeFileSync(path.join(futureDir, 'model.moc3'), 'fixture')
+    writeFileSync(path.join(futureDir, 'textures', 'texture_00.png'), 'fixture')
+    writeFileSync(path.join(futureDir, 'future.model3.json'), JSON.stringify({
+      Version: 3,
+      FileReferences: {
+        Moc: 'model.moc3',
+        Textures: ['textures/texture_00.png'],
+        Motions: { Idle: [{ File: 'motions/idle.motion3.json' }] }
+      }
+    }))
+
+    const result = runSelfTest({ version: '0.0.105', ...input, windowsReady: true, settingsReady: true })
+    const model = result.checks.find((check) => check.id === 'live2d-model')
+    expect(model?.ok).toBe(false)
+    expect(model?.detail).toContain('future-model')
+    expect(model?.detail).toContain('idle.motion3.json')
   })
 })

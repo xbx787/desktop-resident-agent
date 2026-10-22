@@ -63,8 +63,13 @@ const modelCatalog: Readonly<Record<Live2DModelId, Live2DModelDefinition>> = {
         Acknowledge: 1,
         Thinking: 1,
         Working: 1,
+        Verifying: 1,
+        Waiting: 1,
         Success: 1,
-        Failure: 1
+        Failure: 1,
+        Listening: 1,
+        Speaking: 1,
+        Poke: 1
       },
       expressions: ['Mouse.exp3.json'],
       lipSyncParameters: [],

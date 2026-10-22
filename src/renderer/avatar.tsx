@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { AvatarBox, BalanceSnapshot, PanelDirection, PanelPlacement, PetAPI } from '../shared/contracts';
 import { WhalePortrait } from './WhalePortrait';
-import { Live2DPortrait } from './Live2DPortrait';
+import { Live2DPortrait, type Live2DClientPoint } from './Live2DPortrait';
 import { live2dManifestForBinding } from './live2d-manifest';
 import { personaVisualModeForRenderer, resolvePersonaVisualSelection } from './persona-visual-binding';
 import { avatarArtFor } from './avatar-art';
@@ -67,6 +67,8 @@ function Avatar() {
   const live2dManifest = live2dManifestForBinding(visualSelection.live2d);
   const [live2dFailed, setLive2dFailed] = useState(false);
   const [live2dReady, setLive2dReady] = useState(false);
+  const [live2dPointer, setLive2dPointer] = useState<Live2DClientPoint | null>(null);
+  const [live2dGestureEpoch, setLive2dGestureEpoch] = useState(0);
   // Live2D is a technical preview: the sprite portrait stays the default and
   // remains visible until the model is ready, or when the model/Core fails.
   const live2dRequested = live2dManifest !== null && !live2dFailed;
@@ -458,6 +460,9 @@ function Avatar() {
   }
 
   function handlePointerMove(event: React.PointerEvent<HTMLButtonElement>) {
+    if (useLive2D && !reducedMotion && !pointer.current) {
+      setLive2dPointer({ clientX: event.clientX, clientY: event.clientY });
+    }
     const session = pointer.current;
     if (!session || session.id !== event.pointerId) return;
     if (samePosition(lastPointerPosition.current, { x: event.screenX, y: event.screenY })) return;
@@ -478,6 +483,7 @@ function Avatar() {
     if (!session || session.id !== event.pointerId) return;
     pointer.current = null;
     setDragging(false);
+    setLive2dPointer(cancelled ? null : { clientX: event.clientX, clientY: event.clientY });
     if (!cancelled) lastPointerPosition.current = { x: event.screenX, y: event.screenY };
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
@@ -493,7 +499,9 @@ function Avatar() {
       // The poke plays straight from the pointer turn — queued IPC would make
       // the feedback wait behind the drag chain. Live2D owns its own motion;
       // adding the CSS bounce here would double the movement.
-      if (!useLive2D) {
+      if (useLive2D) {
+        setLive2dGestureEpoch((epoch) => epoch + 1);
+      } else {
         playClickBounce(gestureRef.current, reducedMotion);
         playAhogeFlick(ahogeRef.current, reducedMotion);
       }
@@ -535,6 +543,12 @@ function Avatar() {
         }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
+        onPointerEnter={(event) => {
+          if (useLive2D && !reducedMotion && !pointer.current) {
+            setLive2dPointer({ clientX: event.clientX, clientY: event.clientY });
+          }
+        }}
+        onPointerLeave={() => setLive2dPointer(null)}
         onPointerUp={(event) => finishPointer(event)}
         onPointerCancel={(event) => finishPointer(event, true)}
         onLostPointerCapture={(event) => finishPointer(event, true)}
@@ -547,7 +561,9 @@ function Avatar() {
           if (event.key === 'Enter' || event.key === ' ') {
             event.preventDefault();
             pauseIdleForInteraction();
-            if (!useLive2D) {
+            if (useLive2D) {
+              setLive2dGestureEpoch((epoch) => epoch + 1);
+            } else {
               playClickBounce(gestureRef.current, reducedMotion);
               playAhogeFlick(ahogeRef.current, reducedMotion);
             }
@@ -558,6 +574,8 @@ function Avatar() {
         {live2dRequested && <div className="avatar-gesture">
               <Live2DPortrait manifest={live2dManifest} lanes={lanes}
                 reducedMotion={reducedMotion}
+                pointerPosition={live2dPointer}
+                gestureEpoch={live2dGestureEpoch}
                 onReady={() => setLive2dReady(true)}
                 onError={() => {
                   setLive2dReady(false)
