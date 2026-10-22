@@ -29,7 +29,7 @@ import './avatar.css';
 const STATUS_ARC_RADIUS = 50;
 const STATUS_ARC_STEP_DEG = 12;
 const STATUS_ARC_START_DEG = -78;
-const STATUS_ARC_CENTER_LIFT = 0;
+const STATUS_ARC_CENTER_LIFT = 1.5;
 const STATUS_ARC_ROTATION_DEG = 5;
 const STATUS_ARC_SLOTS = 5;
 
@@ -596,7 +596,7 @@ function Avatar() {
         <span className="avatar-status-dots">
           {Array.from({ length: STATUS_ARC_SLOTS }, (_, index) => {
             // 半径固定在 50：第一个点在上方，之后沿转角弧往右下排。
-            const angle = (STATUS_ARC_START_DEG - STATUS_ARC_ROTATION_DEG + STATUS_ARC_STEP_DEG * index) * Math.PI / 180;
+            const angle = (STATUS_ARC_START_DEG + STATUS_ARC_ROTATION_DEG + STATUS_ARC_STEP_DEG * index) * Math.PI / 180;
             const arcRight = STATUS_ARC_RADIUS - STATUS_ARC_RADIUS * Math.cos(angle);
             const arcTop = STATUS_ARC_RADIUS + STATUS_ARC_RADIUS * Math.sin(angle) - STATUS_ARC_CENTER_LIFT;
             const style = {

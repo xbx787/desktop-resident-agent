@@ -6,7 +6,7 @@ Set-Location -LiteralPath $projectRoot
 $version = (& node -p "require('./package.json').version").Trim()
 if ($LASTEXITCODE -ne 0 -or $version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid package version.' }
 
-$releaseName = "whale-companion-v$version"
+$releaseName = "whale-companion-v$version$($env:WHALE_RELEASE_SUFFIX)"
 $releaseDir = [IO.Path]::GetFullPath((Join-Path $projectRoot (Join-Path 'release' $releaseName)))
 if (-not $releaseDir.StartsWith($projectRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
   throw 'Release target is outside the project.'
@@ -88,3 +88,4 @@ if (Test-Path -LiteralPath $dshRoot) {
 }
 
 Write-Output "Release ready: $releaseDir"
+
