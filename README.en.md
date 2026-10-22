@@ -16,7 +16,7 @@
 
 ---
 
-Whale Companion lives in the corner of your Windows desktop and in the notification area. Open the bubble to talk. Behind it is a full agent built on the Claude Agent SDK, using the DeepSeek API by default, with tools for real files and commands.
+Whale Companion lives in the corner of your Windows desktop and in the notification area. Open the bubble to talk. Its agent runtime is a trimmed, bundled copy of [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness), driven through the Agent Client Protocol (ACP). It uses the DeepSeek API by default and can work with real files, commands, and extension tools.
 
 ## Highlights
 
@@ -27,7 +27,7 @@ Whale Companion lives in the corner of your Windows desktop and in the notificat
 - **Message ruler**: a column of marks on the bubble's edge. Scroll to move, click to jump — useful in long conversations.
 - **Long-term memory**: a few stable facts are extracted after successful turns and can be edited or deleted in Settings.
 - **Persona presets**: the default whale girl plus tsundere, gentle, energetic and sharp-tongued presets. Switching changes the persona text, chat avatar and desktop character together.
-- **Self-contained**: the Claude Code engine ships inside the package. Unzip it to a writable folder and run — no Node.js or Claude Code installation required.
+- **Self-contained**: a trimmed DeepSeek Harness runtime ships inside the package. Unzip it to a writable folder and run — no separate Node.js, DSH, or Claude Code installation required.
 
 ## Quick start
 
@@ -36,9 +36,9 @@ Whale Companion lives in the corner of your Windows desktop and in the notificat
 3. Open `win-unpacked` and run `Whale Companion Preview.exe`.
 4. Follow the first-run wizard: paste a DeepSeek API key and choose a workspace. Then click the character to chat.
 
-The key is encrypted on this machine and used only for requests to DeepSeek.
+Keys are encrypted on this machine and sent only to the model endpoint you select. Whale Companion does not send them back to its repository or unrelated services.
 
-**Requirements**: Windows 10/11 x64, network access to the DeepSeek API, and a DeepSeek API key. The engine is bundled; Node.js and Claude Code are not required. Git for Windows is recommended for command-line tools.
+**Requirements**: Windows 10/11 x64, network access to the DeepSeek API, and a DeepSeek API key. The DSH runtime is bundled; Node.js, DSH, and Claude Code are not required. Git for Windows is recommended for command-line tools.
 
 > The executable is not code-signed. On first launch SmartScreen may appear: choose **More info → Run anyway**.
 
@@ -73,18 +73,20 @@ Build a release with `npm.cmd run pack:release`. See [CHANGELOG.md](./CHANGELOG.
 ## Notes
 
 - Only a portable Windows x64 build is provided; there is no installer or auto-updater yet.
+- DeepSeek Harness is still a developer preview. Runtime upgrades require renewed compatibility checks for the ACP patches and saved sessions.
 - Character artwork comes from public character pages and is intended for personal desktop use. Confirm the rights or replace it with original art before redistributing.
 - Voice quality depends on the installed Chinese speech pack and the network.
-- Tools such as `windows-mcp` rely on a local `~/.claude.json` configuration and are not bundled with the release.
+- Local MCP tools such as `windows-mcp` can be imported from an existing `~/.claude.json`. That file is only an optional compatibility source; the DSH kernel does not depend on Claude, and third-party MCP tools are not bundled.
 
 ---
 
-Built on the [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript). Default model provided by DeepSeek.
+The agent kernel is [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness). Whale Companion uses ACP for conversations, reasoning, tool calls, subagents, and session continuity. DeepSeek is the default model and account service.
 
 ## Third-party components and licenses
 
-- **Claude Code engine / Claude Agent SDK**: © Anthropic PBC. All rights reserved. The `claude.exe` shipped in the release is the unmodified binary published by Anthropic; its use is subject to the [Anthropic Legal and Compliance](https://code.claude.com/docs/en/legal-and-compliance) terms and the applicable Commercial Terms of Service. Each user must use their own API key; this project does not pay for, resell, or intermediate Claude usage. This project is not affiliated with or endorsed by Anthropic.
-- **Model endpoint**: the default is a user-configured DeepSeek Anthropic-compatible endpoint. It is not an Anthropic-provided or officially supported inference route; users are responsible for confirming that their use complies with the applicable terms.
+- **DeepSeek Harness (DSH)**: © DeepSeek, used under the MIT License. The release contains a trimmed DSH runtime; Whale Companion connects it through configuration and reproducible ACP patches and does not bundle the DSH Web UI.
+- **Model endpoints**: the default is a user-configured DeepSeek API endpoint, with other supported endpoints available in Settings. Each user supplies their own credentials; this project does not pay for, resell, or intermediate model usage. This project is not affiliated with or endorsed by DeepSeek.
+- **Legacy compatibility code**: the repository and build still retain parts of the historical Claude Agent SDK adapter and growth-experiment compatibility code for migration and regression coverage. The current conversation kernel does not load Claude Code, and release packages do not carry or launch `claude.exe`.
 - **Character artwork**: comes from public character pages; rights remain with the original owners. It is intended for personal desktop use; confirm permission or replace it with original artwork before redistributing.
 - **Live2D Cubism Core**: © Live2D Inc. Distributed as Redistributable Code under the [Live2D Proprietary Software License Agreement](https://www.live2d.com/eula/live2d-proprietary-software-license-agreement_en.html). Do not alter or remove its copyright notice; source, retrieval date and SHA-256 are recorded in `resources/live2d/NOTICE.md`. Review the current Live2D distribution terms before a public release.
 - **Arch-chan model**: CC0 1.0 Universal, from [Speykious/arch-chan](https://github.com/Speykious/arch-chan). It is a technical Live2D preview only, not a XiaoJing default portrait or persona asset.
