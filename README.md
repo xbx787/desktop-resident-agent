@@ -16,7 +16,7 @@
 
 ---
 
-小鲸是一个常驻桌面的智能体：角色待在屏幕角落和通知区域，点开就是完整的对话气泡。它基于 Claude Agent SDK，默认使用 DeepSeek API，能自主使用本机文件和命令工具完成真实工作。
+小鲸是一个常驻桌面的智能体：角色待在屏幕角落和通知区域，点开就是完整的对话气泡。它内置裁剪后的 [DeepSeek Harness（DSH）](https://github.com/deepseek-ai/deepseek-harness)，由应用通过 Agent Client Protocol（ACP）驱动，默认使用 DeepSeek API，能自主使用本机文件、命令和扩展工具完成真实工作。
 
 本项目正在开发中，欢迎提issue和发PR，感谢！
 
@@ -29,7 +29,7 @@
 - **消息刻度导航**：气泡左缘一列刻度，滚轮翻动、Dock 式高亮、点击跳转，长对话里找人很快。
 - **长期记忆**：成功回合后提取少量稳定事实，在设置里可改可删；失败不影响当前对话。
 - **五套人设**：默认小鲸，另有远坂凛、雷姆、平泽唯、雪之下雪乃四套统一 Q 版预设，同时切换人设文字、对话头像和桌面角色。
-- **自带引擎，开箱即用**：包内已经包含 Claude Code 引擎，解压到有写权限的目录就能运行，不需要安装 Node.js 或 Claude Code。
+- **自带引擎，开箱即用**：包内已经包含裁剪后的 DeepSeek Harness 运行时，解压到有写权限的目录就能运行，不需要另装 Node.js、DSH 或 Claude Code。
 
 ## 快速开始
 
@@ -38,9 +38,9 @@
 3. 进入 `win-unpacked`，双击 `Whale Companion Preview.exe`。
 4. 首次启动按向导填写 DeepSeek API Key，并选择工作目录。完成后左键点击角色即可对话。
 
-Key 会加密保存在本机，只用于向 DeepSeek 发请求，不会发到其他服务。
+Key 会加密保存在本机，只发送给你当前选择的模型端点；小鲸不会把它回传到自己的仓库或其他服务。
 
-**系统要求**：Windows 10/11 x64；能访问 DeepSeek API 的网络；一个 DeepSeek API Key。引擎已内置，不需要 Node.js 或 Claude Code。执行命令类工具建议安装 Git for Windows。
+**系统要求**：Windows 10/11 x64；能访问 DeepSeek API 的网络；一个 DeepSeek API Key。DSH 运行时已内置，不需要 Node.js、DSH 或 Claude Code。执行命令类工具建议安装 Git for Windows。
 
 > 程序没有代码签名，首次运行可能触发 SmartScreen：点“更多信息”→“仍要运行”。
 
@@ -75,18 +75,20 @@ npm.cmd run dev
 ## 已知边界
 
 - 目前只提供 Windows x64 便携包，没有安装器和自动更新。
+- DeepSeek Harness 目前仍是 developer preview，升级运行时前需要重新验证 ACP 补丁与会话兼容性。
 - 角色立绘来自公开角色页，仅作个人桌面使用；公开分发前需要确认素材权利或替换为原创素材。
 - 语音质量取决于本机中文语音包与网络。
-- `windows-mcp` 等 MCP 工具依赖本机 `~/.claude.json` 配置，不随发布包携带。
+- `windows-mcp` 等本机 MCP 可以从已有的 `~/.claude.json` 兼容导入；这个文件只作为可选配置来源，DSH 内核不依赖 Claude，第三方 MCP 也不随发布包携带。
 
 ---
 
-基于 [Claude Agent SDK](https://github.com/anthropics/claude-agent-sdk-typescript) 构建，默认模型来自 DeepSeek。
+智能体内核采用 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)，小鲸通过 ACP 承载对话、思考、工具调用、子代理和会话续接。默认模型与账户服务来自 DeepSeek。
 
 ## 第三方组件与许可
 
-- **Claude Code 引擎 / Claude Agent SDK**：© Anthropic PBC，保留所有权利。发布包内的 `claude.exe` 是 Anthropic 发布的原始二进制，未做修改；使用受 [Anthropic Legal and Compliance](https://code.claude.com/docs/en/legal-and-compliance) 及适用的 Commercial Terms of Service 约束。每个使用者需使用自己的 API Key；本项目不代付、不转售、不中介 Claude 用量。本项目与 Anthropic 无隶属或背书关系。
-- **模型端点**：默认使用用户自行配置的 DeepSeek Anthropic 兼容端点。该端点不是 Anthropic 提供或官方支持的推理路径，使用者需自行确认其用法符合适用条款。
+- **DeepSeek Harness（DSH）**：© DeepSeek，按 MIT 许可证使用。发布包携带裁剪后的 DSH 运行时；小鲸通过配置和可复现补丁接入 ACP，不包含 DSH Web 界面。
+- **模型端点**：默认使用用户自行配置的 DeepSeek API，也可配置应用支持的其他端点。每位使用者需使用自己的密钥；本项目不代付、不转售或中介模型用量。本项目与 DeepSeek 无隶属或背书关系。
+- **旧版兼容代码**：仓库及构建产物仍保留部分历史 Claude Agent SDK 适配器和成长实验兼容代码，用于迁移与回归；当前对话内核不加载 Claude Code，发布包不携带或启动 `claude.exe`。
 - **角色素材**：角色立绘来自公开角色页，权利归原作者或权利方所有，仅作个人桌面使用；公开分发前请确认授权或替换为原创素材。
 - **Live2D Cubism Core**：© Live2D Inc.，按 [Live2D Proprietary Software License Agreement](https://www.live2d.com/eula/live2d-proprietary-software-license-agreement_en.html) 作为 Redistributable Code 随应用分发。原始版权声明不得修改或移除；来源、获取日期和 SHA-256 见 `resources/live2d/NOTICE.md`。正式公开发布前请复核当前 Live2D 的分发条款。
 - **Arch-chan 模型**：CC0 1.0 Universal，来源 [Speykious/arch-chan](https://github.com/Speykious/arch-chan)，仅作 Live2D 技术预览，不是小鲸的默认形象或人设素材。
