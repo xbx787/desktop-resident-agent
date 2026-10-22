@@ -327,7 +327,65 @@ describe('task cancellation', () => {
     await runtime.sendMessage('读取')
     const tools = runtime.getSnapshot().timeline.filter((entry) => entry.kind === 'tool')
     expect(tools).toHaveLength(1)
-    expect(tools[0].tool).toMatchObject({ toolUseId: 'read-1', name: 'Read', status: 'done', output: '文件已读取' })
+    expect(tools[0].tool).toMatchObject({
+      toolUseId: 'read-1', name: 'Read', status: 'done', activity: 'reading', output: '文件已读取'
+    })
+    expect(runtime.getSnapshot().agentActivity).toBeUndefined()
+  })
+
+  it('exposes the active tool semantic while a tool is running, then clears it', async () => {
+    let releaseTool!: () => void
+    let releaseReply!: () => void
+    let reportStarted!: () => void
+    let reportResult!: () => void
+    const toolStarted = new Promise<void>((resolve) => { reportStarted = resolve })
+    const toolReleased = new Promise<void>((resolve) => { releaseTool = resolve })
+    const resultEmitted = new Promise<void>((resolve) => { reportResult = resolve })
+    const replyReleased = new Promise<void>((resolve) => { releaseReply = resolve })
+    const model: ModelClient = {
+      respond: async (_history, _signal, _progress, _session, onToolEvent) => {
+        onToolEvent?.({ toolUseId: 'read-live', toolName: 'custom_tool', kind: 'read', phase: 'start' })
+        reportStarted()
+        await toolReleased
+        onToolEvent?.({ toolUseId: 'read-live', toolName: 'custom_tool', kind: 'read', phase: 'result', output: 'ok' })
+        reportResult()
+        await replyReleased
+        return { text: '完成' }
+      }
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    const run = runtime.sendMessage('读取')
+    await toolStarted
+    expect(runtime.getSnapshot()).toMatchObject({
+      taskStatus: 'executing', avatarState: 'acting', agentActivity: 'reading'
+    })
+    releaseTool()
+    await resultEmitted
+    expect(runtime.getSnapshot().agentActivity).toBeUndefined()
+    releaseReply()
+    await run
+    expect(runtime.getSnapshot().agentActivity).toBeUndefined()
+  })
+
+  it('falls back to the latest still-running tool when concurrent tools settle', async () => {
+    const observed: Array<string | undefined> = []
+    let runtime!: AgentRuntime
+    const model: ModelClient = {
+      respond: async (_history, _signal, _progress, _session, onToolEvent) => {
+        onToolEvent?.({ toolUseId: 'read-a', toolName: 'Read', kind: 'read', phase: 'start' })
+        observed.push(runtime.getSnapshot().agentActivity)
+        onToolEvent?.({ toolUseId: 'shell-b', toolName: 'Bash', kind: 'execute', phase: 'start' })
+        observed.push(runtime.getSnapshot().agentActivity)
+        onToolEvent?.({ toolUseId: 'shell-b', toolName: 'Bash', kind: 'execute', phase: 'result', output: 'ok' })
+        observed.push(runtime.getSnapshot().agentActivity)
+        onToolEvent?.({ toolUseId: 'read-a', toolName: 'Read', kind: 'read', phase: 'result', output: 'ok' })
+        observed.push(runtime.getSnapshot().agentActivity)
+        return { text: '完成' }
+      }
+    }
+    runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    await runtime.sendMessage('并发工具')
+    expect(observed).toEqual(['reading', 'terminal', 'reading', undefined])
   })
 
   it('places the final streamed answer after tool calls and retains tool details', async () => {

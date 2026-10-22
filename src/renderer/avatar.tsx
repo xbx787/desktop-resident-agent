@@ -520,6 +520,7 @@ function Avatar() {
       className={`avatar-stage is-${presentation.activity}${panelOpen ? ' is-panel-open' : ''}`}
       data-persona={personaId}
       data-task={lanes.task}
+      data-work={lanes.work}
       data-voice={lanes.voice}
       data-interaction={lanes.interaction}
       data-emotion={lanes.emotion}

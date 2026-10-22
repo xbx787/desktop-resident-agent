@@ -113,7 +113,9 @@ describe('Arch-chan Live2D state motion fixtures', () => {
   it('covers every application action with an existing model motion', () => {
     const manifest = live2dManifestFor('arch-chan')!
     const actions: Live2DAction[] = [
-      'idle', 'acknowledge', 'thinking', 'working', 'verifying', 'waiting',
+      'idle', 'acknowledge', 'thinking', 'working',
+      'reading', 'writing', 'terminal', 'searching', 'drawing', 'delegating',
+      'verifying', 'waiting',
       'success', 'failure', 'listening', 'speaking', 'poke'
     ]
     expect(Object.keys(manifest.motions).sort()).toEqual([...actions].sort())

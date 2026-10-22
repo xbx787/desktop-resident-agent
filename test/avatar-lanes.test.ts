@@ -7,7 +7,7 @@ describe('avatar orthogonal lanes', () => {
       snapshot: { taskStatus: 'executing', avatarState: 'speaking' },
       dragging: true,
       panelOpen: true
-    })).toEqual({ task: 'executing', voice: 'speaking', interaction: 'dragging', emotion: 'happy' })
+    })).toEqual({ task: 'executing', work: 'none', voice: 'speaking', interaction: 'dragging', emotion: 'happy' })
   })
 
   it('distinguishes planning, executing, verifying and compacting', () => {
@@ -15,6 +15,12 @@ describe('avatar orthogonal lanes', () => {
     expect(resolveAvatarLanes({ snapshot: { taskStatus: 'executing', avatarState: 'acting' } }).task).toBe('executing')
     expect(resolveAvatarLanes({ snapshot: { taskStatus: 'verifying', avatarState: 'acting' } }).task).toBe('verifying')
     expect(resolveAvatarLanes({ snapshot: { taskStatus: 'executing', avatarState: 'acting', contextCompacting: true } }).task).toBe('compacting')
+  })
+
+  it('keeps the current tool semantic separate from the task phase', () => {
+    expect(resolveAvatarLanes({
+      snapshot: { taskStatus: 'executing', avatarState: 'acting', agentActivity: 'searching' }
+    }).work).toBe('searching')
   })
 
   it('treats every parked user decision as waiting even before status catches up', () => {

@@ -49,3 +49,13 @@
 - `tools/live2d-motion/`：生成与独立校验；保留 LICENSE/UPSTREAM。
 
 窗口隐藏后的后台节流尚未专门实现；当前沿用 Pixi/Chromium 现有调度。本轮通过的是代码与构建检查，不能当作真机视觉验收。
+
+## 2026-10-23 接续：工具活动语义层
+
+- 本记录最初基于 v0.0.105；其中的 Live2D 技术预览成果随后已进入 v0.0.106 和 v0.0.107。本节记录在 v0.0.107 源码上的后续改动，不改写前面的历史验证数字。
+- `src/shared/agent-activity.ts` 定义内核无关的 `AgentActivity`。DSH 的 `kind` 优先，具体工具名只在适配器没有给出可识别类别时作为回退。
+- `src/main/agent-runtime.ts` 把当前仍在运行的前台工具语义写入 `AppSnapshot.agentActivity`；并发工具结束一个后会回到最近一个仍在运行的语义，无工具运行时清空。
+- `src/renderer/avatar-lanes.ts` 把该值送入独立的 `work` lane。`src/renderer/live2d-performance-profiles.ts` 与 `src/renderer/Live2DPortrait.tsx` 新增读取、写入、终端、搜索、绘图和委派六种语义及安全 fallback。
+- Arch Chan 只有通用 `Working`，因此六种语义暂时共用同一 motion，切换语义时不会重启同一段动作。正式小鲸模型需要分别制作动作后，才能呈现真正不同的视觉表现。
+- CrossPet 只作为行为架构参考。没有引入其采用 CC BY-NC-SA 4.0 的角色图片、提示词或角色设定；研究结论与许可边界见 [CrossPet 借鉴清单](./2026-10-23-crosspet-live2d-borrowing.md)。
+- 本次验证：7 个相关文件 82 项定向测试通过；全量 161 个文件、952 项通过，6 个文件、28 项 Live 门控跳过；`npm run check`、`npm run build`、`npm run live2d:check` 与 `git diff --check` 通过。未启动 GUI，未打包。

@@ -1,4 +1,5 @@
 import type { AppSnapshot } from '../shared/contracts'
+import type { AgentActivity } from '../shared/agent-activity'
 
 export type AvatarTaskLane =
   | 'idle' | 'received' | 'planning' | 'executing' | 'verifying'
@@ -6,16 +7,19 @@ export type AvatarTaskLane =
 export type AvatarVoiceLane = 'silent' | 'listening' | 'speaking'
 export type AvatarInteractionLane = 'none' | 'panel' | 'dragging'
 export type AvatarEmotionLane = 'neutral' | 'happy' | 'focused' | 'attentive' | 'surprised' | 'worried'
+export type AvatarWorkLane = AgentActivity | 'none'
 
 export interface AvatarLanes {
   task: AvatarTaskLane
+  /** Optional for compatibility with older renderer fixtures and snapshots. */
+  work?: AvatarWorkLane
   voice: AvatarVoiceLane
   interaction: AvatarInteractionLane
   emotion: AvatarEmotionLane
 }
 
 export interface AvatarLaneInput {
-  snapshot?: Pick<AppSnapshot, 'taskStatus' | 'avatarState' | 'contextCompacting' | 'question' | 'plan' | 'permission'> | null
+  snapshot?: Pick<AppSnapshot, 'taskStatus' | 'avatarState' | 'agentActivity' | 'contextCompacting' | 'question' | 'plan' | 'permission'> | null
   acknowledging?: boolean
   settled?: 'done' | 'failed' | null
   dragging?: boolean
@@ -37,6 +41,7 @@ export function resolveAvatarLanes(input: AvatarLaneInput): AvatarLanes {
     : state === 'listening' ? 'listening' : 'silent'
   const interaction: AvatarInteractionLane = input.dragging ? 'dragging'
     : input.panelOpen ? 'panel' : 'none'
+  const work: AvatarWorkLane = snapshot?.agentActivity ?? 'none'
 
   let task: AvatarTaskLane = 'idle'
   if (snapshot?.contextCompacting) task = 'compacting'
@@ -60,7 +65,7 @@ export function resolveAvatarLanes(input: AvatarLaneInput): AvatarLanes {
   else if (voice === 'listening') emotion = 'attentive'
   else if (['planning', 'executing', 'verifying', 'compacting'].includes(task)) emotion = 'focused'
 
-  return { task, voice, interaction, emotion }
+  return { task, work, voice, interaction, emotion }
 }
 
 export function faceForAvatarEmotion(emotion: AvatarEmotionLane): string | null {

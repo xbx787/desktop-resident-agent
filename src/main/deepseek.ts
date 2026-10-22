@@ -27,6 +27,8 @@ export interface ModelReply {
 export interface ModelToolEvent {
   toolUseId: string
   toolName: string
+  /** Adapter-native category when available; the host falls back to the name. */
+  kind?: string
   phase: 'start' | 'result'
   input?: string
   output?: string

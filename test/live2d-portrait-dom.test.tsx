@@ -206,6 +206,68 @@ describe('Live2DPortrait lifecycle', () => {
     await act(async () => root.unmount())
   })
 
+  it('reacts when only the work semantic changes and starts a distinct authored motion', async () => {
+    const base = live2dManifestFor('arch-chan')!
+    const manifest = {
+      ...base,
+      motions: {
+        ...base.motions,
+        reading: { group: 'Thinking', index: 0, priority: 'normal' as const, loop: true },
+        writing: { group: 'Working', index: 0, priority: 'normal' as const, loop: true }
+      }
+    }
+    const mount = document.createElement('div')
+    document.body.append(mount)
+    const root = createRoot(mount)
+    const executing = { task: 'executing' as const, voice: 'silent' as const, interaction: 'none' as const }
+
+    await act(async () => {
+      root.render(<Live2DPortrait manifest={manifest} lanes={{ ...executing, work: 'reading' }} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const model = runtime.models.at(-1)! as { motion: ReturnType<typeof vi.fn> }
+    expect(model.motion).toHaveBeenLastCalledWith('Thinking', 0, 2)
+
+    await act(async () => {
+      root.render(<Live2DPortrait manifest={manifest} lanes={{ ...executing, work: 'writing' }} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(model.motion).toHaveBeenLastCalledWith('Working', 0, 2)
+    await act(async () => root.unmount())
+  })
+
+  it('does not restart one authored motion shared by different work semantics', async () => {
+    const manifest = live2dManifestFor('arch-chan')!
+    const mount = document.createElement('div')
+    document.body.append(mount)
+    const root = createRoot(mount)
+    const executing = { task: 'executing' as const, voice: 'silent' as const, interaction: 'none' as const }
+
+    await act(async () => {
+      root.render(<Live2DPortrait manifest={manifest} lanes={{ ...executing, work: 'reading' }} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const model = runtime.models.at(-1)! as {
+      motion: ReturnType<typeof vi.fn>
+      internalModel: { motionManager: { stopAllMotions: ReturnType<typeof vi.fn> } }
+    }
+    expect(model.motion).toHaveBeenLastCalledWith('Working', 0, 2)
+    const motionCalls = model.motion.mock.calls.length
+    const stopCalls = model.internalModel.motionManager.stopAllMotions.mock.calls.length
+
+    await act(async () => {
+      root.render(<Live2DPortrait manifest={manifest} lanes={{ ...executing, work: 'writing' }} />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(model.motion).toHaveBeenCalledTimes(motionCalls)
+    expect(model.internalModel.motionManager.stopAllMotions).toHaveBeenCalledTimes(stopCalls)
+    await act(async () => root.unmount())
+  })
+
   it('plays the one-shot Poke motion when the DOM gesture epoch changes', async () => {
     const manifest = live2dManifestFor('arch-chan')!
     const mount = document.createElement('div')

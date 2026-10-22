@@ -44,7 +44,7 @@ export function localLive2DPoint(
 export interface Live2DPortraitProps {
   manifest: Live2DModelManifest | null
   /** The existing orthogonal state lanes stay the source of truth. */
-  lanes: Pick<AvatarLanes, 'task' | 'voice' | 'interaction'>
+  lanes: Pick<AvatarLanes, 'task' | 'work' | 'voice' | 'interaction'>
   reducedMotion?: boolean
   /** Model-specific framing within the pre-existing fixed visual slot. */
   viewport?: Live2DViewport
@@ -151,6 +151,12 @@ const ACTION_FALLBACKS: Readonly<Record<Live2DAction, readonly Live2DAction[]>> 
   acknowledge: ['acknowledge', 'idle'],
   thinking: ['thinking', 'idle'],
   working: ['working', 'thinking', 'idle'],
+  reading: ['reading', 'working', 'thinking', 'idle'],
+  writing: ['writing', 'working', 'thinking', 'idle'],
+  terminal: ['terminal', 'working', 'thinking', 'idle'],
+  searching: ['searching', 'working', 'thinking', 'idle'],
+  drawing: ['drawing', 'working', 'thinking', 'idle'],
+  delegating: ['delegating', 'working', 'thinking', 'idle'],
   verifying: ['verifying', 'working', 'thinking', 'idle'],
   waiting: ['waiting', 'thinking', 'idle'],
   success: ['success', 'acknowledge', 'idle'],
@@ -180,7 +186,7 @@ function motionForAction(
 /** Maps the app's task and voice lanes to intentionally generic Live2D
  * actions. A model without a matching action simply keeps its authored idle
  * behaviour; no CSS substitute is introduced here. */
-export function live2dActionForLanes(lanes: Pick<AvatarLanes, 'task' | 'voice' | 'interaction'>): Live2DAction | null {
+export function live2dActionForLanes(lanes: Pick<AvatarLanes, 'task' | 'work' | 'voice' | 'interaction'>): Live2DAction | null {
   if (lanes.interaction === 'dragging') return null
   if (lanes.voice === 'listening') return 'listening'
   if (lanes.voice === 'speaking') return 'speaking'
@@ -190,7 +196,10 @@ export function live2dActionForLanes(lanes: Pick<AvatarLanes, 'task' | 'voice' |
     case 'planning':
     case 'compacting': return 'thinking'
     case 'waiting': return 'waiting'
-    case 'executing': return 'working'
+    case 'executing': {
+      const work = lanes.work ?? 'none'
+      return work === 'none' || work === 'other' ? 'working' : work
+    }
     case 'verifying': return 'verifying'
     case 'completed': return 'success'
     case 'failed':
@@ -209,7 +218,7 @@ async function requestStateMotion(
   model: RuntimeModel,
   runtime: CubismRuntime,
   manifest: Live2DModelManifest,
-  lanes: Pick<AvatarLanes, 'task' | 'voice' | 'interaction'>,
+  lanes: Pick<AvatarLanes, 'task' | 'work' | 'voice' | 'interaction'>,
   reducedMotion: boolean,
   requestState: { current: MotionRequestState }
 ): Promise<void> {
@@ -226,7 +235,10 @@ async function requestStateMotion(
   const resolved = motionForAction(model, manifest, action)
   if (!resolved) return
   const { motion } = resolved
-  const request = `${action}:${resolved.action}:${motion.group}:${motion.index}:${motion.priority}:${motion.loop === true}`
+  // Semantic actions can intentionally share one fallback motion. Key the
+  // request by the resolved motion so Read → Write does not restart the same
+  // generic Working loop on a capability-limited model.
+  const request = `${motion.group}:${motion.index}:${motion.priority}:${motion.loop === true}`
   if (requestState.current.key === request) return
 
   const token = requestState.current.token + 1
@@ -477,7 +489,7 @@ export function Live2DPortrait({
       model.autoUpdate = !reducedMotion
       void requestStateMotion(model, runtime, manifest, lanes, reducedMotion, motionRequestState)
     }
-  }, [manifest, lanes.task, lanes.voice, lanes.interaction, reducedMotion])
+  }, [manifest, lanes.task, lanes.work, lanes.voice, lanes.interaction, reducedMotion])
 
   useEffect(() => {
     const previous = lastGestureEpoch.current

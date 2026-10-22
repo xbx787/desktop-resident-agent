@@ -352,6 +352,7 @@ export class DshAcpAgentClient implements ModelClient {
         onToolEvent?.({
           toolUseId: toolCallId,
           toolName: title,
+          kind: textValue(update.kind),
           phase: 'start',
           input: update.rawInput === undefined ? undefined : input
         })
@@ -371,6 +372,7 @@ export class DshAcpAgentClient implements ModelClient {
         onToolEvent?.({
           toolUseId: toolCallId,
           toolName: toolNames.get(toolCallId) ?? '',
+          kind: toolCallId ? this.toolCallInfo.get(toolCallId)?.kind : undefined,
           phase: 'result',
           output,
           isError: status === 'failed'

@@ -5,6 +5,12 @@ export type Live2DAction =
   | 'acknowledge'
   | 'thinking'
   | 'working'
+  | 'reading'
+  | 'writing'
+  | 'terminal'
+  | 'searching'
+  | 'drawing'
+  | 'delegating'
   | 'verifying'
   | 'waiting'
   | 'success'
@@ -30,6 +36,12 @@ export const live2dActionContracts = {
   acknowledge: { behavior: 'one-shot', restoreStateAfterMs: 'forbidden' },
   thinking: { behavior: 'persistent', restoreStateAfterMs: 'forbidden' },
   working: { behavior: 'persistent', restoreStateAfterMs: 'forbidden' },
+  reading: { behavior: 'persistent', restoreStateAfterMs: 'forbidden' },
+  writing: { behavior: 'persistent', restoreStateAfterMs: 'forbidden' },
+  terminal: { behavior: 'persistent', restoreStateAfterMs: 'forbidden' },
+  searching: { behavior: 'persistent', restoreStateAfterMs: 'forbidden' },
+  drawing: { behavior: 'persistent', restoreStateAfterMs: 'forbidden' },
+  delegating: { behavior: 'persistent', restoreStateAfterMs: 'forbidden' },
   verifying: { behavior: 'persistent', restoreStateAfterMs: 'forbidden' },
   waiting: { behavior: 'persistent', restoreStateAfterMs: 'forbidden' },
   success: { behavior: 'one-shot', restoreStateAfterMs: 'forbidden' },
@@ -68,6 +80,15 @@ const profiles: Readonly<Record<Live2DPerformanceProfileId, Live2DPerformancePro
       acknowledge: { group: 'Acknowledge', index: 0, priority: 'normal' },
       thinking: { group: 'Thinking', index: 0, priority: 'normal', loop: true },
       working: { group: 'Working', index: 0, priority: 'normal', loop: true },
+      // The fixture has one generic work loop. Keeping the semantic keys in
+      // the package contract lets a formal Xiaojing rig replace any of them
+      // with authored motions without touching the DSH/runtime layer.
+      reading: { group: 'Working', index: 0, priority: 'normal', loop: true },
+      writing: { group: 'Working', index: 0, priority: 'normal', loop: true },
+      terminal: { group: 'Working', index: 0, priority: 'normal', loop: true },
+      searching: { group: 'Working', index: 0, priority: 'normal', loop: true },
+      drawing: { group: 'Working', index: 0, priority: 'normal', loop: true },
+      delegating: { group: 'Working', index: 0, priority: 'normal', loop: true },
       verifying: { group: 'Verifying', index: 0, priority: 'normal', loop: true },
       waiting: { group: 'Waiting', index: 0, priority: 'normal', loop: true },
       success: { group: 'Success', index: 0, priority: 'force' },

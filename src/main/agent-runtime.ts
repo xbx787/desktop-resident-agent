@@ -9,6 +9,7 @@ import { getPeakStatus, usageSpendYuan } from '../shared/deepseek-pricing'
 import { toolLabel } from '../shared/tool-labels'
 import { AgentTurnError } from './agent-errors'
 import type { DialogueLine, ModelClient, ModelImage, ModelReply, ModelToolEvent } from './deepseek'
+import { agentActivityForTool, type AgentActivity } from '../shared/agent-activity'
 import type { ConversationRecord } from './conversation-store'
 import { NoteStore, type NoteDraft } from './note-store'
 import { attachmentContext, expandFileMentions, validAttachmentList } from './local-context'
@@ -774,6 +775,7 @@ export class AgentRuntime {
     this.state.taskMetrics = { startedAt: new Date().toISOString() }
     this.state.taskStatus = 'planning'
     this.state.avatarState = 'thinking'
+    this.state.agentActivity = undefined
     this.history.push({ role: 'user', content: prompt, ...(sessionContext ? { sessionContext } : {}) })
     this.currentTurnUserId = hiddenUser
       // 目标续轮不新增可见条目：挂到最近一次用户轮次下，整段连续工作只保留
@@ -1205,6 +1207,14 @@ export class AgentRuntime {
     return this.state.timeline.some((entry) => entry.kind === 'tool' && entry.tool?.status === 'running')
   }
 
+  private runningAgentActivity(): AgentActivity | undefined {
+    for (let index = this.state.timeline.length - 1; index >= 0; index -= 1) {
+      const tool = this.state.timeline[index].tool
+      if (tool?.status === 'running') return tool.activity ?? agentActivityForTool(tool.name)
+    }
+    return undefined
+  }
+
   /**
    * A parked question, plan or permission means the turn is waiting on the
    * user, not executing. Once the last one settles, fall back to what the
@@ -1233,6 +1243,7 @@ export class AgentRuntime {
     this.flushDeferredSteer()
     // 回合结束还没等到回显的插话，视为已完成，别把下一条插话卡住。
     this.pendingSteer = undefined
+    this.state.agentActivity = undefined
     this.closeThinkingEntries()
     // 生成时长随本轮记录落盘：账单的 token/s 按它算（不含工具执行与等待）。
     if (reply.generationMs !== undefined && this.state.taskMetrics) {
@@ -1309,16 +1320,18 @@ export class AgentRuntime {
     const toolName = event.toolName === 'unknown_tool' && existing?.tool?.name
       ? existing.tool.name
       : event.toolName
+    const activity = existing?.tool?.activity ?? agentActivityForTool(toolName, event.kind)
     const text = `${toolLabel(toolName)}${status === 'running' ? '（执行中）' : status === 'error' ? '（失败）' : '（已完成）'}`
     if (existing) {
       existing.text = text
       existing.tool = { ...existing.tool!, status, input: event.input ?? existing.tool?.input, output: event.output ?? existing.tool?.output,
+        activity,
         ...(event.images?.length ? { images: event.images } : {}) }
       this.markTimelineDirty(existing)
     } else {
       const entry: TimelineEntry = {
         id: crypto.randomUUID(), time: new Date().toISOString(), kind: 'tool', text,
-        tool: { toolUseId: event.toolUseId, name: toolName, status, input: event.input, output: event.output,
+        tool: { toolUseId: event.toolUseId, name: toolName, status, input: event.input, output: event.output, activity,
           ...(event.images?.length ? { images: event.images } : {}) }
       }
       this.state.timeline.push(entry)
@@ -1327,9 +1340,13 @@ export class AgentRuntime {
     if (event.phase === 'start') {
       this.state.taskStatus = 'executing'
       this.state.avatarState = 'acting'
+      this.state.agentActivity = activity
     } else if (!this.hasRunningTool()) {
       this.state.taskStatus = 'planning'
       this.state.avatarState = 'thinking'
+      this.state.agentActivity = undefined
+    } else {
+      this.state.agentActivity = this.runningAgentActivity()
     }
     // A parked question/permission keeps the turn in awaiting_approval even
     // while tool results trickle in.
@@ -1355,6 +1372,7 @@ export class AgentRuntime {
     const before = this.state.timeline.length
     this.state.timeline = this.state.timeline.filter((entry) =>
       !(entry.kind === 'tool' && entry.tool?.status === 'running'))
+    this.state.agentActivity = undefined
     if (this.state.timeline.length === before) return
     this.state.timelineRevision += 1
     this.timelineDirty.clear()
@@ -1369,6 +1387,7 @@ export class AgentRuntime {
       entry.text = `${toolLabel(entry.tool.name)}（${reason}）`
       this.markTimelineDirty(entry)
     }
+    this.state.agentActivity = undefined
   }
 
   private offerNote(title: string, content: string): void {
@@ -1398,6 +1417,7 @@ export class AgentRuntime {
     this.history.push({ role: 'assistant', content: text })
     this.state.taskStatus = 'done'
     this.state.avatarState = 'idle'
+    this.state.agentActivity = undefined
     this.add('assistant', text)
   }
 

@@ -40,14 +40,22 @@ describe('Live2D semantic action selection', () => {
     for (const [task, expected] of Object.entries(taskActions) as Array<
       [AvatarLanes['task'], ReturnType<typeof live2dActionForLanes>]
     >) {
-      expect(live2dActionForLanes({ task, voice: 'silent', interaction: 'none' })).toBe(expected)
+      expect(live2dActionForLanes({ task, work: 'none', voice: 'silent', interaction: 'none' })).toBe(expected)
     }
-    expect(live2dActionForLanes({ task: 'executing', voice: 'listening', interaction: 'none' }))
+    expect(live2dActionForLanes({ task: 'executing', work: 'reading', voice: 'listening', interaction: 'none' }))
       .toBe('listening')
-    expect(live2dActionForLanes({ task: 'executing', voice: 'speaking', interaction: 'none' }))
+    expect(live2dActionForLanes({ task: 'executing', work: 'reading', voice: 'speaking', interaction: 'none' }))
       .toBe('speaking')
-    expect(live2dActionForLanes({ task: 'executing', voice: 'speaking', interaction: 'dragging' }))
+    expect(live2dActionForLanes({ task: 'executing', work: 'reading', voice: 'speaking', interaction: 'dragging' }))
       .toBeNull()
+  })
+
+  it('selects tool-specific actions and falls back to the generic work loop', () => {
+    expect(live2dActionForLanes({ task: 'executing', work: 'reading', voice: 'silent', interaction: 'none' }))
+      .toBe('reading')
+    expect(live2dActionForLanes({ task: 'executing', work: 'other', voice: 'silent', interaction: 'none' }))
+      .toBe('working')
+    expect(live2dActionCandidates('searching')).toEqual(['searching', 'working', 'thinking', 'idle'])
   })
 
   it('uses the authored poke cue before compatibility fallbacks', () => {

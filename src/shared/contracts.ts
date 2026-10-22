@@ -1,5 +1,6 @@
 import type { LibraryItem } from './libraries'
 import type { InputActivity } from './input-activity'
+import type { AgentActivity } from './agent-activity'
 
 export type AvatarState = 'idle' | 'thinking' | 'listening' | 'speaking' | 'acting' | 'success' | 'error'
 export type ModelMode = 'demo' | 'live' | 'claude_code'
@@ -12,8 +13,8 @@ export type PanelPlacement = 'top' | 'bottom' | 'left' | 'right'
 
 /** 聊天面板配色；状态色不随它变化。 */
 export type PanelTheme = 'dark' | 'light'
-/** Which agent runtime executes turns. `dsh` is a gray preview; Claude stays
- *  the default until the DSH adapter passes full regression. */
+/** Stored compatibility union. New and migrated conversations execute with
+ * DSH; `claude_code` remains as the historical engine-mode value. */
 export type AgentKernelKind = 'claude_code' | 'dsh'
 export function isAgentKernelKind(value: unknown): value is AgentKernelKind {
   return value === 'claude_code' || value === 'dsh'
@@ -125,6 +126,8 @@ export interface TimelineEntry {
     status: 'running' | 'done' | 'error'
     input?: string
     output?: string
+    /** Stable animation semantic derived from the adapter's tool kind/name. */
+    activity?: AgentActivity
     /** Image files returned by the tool, opened with the system viewer on demand. */
     images?: Array<{ name: string; path: string }>
   }
@@ -486,6 +489,8 @@ export interface AppSnapshot {
   mode: ModelMode
   avatarState: AvatarState
   taskStatus: TaskStatus
+  /** Current foreground tool semantic. It clears when no tool is running. */
+  agentActivity?: AgentActivity
   timeline: TimelineEntry[]
   /** Monotonic timeline version. When `timelinePartial` is set, `timeline`
    *  carries only the entries changed since the renderer's last applied
