@@ -59,3 +59,19 @@
 - Arch Chan 只有通用 `Working`，因此六种语义暂时共用同一 motion，切换语义时不会重启同一段动作。正式小鲸模型需要分别制作动作后，才能呈现真正不同的视觉表现。
 - CrossPet 只作为行为架构参考。没有引入其采用 CC BY-NC-SA 4.0 的角色图片、提示词或角色设定；研究结论与许可边界见 [CrossPet 借鉴清单](./2026-10-23-crosspet-live2d-borrowing.md)。
 - 本次验证：7 个相关文件 82 项定向测试通过；全量 161 个文件、952 项通过，6 个文件、28 项 Live 门控跳过；`npm run check`、`npm run build`、`npm run live2d:check` 与 `git diff --check` 通过。未启动 GUI，未打包。
+
+## 2026-10-23 接续：首次挂载死锁与小鲸比例参考
+
+- v0.0.107 源码曾以 `useLive2D = requested && ready` 同时控制“是否挂载”和“是否显示”，而 `ready` 只能由挂载后的 `Live2DPortrait.onReady` 写入，导致技术预览首次永远无法启动。现已拆成独立加载状态：loading 先挂载隐藏画布并保留 PNG，同时锁定 Live2D 几何；Pixi 强制绘制首帧后才回调 ready 并显示同一画布，failed 后卸载并继续显示 PNG。
+- 加载状态绑定 `model id + performance profile id`，选择变化会重置；未来新增第二个模型时不能继承上一个模型的 ready 状态，重新选择同一个模型也必须等新 Pixi 实例完成加载。
+- `assets/live2d/xiaojing/xiaojing-standing-reference-v5.png` 只记录正面中立姿势、肩宽、上身量感和尾部连接方向。它仍有大面积半透明蓝色光晕，也没有任何遮挡补绘，因此不进入运行时、不直接抠图、不冒充分层母版。
+- 当前定向验证为类型检查与 14 项加载、DOM 生命周期和回退测试。完成本轮其余修改后仍需重新跑全量测试、生产构建与 `live2d:check`；不启动 GUI，不打包。
+- 动作层已增加纯仲裁器：普通任务动作最短保留 450ms，`executing → planning` 的短工具间隙缓冲 180ms；会话或用户回合变化会清空旧 pending，等待、结果、语音和拖动不延迟。`received` 现在会在 planning 前实际出现。
+- 主进程对已结束回合的迟到工具事件增加终态保护：已有工具可补回结果，新工具不会排在最终回复后，终态也不会被改回 planning/executing。
+- 本轮最终验证：`npm run check` 通过；全量 164 个测试文件、972 项通过，6 个文件、28 项 Live 门控跳过；`npm run build` 与 `npm run live2d:check` 通过；`git diff --check` 通过。没有启动 GUI，也没有打包。
+
+### 下一棒先做什么
+
+1. 用动作仲裁器消除工具开始/结束造成的 `planning ↔ executing` 快速抖动；普通阶段设最短停留，等待、完成、失败、拖动和语音仍立即抢占。
+2. 人工重绘分层 PSD：以 v5 的正面几何作参考，以确认后的面部语言和服装细节为准，先清除光晕并补绘眼、嘴、头发、手臂、裙摆和尾巴的遮挡区域。
+3. 在 Cubism Editor 中绑定并导出 Cubism 4 兼容包，再登记 catalog/profile；没有 `.moc3 + .model3.json + texture` 和加载测试前，正式小鲸的 Live2D 状态仍是“未制作”。

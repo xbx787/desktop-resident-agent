@@ -23,6 +23,17 @@ describe('avatar orthogonal lanes', () => {
     }).work).toBe('searching')
   })
 
+  it('shows a sent-message acknowledgement before the planning pose', () => {
+    expect(resolveAvatarLanes({
+      snapshot: { taskStatus: 'planning', avatarState: 'thinking' },
+      acknowledging: true
+    }).task).toBe('received')
+    expect(resolveAvatarLanes({
+      snapshot: { taskStatus: 'executing', avatarState: 'acting' },
+      acknowledging: true
+    }).task).toBe('executing')
+  })
+
   it('treats every parked user decision as waiting even before status catches up', () => {
     const question = { id: 'q', questions: [] }
     expect(resolveAvatarLanes({ snapshot: { taskStatus: 'executing', avatarState: 'thinking', question } }).task).toBe('waiting')

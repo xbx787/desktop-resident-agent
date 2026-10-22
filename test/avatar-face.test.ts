@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FACE_HOLD_MS, lastUserEntryId, resolveAvatarPresentation, SEND_FACE_HOLD_MS, stateFace, taskDot } from '../src/renderer/avatar-face'
+import { FACE_HOLD_MS, isFreshUserEntry, lastUserEntryId, resolveAvatarPresentation, SEND_FACE_HOLD_MS, stateFace, taskDot } from '../src/renderer/avatar-face'
 
 describe('stateFace', () => {
   it('maps a busy turn to focus and a delivered reply to smile', () => {
@@ -66,6 +66,19 @@ describe('lastUserEntryId', () => {
   it('returns null for timelines with no user message at all', () => {
     expect(lastUserEntryId([])).toBeNull()
     expect(lastUserEntryId([{ id: 'x', kind: 'system' }])).toBeNull()
+  })
+})
+
+describe('isFreshUserEntry', () => {
+  it('recognises a new entry in the current conversation during the same render', () => {
+    expect(isFreshUserEntry({ conversationId: 'a', entryId: 'u1' }, 'a', 'u2')).toBe(true)
+    expect(isFreshUserEntry({ conversationId: 'a', entryId: 'u1' }, 'a', 'u1')).toBe(false)
+  })
+
+  it('re-anchors silently on first load and conversation switches', () => {
+    expect(isFreshUserEntry(null, 'a', 'u1')).toBe(false)
+    expect(isFreshUserEntry({ conversationId: 'a', entryId: 'u1' }, 'b', 'u2')).toBe(false)
+    expect(isFreshUserEntry({ conversationId: 'a', entryId: 'u1' }, 'a', null)).toBe(false)
   })
 })
 

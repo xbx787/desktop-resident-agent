@@ -69,6 +69,18 @@ export function lastUserEntryId(timeline: readonly { id: string; kind: string }[
   return null
 }
 
+/** Detect a send synchronously during render, before the acknowledgement
+ * timer's passive effect updates its anchor. Conversation switches re-anchor
+ * silently and never replay an old send cue. */
+export function isFreshUserEntry(
+  previous: { conversationId: string | undefined; entryId: string | null } | null,
+  conversationId: string | undefined,
+  entryId: string | null
+): boolean {
+  return Boolean(previous && previous.conversationId === conversationId &&
+    entryId !== null && entryId !== previous.entryId)
+}
+
 /** How long a finished/failed dot stays on the portrait before it fades.
  *  Six seconds was easy to miss while looking elsewhere; a completed turn
  *  is worth a longer read. */

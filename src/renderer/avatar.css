@@ -85,6 +85,8 @@ body.avatar-window { -webkit-user-select: none; user-select: none; }
    separate transform so breathing, task, voice, idle and one-shot motion can
    blend without overwriting one another. */
 .avatar-gesture { position: absolute; top: 6px; left: 0; width: var(--avatar-w, 116.5px); height: var(--avatar-h, 139.5px); pointer-events: none; }
+.avatar-live2d-layer { opacity: 0; visibility: hidden; }
+.avatar-live2d-layer.is-ready { opacity: 1; visibility: visible; }
 .avatar-entry-motion, .avatar-idle-motion, .avatar-state-loop, .avatar-look,
 .avatar-breath, .avatar-swap, .avatar-portrait { position: relative; width: 100%; height: 100%; pointer-events: none; }
 .avatar-idle-motion { z-index: 1; }

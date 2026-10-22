@@ -1,15 +1,18 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { AvatarBox, BalanceSnapshot, PanelDirection, PanelPlacement, PetAPI } from '../shared/contracts';
 import { WhalePortrait } from './WhalePortrait';
+import { AvatarVisualLayers } from './AvatarVisualLayers';
 import { Live2DPortrait, type Live2DClientPoint } from './Live2DPortrait';
 import { live2dManifestForBinding } from './live2d-manifest';
+import { resolveLive2DLayerState, type Live2DLoadState } from './live2d-layer-state';
 import { personaVisualModeForRenderer, resolvePersonaVisualSelection } from './persona-visual-binding';
 import { avatarArtFor } from './avatar-art';
 import { avatarDisplaySize } from './avatar-geometry';
 import { AvatarStateEffects } from './AvatarStateEffects';
 import { avatarFaceUrl, avatarRigFor } from './avatar-rig';
 import { faceForAvatarEmotion, resolveAvatarLanes } from './avatar-lanes';
+import { useAvatarMotionPolicy } from './use-avatar-motion-policy';
 import { cancelAvatarStateEntry, entryCueFor, playAvatarStateEntry } from './avatar-state-motion';
 import { BalanceCard } from './balance';
 import { balanceErrorMessage } from './balance-error';
@@ -19,7 +22,7 @@ import { cancelClickBounce, playClickBounce, prefersReducedMotion, watchReducedM
 import { playIdleFidget } from './avatar-idle';
 import { startAvatarBehaviorScheduler, type AvatarBehaviorActions } from './avatar-behavior';
 import { cancelPoseSwap, nextPose, playPoseSwap, preloadPoses } from './avatar-poses';
-import { FACE_HOLD_MS, FAILED_FACE_HOLD_MS, lastUserEntryId, resolveAvatarPresentation, SEND_FACE_HOLD_MS, taskDot } from './avatar-face';
+import { FACE_HOLD_MS, FAILED_FACE_HOLD_MS, isFreshUserEntry, lastUserEntryId, resolveAvatarPresentation, SEND_FACE_HOLD_MS, taskDot } from './avatar-face';
 import { orderConversationTabs } from './panel-tabs';
 import { cancelAhogeFlick, playAhogeFlick } from './avatar-ahoge';
 import './avatar.css';
@@ -66,18 +69,21 @@ function Avatar() {
   const avatarRenderer = snapshot?.conversationLibrary?.settings.avatarRenderer ?? 'sprite';
   const visualSelection = resolvePersonaVisualSelection(personaId, personaVisualModeForRenderer(avatarRenderer));
   const live2dManifest = live2dManifestForBinding(visualSelection.live2d);
-  const [live2dFailed, setLive2dFailed] = useState(false);
-  const [live2dReady, setLive2dReady] = useState(false);
+  const [live2dLoad, setLive2dLoad] = useState<Live2DLoadState>({ key: null, ready: false, failed: false });
   const [live2dPointer, setLive2dPointer] = useState<Live2DClientPoint | null>(null);
   const [live2dGestureEpoch, setLive2dGestureEpoch] = useState(0);
-  // Live2D is a technical preview: the sprite portrait stays the default and
-  // remains visible until the model is ready, or when the model/Core fails.
-  const live2dRequested = live2dManifest !== null && !live2dFailed;
-  const useLive2D = live2dRequested && live2dReady;
+  // Mounting and revealing are separate: the hidden Cubism host must exist so
+  // it can load and invoke onReady. The PNG stays visible until that happens.
+  const live2dManifestKey = live2dManifest
+    ? `${live2dManifest.id}:${live2dManifest.performanceProfileId}`
+    : null;
+  const live2dLayer = resolveLive2DLayerState(live2dManifestKey, live2dLoad);
+  const useLive2D = live2dLayer.visible;
   useEffect(() => {
-    setLive2dFailed(false);
-    setLive2dReady(false);
-  }, [live2dManifest]);
+    // Deselecting a model destroys its Pixi instance. Resetting here ensures
+    // choosing the same model later waits for the newly mounted instance.
+    setLive2dLoad({ key: live2dManifestKey, ready: false, failed: false });
+  }, [live2dManifestKey]);
   const [panelOpen, setPanelOpen] = useState(false);
   const pointer = useRef<PointerSession | null>(null);
   const lastPointerPosition = useRef({ x: 0, y: 0 });
@@ -108,8 +114,16 @@ function Avatar() {
   const outcomeTimer = useRef<number | null>(null);
   const avatarState = snapshot?.avatarState;
   const taskStatus = snapshot?.taskStatus;
-  const presentation = resolveAvatarPresentation({ avatarState, taskStatus, acknowledging, settled, dragging });
-  const lanes = resolveAvatarLanes({ snapshot, acknowledging, settled, dragging, panelOpen });
+  const newestUserEntryId = snapshot ? lastUserEntryId(snapshot.timeline) : null;
+  const lastUserRef = useRef<{ conversationId: string | undefined; entryId: string | null } | null>(null);
+  const freshUserEntry = isFreshUserEntry(lastUserRef.current, snapshot?.conversationId, newestUserEntryId);
+  // Recognise the new user entry in this render. Waiting for the passive
+  // effect would briefly start the planning cue before acknowledgement.
+  const acknowledgementActive = acknowledging || freshUserEntry;
+  const presentation = resolveAvatarPresentation({ avatarState, taskStatus, acknowledging: acknowledgementActive, settled, dragging });
+  const rawLanes = resolveAvatarLanes({ snapshot, acknowledging: acknowledgementActive, settled, dragging, panelOpen });
+  const motionIdentity = `${snapshot?.conversationId ?? 'none'}:${newestUserEntryId ?? 'idle'}`;
+  const lanes = useAvatarMotionPolicy(motionIdentity, rawLanes);
   // The new lanes are the source of truth for whether an idle-only action may
   // take ownership. `presentation.idleAllowed` predates parked decisions and
   // compacting, so using it here could let a fidget interrupt those states.
@@ -122,8 +136,8 @@ function Avatar() {
   // Cubism does not expose a trimmed PNG rectangle. Reserve a square slot
   // using the same long-edge setting as the sprite renderer, then report the
   // immutable button geometry through the existing hit-shape IPC path.
-  useEffect(() => {
-    if (!useLive2D) {
+  useLayoutEffect(() => {
+    if (!live2dLayer.mount) {
       live2dBox.current = null;
       return;
     }
@@ -142,13 +156,14 @@ function Avatar() {
         // A test renderer without the Electron bridge has no pointer shape.
       }
     };
+    sync();
     const frame = typeof requestAnimationFrame === 'function' ? requestAnimationFrame(sync) : undefined;
     window.addEventListener('resize', sync);
     return () => {
       if (frame !== undefined) cancelAnimationFrame(frame);
       window.removeEventListener('resize', sync);
     };
-  }, [useLive2D, avatarSize]);
+  }, [live2dLayer.mount, avatarSize]);
 
   useEffect(() => watchReducedMotion(setReducedMotion), []);
 
@@ -193,8 +208,6 @@ function Avatar() {
 
   // A sent message gets a brief acknowledgement. Repeated snapshots of the
   // same message do not restart the timer; changing tabs cancels it.
-  const newestUserEntryId = snapshot ? lastUserEntryId(snapshot.timeline) : null;
-  const lastUserRef = useRef<{ conversationId: string | undefined; entryId: string | null } | null>(null);
   useEffect(() => {
     const conversationId = snapshot?.conversationId;
     const previous = lastUserRef.current;
@@ -573,23 +586,24 @@ function Avatar() {
           }
         }}
       >
-        {useLive2D && <div className="avatar-gesture">
-              <Live2DPortrait manifest={live2dManifest} lanes={lanes}
+        <AvatarVisualLayers
+          state={live2dLayer}
+          live2d={live2dManifest && <Live2DPortrait key={live2dManifestKey} manifest={live2dManifest} lanes={lanes}
                 reducedMotion={reducedMotion}
                 pointerPosition={live2dPointer}
                 gestureEpoch={live2dGestureEpoch}
-                onReady={() => setLive2dReady(true)}
+                onReady={() => setLive2dLoad({ key: live2dManifestKey, ready: true, failed: false })}
                 onError={() => {
-                  setLive2dReady(false)
-                  setLive2dFailed(true)
-                }} />
-            </div>}
-        {!useLive2D && <WhalePortrait gestureRef={gestureRef} entryRef={entryRef} idleRef={idleRef} swapRef={swapRef} ahogeRef={ahogeRef}
+                  setLive2dLoad({ key: live2dManifestKey, ready: false, failed: true })
+                }} />}
+          fallback={<WhalePortrait gestureRef={gestureRef} entryRef={entryRef} idleRef={idleRef} swapRef={swapRef} ahogeRef={ahogeRef}
               artworkUrl={visibleArt}
               personaId={personaId}
               size={avatarSize}
+              manageGeometry={!live2dLayer.mount}
               onBoxChange={(box: AvatarBox) => { void petBridge().setAvatarBox(box).catch(() => undefined); }} />}
-        {!useLive2D && <AvatarStateEffects />}
+          effects={<AvatarStateEffects />}
+        />
       </button>
       {/* 状态条必须是舞台的直接子元素。放进按钮里会相对按钮（人物大小）
           定位，点会落到头发中间，而不是窗口右上角。 */}

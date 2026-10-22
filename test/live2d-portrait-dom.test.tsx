@@ -13,6 +13,7 @@ vi.mock('pixi.js', () => {
     renderer = { resize: vi.fn() }
     stage: { addChild: ReturnType<typeof vi.fn>; removeChild: ReturnType<typeof vi.fn> }
     destroy: ReturnType<typeof vi.fn>
+    render = vi.fn()
 
     constructor() {
       const children = new Set<Record<string, unknown>>()
@@ -141,6 +142,9 @@ describe('Live2DPortrait lifecycle', () => {
     })
     expect(ready).toHaveBeenCalledWith(manifest)
     expect(runtime.models).toHaveLength(1)
+    const rendered = runtime.apps.at(-1)!.render as ReturnType<typeof vi.fn>
+    expect(rendered).toHaveBeenCalledTimes(1)
+    expect(rendered.mock.invocationCallOrder[0]).toBeLessThan(ready.mock.invocationCallOrder[0])
 
     await act(async () => {
       secondRoot.render(<Live2DPortrait manifest={manifest} lanes={lanes} reducedMotion onReady={ready} />)

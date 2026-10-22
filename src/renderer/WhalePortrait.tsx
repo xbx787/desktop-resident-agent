@@ -3,7 +3,7 @@ import type { AvatarBox, AvatarSize } from '../shared/contracts';
 import { avatarArtFor } from './avatar-art';
 import { avatarDisplaySize } from './avatar-geometry';
 
-export function WhalePortrait({ gestureRef, entryRef, idleRef, swapRef, ahogeRef, artworkUrl, size, personaId, onBoxChange }: {
+export function WhalePortrait({ gestureRef, entryRef, idleRef, swapRef, ahogeRef, artworkUrl, size, personaId, onBoxChange, manageGeometry = true }: {
   gestureRef?: Ref<HTMLDivElement>;
   entryRef?: Ref<HTMLDivElement>;
   idleRef?: Ref<HTMLDivElement>;
@@ -13,16 +13,21 @@ export function WhalePortrait({ gestureRef, entryRef, idleRef, swapRef, ahogeRef
   size?: AvatarSize;
   personaId?: string | null;
   onBoxChange?: (box: AvatarBox) => void;
+  /** Live2D loading owns the immutable slot before its canvas is revealed. */
+  manageGeometry?: boolean;
 }) {
   const art = avatarArtFor(personaId);
   const baseRef = useRef<HTMLImageElement | null>(null);
   const lastBox = useRef<AvatarBox | null>(null);
   const changeRef = useRef(onBoxChange);
+  const manageGeometryRef = useRef(manageGeometry);
   changeRef.current = onBoxChange;
+  manageGeometryRef.current = manageGeometry;
 
   /** The base asset alone defines the hit box. Swapping an expression must
    * never move the button, resize the BrowserWindow shape or shift a drag. */
   const sync = (): void => {
+    if (!manageGeometryRef.current) return;
     const image = baseRef.current;
     if (!image?.naturalWidth || !image.naturalHeight) return;
     const box = avatarDisplaySize(image.naturalWidth, image.naturalHeight, size);
@@ -46,10 +51,10 @@ export function WhalePortrait({ gestureRef, entryRef, idleRef, swapRef, ahogeRef
   useEffect(() => {
     window.addEventListener('resize', schedule);
     return () => window.removeEventListener('resize', schedule);
-  }, [art.body, size]);
+  }, [art.body, size, manageGeometry]);
   // A cached base image may have loaded before mount. Size and persona
   // changes still need a fresh measurement; expression changes do not.
-  useEffect(() => { if (baseRef.current?.complete) schedule(); }, [art.body, size]);
+  useEffect(() => { if (baseRef.current?.complete) schedule(); }, [art.body, size, manageGeometry]);
 
   return (
     <div className="avatar-gesture" ref={gestureRef}>

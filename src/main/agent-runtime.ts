@@ -1311,8 +1311,13 @@ export class AgentRuntime {
 
   private recordToolEvent(event: ModelToolEvent, generation: number): void {
     if (generation !== this.generation || !event.toolUseId || !event.toolName) return
-    if (event.phase === 'start') this.closeThinkingEntries()
     const existing = this.state.timeline.find((entry) => entry.tool?.toolUseId === event.toolUseId)
+    const turnSettled = ['done', 'failed', 'cancelled'].includes(this.state.taskStatus)
+    // Some adapters flush a final result after the assistant reply. It may
+    // complete an existing row, but it must not append a new tool after the
+    // answer or move a settled conversation back into planning/executing.
+    if (turnSettled && (event.phase === 'start' || existing?.tool?.status !== 'running')) return
+    if (event.phase === 'start') this.closeThinkingEntries()
     const status = event.phase === 'start' ? 'running' : event.isError ? 'error' : 'done'
     // A result whose start was missed (resumed session, late background task)
     // keeps the name if the row already knows it; otherwise it is honestly a
@@ -1337,20 +1342,22 @@ export class AgentRuntime {
       this.state.timeline.push(entry)
       this.markTimelineDirty(entry)
     }
-    if (event.phase === 'start') {
-      this.state.taskStatus = 'executing'
-      this.state.avatarState = 'acting'
-      this.state.agentActivity = activity
-    } else if (!this.hasRunningTool()) {
-      this.state.taskStatus = 'planning'
-      this.state.avatarState = 'thinking'
-      this.state.agentActivity = undefined
-    } else {
-      this.state.agentActivity = this.runningAgentActivity()
+    if (!turnSettled) {
+      if (event.phase === 'start') {
+        this.state.taskStatus = 'executing'
+        this.state.avatarState = 'acting'
+        this.state.agentActivity = activity
+      } else if (!this.hasRunningTool()) {
+        this.state.taskStatus = 'planning'
+        this.state.avatarState = 'thinking'
+        this.state.agentActivity = undefined
+      } else {
+        this.state.agentActivity = this.runningAgentActivity()
+      }
+      // A parked question/permission keeps the turn in awaiting_approval even
+      // while tool results trickle in.
+      this.syncApprovalWait()
     }
-    // A parked question/permission keeps the turn in awaiting_approval even
-    // while tool results trickle in.
-    this.syncApprovalWait()
     this.emit()
   }
 

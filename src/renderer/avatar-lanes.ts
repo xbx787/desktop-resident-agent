@@ -55,8 +55,8 @@ export function resolveAvatarLanes(input: AvatarLaneInput): AvatarLanes {
   else if (status === 'cancelled') task = 'cancelled'
   else if (status === 'verifying') task = 'verifying'
   else if (status === 'executing' || state === 'acting') task = 'executing'
-  else if (status === 'planning' || state === 'thinking') task = 'planning'
   else if (input.acknowledging) task = 'received'
+  else if (status === 'planning' || state === 'thinking') task = 'planning'
 
   let emotion: AvatarEmotionLane = 'neutral'
   if (task === 'failed' || task === 'cancelled') emotion = 'worried'

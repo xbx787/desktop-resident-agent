@@ -449,6 +449,9 @@ export function Live2DPortrait({
           stateRef.current.pointerPosition, stateRef.current.reducedMotion)
         void requestStateMotion(model, runtime, manifest, stateRef.current.lanes,
           stateRef.current.reducedMotion, motionRequestState)
+        // Fill the backing canvas before the parent replaces the PNG fallback.
+        // The regular ticker takes over after this atomic first frame.
+        app.render()
         host.dataset.live2dReady = 'true'
         onReadyRef.current?.(manifest)
       } catch (cause) {

@@ -333,6 +333,34 @@ describe('task cancellation', () => {
     expect(runtime.getSnapshot().agentActivity).toBeUndefined()
   })
 
+  it('lets a late result settle its existing tool row without reviving a finished turn', async () => {
+    let emitTool!: NonNullable<Parameters<ModelClient['respond']>[4]>
+    const model: ModelClient = {
+      respond: async (_history, _signal, _progress, _session, onToolEvent) => {
+        emitTool = onToolEvent!
+        onToolEvent?.({ toolUseId: 'late-read', toolName: 'Read', phase: 'start', input: 'README.md' })
+        return { text: '先给出最终回复' }
+      }
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    await runtime.sendMessage('读取后回答')
+    expect(runtime.getSnapshot().taskStatus).toBe('done')
+
+    emitTool({ toolUseId: 'late-read', toolName: 'Read', phase: 'result', output: '迟到结果' })
+    expect(runtime.getSnapshot()).toMatchObject({ taskStatus: 'done', avatarState: 'success' })
+    expect(runtime.getSnapshot().agentActivity).toBeUndefined()
+    expect(runtime.getSnapshot().timeline.find((entry) => entry.tool?.toolUseId === 'late-read')?.tool)
+      .toMatchObject({ status: 'done', output: '迟到结果' })
+
+    emitTool({ toolUseId: 'late-read', toolName: 'Read', phase: 'result', output: '重复结果不应覆盖' })
+    expect(runtime.getSnapshot().timeline.find((entry) => entry.tool?.toolUseId === 'late-read')?.tool)
+      .toMatchObject({ status: 'done', output: '迟到结果' })
+
+    emitTool({ toolUseId: 'too-late', toolName: 'Bash', phase: 'start', input: 'echo late' })
+    expect(runtime.getSnapshot().timeline.some((entry) => entry.tool?.toolUseId === 'too-late')).toBe(false)
+    expect(runtime.getSnapshot().taskStatus).toBe('done')
+  })
+
   it('exposes the active tool semantic while a tool is running, then clears it', async () => {
     let releaseTool!: () => void
     let releaseReply!: () => void
