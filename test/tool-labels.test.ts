@@ -72,6 +72,13 @@ describe('mcpToolRef', () => {
     expect(mcpToolRef('mcp:windows-mcp:Move')).toEqual({ server: 'windows-mcp', tool: 'Move' })
   })
 
+  it('translates Windows MCP tool actions', () => {
+    expect(toolLabel('Screenshot')).toBe('截屏')
+    expect(toolLabel('Snapshot')).toBe('查看屏幕')
+    expect(toolLabel('Click')).toBe('点击')
+    expect(toolLabel('Shortcut')).toBe('快捷键')
+  })
+
   it('leaves ordinary tools alone', () => {
     expect(mcpToolRef('Read')).toBeNull()
     expect(mcpToolRef('mcp__broken')).toBeNull()

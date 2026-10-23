@@ -365,7 +365,10 @@ export const TimelineItem = memo(function TimelineItem({ entry, running = false,
     const name = entry.tool?.name ?? toolPreview.split(' · ')[0].split('（')[0];
     const label = toolLabel(name);
     const mcp = mcpToolRef(name);
-    const rowLabel = mcp ? `${mcp.server} · ${mcp.tool}` : label;
+    const mcpToolLabel = mcp ? toolLabel(mcp.tool) : '';
+    const rowLabel = mcp
+      ? `${mcp.server} · ${mcpToolLabel === '外部工具' || mcpToolLabel === '工具' ? mcp.tool : mcpToolLabel}`
+      : label;
     const rowDetail = display.toolRowDetail ?? 'brief';
     const rawArgument = abbreviateWorkspace(toolArgumentPreview(entry.tool?.input), display.workspace);
     // 简略档截一小截；完整档保留全部。命令没有中文说明时，命令本身也会显示。
