@@ -1294,9 +1294,16 @@ function showPanel(): void {
     applyPointerShape()
     // 面板是独立窗口：要真正激活它，输入框才能拿到键盘。
     if (panelWindow && !panelWindow.isDestroyed()) {
+      // 先透明显示一帧，等边界/布局落定后再亮出。否则 Windows 会先画
+      // 旧 bounds 的那一帧，看起来像先后弹出两个窗口。
+      panelWindow.setOpacity(0)
       panelWindow.show()
-      panelWindow.focus()
-      syncGripWindow()
+      setTimeout(() => {
+        if (!panelOpen || !panelWindow || panelWindow.isDestroyed()) return
+        panelWindow.setOpacity(1)
+        panelWindow.focus()
+        syncGripWindow()
+      }, 16)
     }
     avatarWindow?.webContents.send('pet:panel-open', true)
   } else {
@@ -1609,6 +1616,7 @@ function promoteTrayIcon(): void {
 function hidePanel(): void {
   if (!panelOpen) return
   panelOpen = false
+  panelWindow?.setOpacity(1)
   panelWindow?.hide()
   syncGripWindow()
   avatarWindow?.webContents.send('pet:panel-open', false)

@@ -93,6 +93,15 @@ function Avatar() {
   const moveQueued = useRef(false);
   const moveDirty = useRef(false);
   const hitTargetRef = useRef<HTMLButtonElement | null>(null);
+  /** pointerup 与键盘可能在同一帧各触发一次切换；300ms 内只认第一次，
+   *  否则主进程会先 show 再 hide，看起来像闪了一下。 */
+  const lastPanelToggleAt = useRef(0);
+  function togglePanel(bridge: { showPanel: () => Promise<void>; hidePanel: () => Promise<void> }): Promise<void> {
+    const now = performance.now();
+    if (now - lastPanelToggleAt.current < 300) return Promise.resolve();
+    lastPanelToggleAt.current = now;
+    return panelOpen ? bridge.hidePanel() : bridge.showPanel();
+  }
   const live2dBox = useRef<AvatarBox | null>(null);
   const gestureRef = useRef<HTMLDivElement | null>(null);
   const entryRef = useRef<HTMLDivElement | null>(null);
@@ -519,7 +528,7 @@ function Avatar() {
         playClickBounce(gestureRef.current, reducedMotion);
         playAhogeFlick(ahogeRef.current, reducedMotion);
       }
-      queueDrag((bridge) => panelOpen ? bridge.hidePanel() : bridge.showPanel());
+      queueDrag((bridge) => togglePanel(bridge));
     }
   }
 
@@ -582,7 +591,7 @@ function Avatar() {
               playClickBounce(gestureRef.current, reducedMotion);
               playAhogeFlick(ahogeRef.current, reducedMotion);
             }
-            void run((bridge) => panelOpen ? bridge.hidePanel() : bridge.showPanel());
+            void run((bridge) => togglePanel(bridge));
           }
         }}
       >
