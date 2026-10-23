@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { toolLabel } from '../src/shared/tool-labels'
+import { mcpToolRef, toolLabel } from '../src/shared/tool-labels'
 
 describe('toolLabel', () => {
   it('names the everyday tools in Chinese', () => {
@@ -58,5 +58,22 @@ describe('toolLabel', () => {
     expect(toolLabel('unknown_tool')).toBe('工具结果')
     expect(toolLabel('未知工具')).toBe('工具结果')
     expect(toolLabel('Graeme</broken>')).toBe('工具')
+  })
+})
+
+
+describe('mcpToolRef', () => {
+  it('splits the Claude mcp__server__tool form', () => {
+    expect(mcpToolRef('mcp__windows-mcp__Move')).toEqual({ server: 'windows-mcp', tool: 'Move' })
+    expect(mcpToolRef('mcp__dida365__add_task')).toEqual({ server: 'dida365', tool: 'add_task' })
+  })
+
+  it('splits the DSH mcp:server:tool form', () => {
+    expect(mcpToolRef('mcp:windows-mcp:Move')).toEqual({ server: 'windows-mcp', tool: 'Move' })
+  })
+
+  it('leaves ordinary tools alone', () => {
+    expect(mcpToolRef('Read')).toBeNull()
+    expect(mcpToolRef('mcp__broken')).toBeNull()
   })
 })

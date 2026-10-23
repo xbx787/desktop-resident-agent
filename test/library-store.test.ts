@@ -66,3 +66,26 @@ describe('LibraryStore', () => {
     expect(await store.launches(['mcp:io.github.demo/server'])).toEqual({ mcp: [], plugins: [] })
   })
 })
+
+
+describe('LibraryStore adopt', () => {
+  it('imports an external Claude MCP entry so it can be launched', async () => {
+    const home = path.join(testRoot, 'home')
+    await fs.mkdir(home, { recursive: true })
+    await fs.writeFile(path.join(home, '.claude.json'), JSON.stringify({
+      mcpServers: { demo: { command: 'node', args: ['server.js'] } }
+    }), 'utf8')
+    const store = new LibraryStore(testRoot, { homeDir: home })
+    const external = (await store.list()).find((item) => item.kind === 'mcp' && item.name === 'demo')
+    expect(external?.external).toBe(true)
+    if (!external) throw new Error('external entry missing')
+    await store.adopt(external)
+
+    const items = await store.list()
+    const adopted = items.find((item) => item.id === external.id)
+    expect(adopted).toMatchObject({ id: external.id, kind: 'mcp', name: 'demo' })
+    expect(adopted?.external).toBeUndefined()
+    const launched = await store.launches([`mcp:${external.id}`])
+    expect(launched.mcp.map((item) => item.name)).toEqual(['demo'])
+  })
+})
