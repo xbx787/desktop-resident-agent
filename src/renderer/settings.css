@@ -247,3 +247,8 @@ button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55
 
 .settings-capability { flex: none; color: #9fd8b6; font-size: var(--text-sm); }
 
+
+.settings-library-search{display:block;margin-top:10px}
+.settings-library-search input{width:100%;box-sizing:border-box;padding:7px 10px;border-radius:8px;border:1px solid rgba(140,190,255,.28);background:rgba(10,35,75,.55);color:inherit;font:inherit;outline:none}
+.settings-library-search input:focus{border-color:rgba(160,205,255,.75)}
+.settings-library-source{display:block;margin-top:2px;opacity:.62}

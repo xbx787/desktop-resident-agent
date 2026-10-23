@@ -6,7 +6,7 @@ import { EFFORT_LABELS } from '../shared/effort';
 import { EffortSlider } from './effort-slider';
 import { EventImages } from './event-images';
 import { formatSelectionQuote } from './message-quote';
-import { toolLabel } from '../shared/tool-labels';
+import { mcpToolRef, toolLabel } from '../shared/tool-labels';
 import { AttachmentPreview, previewPlacement, type PreviewPlacement } from './attachment-preview';
 import { agentTasks } from './agent-tasks';
 import { fileBadge, splitAttachmentNote } from './attachment-note';
@@ -368,6 +368,8 @@ export const TimelineItem = memo(function TimelineItem({ entry, running = false,
     const status = entry.tool?.status ?? 'done';
     const name = entry.tool?.name ?? toolPreview.split(' · ')[0].split('（')[0];
     const label = toolLabel(name);
+    const mcp = mcpToolRef(name);
+    const rowLabel = mcp ? `${mcp.server} · ${mcp.tool}` : label;
     const rowDetail = display.toolRowDetail ?? 'brief';
     const rawArgument = abbreviateWorkspace(toolArgumentPreview(entry.tool?.input), display.workspace);
     // 简略档截一小截；完整档保留全部。命令没有中文说明时，命令本身也会显示。
@@ -398,9 +400,9 @@ export const TimelineItem = memo(function TimelineItem({ entry, running = false,
       : <div className="panel-tool-empty">{status === 'running' ? '正在运行…' : '没有输出'}</div>;
     return <details className={`panel-tool-activity${status === 'running' ? ' is-running' : ''}`}
       open={toolOpened} onToggle={(event) => setToolOpened(event.currentTarget.open)}>
-      <summary aria-label={`${label}${argument ? ` ${argument}` : ''}${diff && rowDetail !== 'name' ? `，新增 ${diff.added} 行，删除 ${diff.removed} 行` : ''}，${status === 'error' ? '失败' : status === 'running' ? '执行中' : '已完成'}`}>
+      <summary aria-label={`${rowLabel}${argument ? ` ${argument}` : ''}${diff && rowDetail !== 'name' ? `，新增 ${diff.added} 行，删除 ${diff.removed} 行` : ''}，${status === 'error' ? '失败' : status === 'running' ? '执行中' : '已完成'}`}>
         <ToolIcon name={name} />
-        <code className={status === 'running' ? 'panel-live-label' : undefined}>{label}</code>
+        <code className={status === 'running' ? 'panel-live-label' : undefined} title={mcp ? `MCP：${mcp.server} / ${mcp.tool}` : undefined}>{rowLabel}</code>
         {argument && <span className="panel-tool-argument">{argument}</span>}
         {diff && rowDetail !== 'name' && <span className="panel-tool-diff" aria-hidden="true">
           <span className="panel-tool-diff-add">+{diff.added}</span>

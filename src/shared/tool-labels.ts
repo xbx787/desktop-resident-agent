@@ -130,3 +130,14 @@ export function toolLabel(name: string): string {
   if (/[\u3400-\u9fff]/u.test(trimmed)) return clip(trimmed)
   return '工具'
 }
+
+/** Splits an MCP tool id into its server and tool halves. Supports the
+ *  Claude convention `mcp__server__tool` and DSH's `mcp:server:tool`. */
+export function mcpToolRef(name: string): { server: string; tool: string } | null {
+  const trimmed = name.trim()
+  const claude = /^mcp__(.+?)__(.+)$/u.exec(trimmed)
+  if (claude) return { server: claude[1], tool: claude[2] }
+  const dsh = /^mcp[:/]([^:/]+)[:/](.+)$/u.exec(trimmed)
+  if (dsh) return { server: dsh[1], tool: dsh[2] }
+  return null
+}

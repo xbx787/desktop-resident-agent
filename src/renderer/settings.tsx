@@ -122,6 +122,7 @@ export function SettingsPage() {
   const [quitAction, setQuitAction] = useState<'quit' | 'restart' | null>(null)
   const [libraries, setLibraries] = useState<LibrarySnapshot>({ items: [], busy: false })
   const [libraryKind, setLibraryKind] = useState<LibraryKind>('mcp')
+  const [libraryQuery, setLibraryQuery] = useState('')
   const [marketQuery, setMarketQuery] = useState('')
   const [marketItems, setMarketItems] = useState<LibraryItem[]>([])
   const [marketBusy, setMarketBusy] = useState(false)
@@ -223,7 +224,10 @@ export function SettingsPage() {
     return () => { active = false; window.clearInterval(timer) }
   }, [tab])
 
-  const installedLibraries = libraries.items.filter((item) => item.kind === libraryKind)
+  const libraryQueryText = libraryQuery.trim().toLocaleLowerCase()
+  const installedLibraries = libraries.items.filter((item) => item.kind === libraryKind && (!libraryQueryText ||
+    [item.name, item.description, item.source, item.launch?.command, item.launch?.url]
+      .filter(Boolean).join(' ').toLocaleLowerCase().includes(libraryQueryText)))
   const selectedGrowth = growth?.proposals.find((item) => item.id === growthSelectedId && item.status !== 'discarded') ?? growth?.proposals.find((item) => item.status !== 'discarded') ?? null
   useEffect(() => {
     setGrowthNotesDraft(selectedGrowth?.releaseNotes ?? '')
@@ -850,6 +854,10 @@ export function SettingsPage() {
           <div className="settings-library-heading">
             <h2>{LIBRARY_LABELS[libraryKind]}库</h2>
             <p>应用安装的条目用 @ 添加；本地已有的条目由 Claude 配置直接加载。</p>
+            <label className="settings-library-search">
+              <input type="search" value={libraryQuery} placeholder="搜索已安装的 MCP / 技能 / 插件" aria-label="搜索已安装条目"
+                onChange={(event) => setLibraryQuery(event.target.value)} />
+            </label>
           </div>
           {libraryKind === 'skill' && <div className="settings-skill-sources" aria-label="技能市场来源">
             <span>技能市场来源</span>
@@ -872,6 +880,7 @@ export function SettingsPage() {
                     <div className="settings-library-copy">
                       <label>{item.name}{item.version && <span className="settings-library-version">v{item.version}</span>}{item.external && <span className="settings-library-version">本地已有</span>}{item.disabled && <span className="settings-library-version">已停用</span>}</label>
                       {item.description && <p>{item.description}</p>}
+                      <small className="settings-library-source">来源：{item.source}</small>
                       {item.license && <small>许可证：{item.license}</small>}
                       {libraryHealth[item.id] && <small className={libraryHealth[item.id].ok ? 'settings-library-health is-ok' : 'settings-library-health is-error'} role="status">{libraryHealth[item.id].message}</small>}
                     </div>
