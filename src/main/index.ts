@@ -268,10 +268,8 @@ function ensureGripWindow(): BrowserWindow {
   })
   win.setAlwaysOnTop(true, 'screen-saver')
   // 只有左上角 L 形边框接收点击，内部让给面板菜单按钮。
-  win.setShape([
-    { x: 0, y: 0, width: GRIP_SIZE, height: 10 },
-    { x: 0, y: 0, width: 10, height: GRIP_SIZE }
-  ])
+  // 可点击区缩成左上角 10x10 的正方形，其余透明区域全部穿透给面板。
+  win.setShape([{ x: 0, y: 0, width: 10, height: 10 }])
   const html = `<!doctype html><html><head><meta charset="utf-8"><style>
     html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden;cursor:nwse-resize}
     .grip{position:absolute;inset:3px;border:2px solid rgba(190,214,255,.62);border-radius:15px;clip-path:inset(0 17px 17px 0);filter:drop-shadow(0 0 3px rgba(160,205,255,.5))}
