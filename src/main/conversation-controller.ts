@@ -538,6 +538,7 @@ export class ConversationController {
     }
     await this.store.updateConversation(id, {
       ...runtime.exportConversationState(),
+      approvalMode: runtime.getSnapshot().approvalMode ?? 'workspace-write',
       taskStatus: runtime.getSnapshot().taskStatus,
       pendingMessages: pending,
       ...(providerId ? { providerId } : {}),
