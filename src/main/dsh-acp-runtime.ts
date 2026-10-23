@@ -381,6 +381,11 @@ export class DshAcpRuntime {
     return await this.request('session/compact', { sessionId }, timeoutMs) as { shadowed?: number; tokens?: number }
   }
 
+  /** 按需读取实时上下文占用：走我们补的 `session/usage`，压缩后立即拿到新值。 */
+  async usage(sessionId: string, timeoutMs = 30_000): Promise<{ used?: number; size?: number }> {
+    return await this.request('session/usage', { sessionId }, timeoutMs) as { used?: number; size?: number }
+  }
+
   /** 把计划模式开关交给 DSH 的 planMode 服务（我们补的 `session/plan`）。 */
   async setPlan(sessionId: string, active: boolean, timeoutMs = 30_000): Promise<boolean> {
     const result = await this.request('session/plan', { sessionId, active }, timeoutMs) as { active?: boolean }

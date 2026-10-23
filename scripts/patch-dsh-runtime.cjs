@@ -35,6 +35,7 @@ if (!file) {
 const PATCH_INDEX = [
   { id: 'session/steer', marker: 'async steer(params, imageEnabled)', description: '把消息插到当前回合的下一步（原生插队）' },
   { id: 'session/compact', marker: 'async compact(params, signal)', description: '手动压缩，走 compaction.compactNow' },
+  { id: 'session/usage', marker: 'session/usage', description: '按需读取压缩后的实时上下文占用' },
   { id: 'session/answer', marker: 'this.ctx.get("userQuestions")', description: '提问作答，把答案批次交给 user-questions 服务' },
   { id: 'session/plan', marker: 'async setPlan(params)', description: '计划模式开关，交给 DSH 的 planMode 服务' },
   { id: 'user-questions-answerer', marker: 'async askHost(request)', description: '服务级提问转给宿主面板（退出计划模式等）' },
@@ -93,6 +94,18 @@ const steerMethod = `\t/**
 \t}
 `
 
+// ---- session/usage ----
+const usageMethod = `\t/** Report the live context occupancy on demand (e.g. right after compaction). */
+\tasync usage(params) {
+\t\tthis.assertActive();
+\t\tconst session = this.agent.session;
+\t\tconst size = session.requestContext()?.contextWindow;
+\t\tconst meter = this.ctx.get("tokenMeter");
+\t\tif (size === void 0 || meter === void 0) return {};
+\t\treturn { used: meter.measure(session).totalTokens, size };
+\t}
+`
+
 // ---- session/compact ----
 const compactMethod = `\t/** Manual compaction through the backend-independent compaction seam. */
 \tasync compact(params, signal) {
@@ -127,6 +140,12 @@ apply(
   'async steer(params, imageEnabled) {',
   '\tasync prompt(params, imageEnabled, requestSignal) {',
   `${steerMethod}\tasync prompt(params, imageEnabled, requestSignal) {`
+)
+apply(
+  'AcpSession.usage',
+  'async usage(params) {',
+  '\t/** Manual compaction through the backend-independent compaction seam. */',
+  `${usageMethod}\t/** Manual compaction through the backend-independent compaction seam. */`
 )
 apply(
   'AcpSession.compact',
@@ -184,6 +203,20 @@ const compactImplAnchor = `\t\tasync compact(params, signal) {
 \t\t\tassertOpen();
 \t\t\treturn requireSession(brandString(params.sessionId)).compact(params, signal);
 \t\t},`
+if (!source.includes('return requireSession(brandString(params.sessionId)).usage(params);')) {
+  if (!source.includes(compactImplAnchor)) {
+    console.error('补丁锚点不存在（implementation.usage），DSH 版本可能变了。')
+    process.exit(1)
+  }
+  source = source.replace(compactImplAnchor, `${compactImplAnchor}
+\t\tasync usage(params) {
+\t\t\tassertOpen();
+\t\t\treturn requireSession(brandString(params.sessionId)).usage(params);
+\t\t},`)
+  changes.push('implementation.usage: 已应用')
+} else {
+  changes.push('implementation.usage: 已存在')
+}
 if (!source.includes('return requireSession(brandString(params.sessionId)).answer(params);')) {
   if (!source.includes(compactImplAnchor)) {
     console.error('补丁锚点不存在（implementation.answer），DSH 版本可能变了。')
@@ -208,7 +241,13 @@ apply(
 )
 
 const anchorCompactRequest = '.onRequest("session/compact", (value) => value, ({ params, signal }) => implementation.compact(params, signal))'
-const anchorAnswerRequest = `${anchorCompactRequest}.onRequest("session/answer", (value) => value, ({ params }) => implementation.answer(params))`
+apply(
+  'session/usage 注册',
+  'session/usage',
+  anchorCompactRequest,
+  `${anchorCompactRequest}.onRequest("session/usage", (value) => value, ({ params }) => implementation.usage(params))`
+)
+const anchorAnswerRequest = '.onRequest("session/answer", (value) => value, ({ params }) => implementation.answer(params))'
 const answerImplAnchor = `\t\tasync answer(params) {
 \t\t\tassertOpen();
 \t\t\treturn requireSession(brandString(params.sessionId)).answer(params);

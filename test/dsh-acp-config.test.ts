@@ -21,6 +21,10 @@ class FakeRuntime {
   requests: Request[] = []
   failModelSet = false
   ignoreModelSet = false
+  compactResult: { shadowed?: number; tokens?: number } = { shadowed: 3, tokens: 1200 }
+  usageResult: { used?: number; size?: number } = { used: 40_000, size: 100_000 }
+  usageCalls = 0
+  compactCalls = 0
   configOptions: Array<Record<string, unknown>> = [
     { id: 'model', name: 'Model', currentValue: JSON.stringify(['deepseek-official', 'deepseek-v4-flash']), options: [] },
     { id: 'reasoning_effort', name: 'Reasoning effort', currentValue: '', options: [{ value: '' }, { value: 'high' }] }
@@ -50,6 +54,14 @@ class FakeRuntime {
   }
 
   async prompt(): Promise<{ stopReason: string }> { return { stopReason: 'end_turn' } }
+  async compact(): Promise<{ shadowed?: number; tokens?: number }> {
+    this.compactCalls += 1
+    return this.compactResult
+  }
+  async usage(): Promise<{ used?: number; size?: number }> {
+    this.usageCalls += 1
+    return this.usageResult
+  }
   async setPlan(): Promise<boolean> { return true }
   async cancel(): Promise<void> {}
   async close(): Promise<void> {}
@@ -138,5 +150,25 @@ describe('DSH ACP 会话模型设置', () => {
     expect(runtime.permissionModes).toEqual([])
     await client.respond([{ role: 'user', content: '你好' }], new AbortController().signal)
     expect(runtime.permissionModes).toContain('danger-full-access')
+  })
+
+  it('手动压缩后立即读取实时占用，返回压缩后的读数', async () => {
+    const { client, runtime } = await create()
+    await client.respond([{ role: 'user', content: '你好' }], new AbortController().signal)
+    runtime.usageResult = { used: 12_000, size: 100_000 }
+
+    const usage = await client.compact()
+
+    expect(runtime.compactCalls).toBe(1)
+    expect(runtime.usageCalls).toBe(1)
+    expect(usage).toMatchObject({
+      status: 'available',
+      usedTokens: 12_000,
+      maxTokens: 100_000,
+      usedPercent: 12,
+      compactionOutcome: 'compacted'
+    })
+    await expect(client.getContextUsage()).resolves.toMatchObject({ usedTokens: 12_000 })
+    expect(runtime.usageCalls).toBe(2)
   })
 })

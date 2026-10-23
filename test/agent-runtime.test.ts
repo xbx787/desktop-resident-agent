@@ -274,6 +274,26 @@ describe('task cancellation', () => {
     expect(runtime.getSnapshot().taskMetrics?.usedTokens).toBeUndefined()
   })
 
+  it('takes the post-compaction reading immediately, without waiting for the next turn', async () => {
+    const model = {
+      respond: async () => ({ text: '完成', sdkSessionId: 'session-1' }),
+      getContextUsage: async () => ({ status: 'available' as const, usedTokens: 80_000, maxTokens: 100_000 }),
+      compact: async () => ({
+        status: 'available' as const, usedTokens: 20_000, maxTokens: 100_000,
+        usedPercent: 20, remainingTokens: 80_000, remainingPercent: 80
+      })
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    await runtime.sendMessage('压缩前')
+    await runtime.compactConversation()
+
+    expect(runtime.getSnapshot().contextUsage).toMatchObject({
+      usedTokens: 20_000, maxTokens: 100_000, usedPercent: 20
+    })
+    const notice = runtime.getSnapshot().timeline.filter((entry) => entry.tag === '上下文压缩').at(-1)
+    expect(notice?.text).toContain('上下文已压缩')
+  })
+
   it('attaches the failed prompt to the error notice for one-click retry', async () => {
     const model = { respond: async () => { throw new Error('连接刚刚中断') } }
     const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)

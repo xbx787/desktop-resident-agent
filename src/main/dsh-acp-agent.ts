@@ -422,15 +422,7 @@ export class DshAcpAgentClient implements ModelClient {
       } else if (kind === 'usage_update') {
         const used = typeof update.used === 'number' ? update.used : 0
         const size = typeof update.size === 'number' ? update.size : 0
-        this.lastContextUsage = {
-          status: 'available',
-          usedTokens: used,
-          maxTokens: size,
-          usedPercent: size > 0 ? Math.round((used / size) * 1000) / 10 : undefined,
-          remainingTokens: Math.max(0, size - used),
-          remainingPercent: size > 0 ? Math.round(((size - used) / size) * 1000) / 10 : undefined,
-          checkedAt: new Date().toISOString()
-        }
+        this.lastContextUsage = this.contextUsageFrom(used, size)
       }
     }
 
@@ -1028,16 +1020,62 @@ export class DshAcpAgentClient implements ModelClient {
     return this.sessionId
   }
 
+  private contextUsageFrom(used: number, size: number): ContextUsageSnapshot {
+    return {
+      status: 'available',
+      usedTokens: used,
+      maxTokens: size,
+      usedPercent: size > 0 ? Math.round((used / size) * 1000) / 10 : undefined,
+      remainingTokens: Math.max(0, size - used),
+      remainingPercent: size > 0 ? Math.round(((size - used) / size) * 1000) / 10 : undefined,
+      checkedAt: new Date().toISOString()
+    }
+  }
+
+  /** 主动读一次 DSH 的实时占用。压缩后必须走这里，不能沿用压缩前的缓存读数。 */
+  private async readContextUsage(): Promise<ContextUsageSnapshot> {
+    const sessionId = this.sessionId
+    if (!sessionId) return { ...this.lastContextUsage }
+    try {
+      const usage = await this.runtime.usage(sessionId)
+      if (sessionId !== this.sessionId) return { ...this.lastContextUsage }
+      if (typeof usage?.used === 'number' && typeof usage?.size === 'number') {
+        this.lastContextUsage = this.contextUsageFrom(usage.used, usage.size)
+      }
+    } catch {
+      // 未打补丁的运行时没有 session/usage：退回最近一次推送的读数。
+    }
+    return { ...this.lastContextUsage }
+  }
+
   getContextUsage(): Promise<ContextUsageSnapshot> {
-    return Promise.resolve({ ...this.lastContextUsage })
+    return this.readContextUsage()
   }
 
   /** 手动压缩：调用我们补的 session/compact；没有可压缩内容时如实返回未压缩。 */
   async compact(_sessionId?: string | null): Promise<ContextUsageSnapshot> {
     if (!this.sessionId) throw new Error('还没有可压缩的会话。')
-    const result = await this.runtime.compact(this.sessionId)
+    let result: { shadowed?: number; tokens?: number } | undefined
+    let firstError: unknown
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        result = await this.runtime.compact(this.sessionId)
+        firstError = undefined
+        break
+      } catch (error) {
+        firstError = error
+        // 摘要模型偶尔只回 reasoning 或空正文；再给一次机会，换一个请求。
+        if (attempt === 0) await new Promise<void>((resolve) => setTimeout(resolve, 400))
+      }
+    }
+    if (firstError) {
+      console.warn('DSH compact failed:', firstError instanceof Error ? firstError.message : String(firstError))
+      throw new Error('上下文压缩暂时失败：摘要模型这次没有返回正文。已保留原上下文，请稍后重试。')
+    }
+    // 压缩完成立刻刷新：面板这一帧就显示压缩后的占用，而不是等下一轮。
+    const usage = await this.readContextUsage()
     const compacted = typeof result?.shadowed === 'number' && result.shadowed > 0
-    return { ...this.lastContextUsage, compactionOutcome: compacted ? 'compacted' : 'not_needed' }
+    return { ...usage, compactionOutcome: compacted ? 'compacted' : 'not_needed' }
   }
 
   /** 原生插队：修补后的 DSH 支持 session/steer，把消息插到当前回合的下一步。
