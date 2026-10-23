@@ -1,4 +1,4 @@
-param([switch]$NoShortcutSwitch)
+param([switch]$NoShortcutSwitch, [string]$ReleaseRoot)
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
@@ -7,9 +7,16 @@ $version = (& node -p "require('./package.json').version").Trim()
 if ($LASTEXITCODE -ne 0 -or $version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid package version.' }
 
 $releaseName = "whale-companion-v$version$($env:WHALE_RELEASE_SUFFIX)"
-$releaseDir = [IO.Path]::GetFullPath((Join-Path $projectRoot (Join-Path 'release' $releaseName)))
-if (-not $releaseDir.StartsWith($projectRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-  throw 'Release target is outside the project.'
+# 从 worktree 打包时，构建仍然读当前源码，但发布目录必须落在主项目下，
+# 这样快捷方式和 findSourceProjectRoot 都会指向主数据目录。
+$releaseBase = if ($ReleaseRoot) {
+  [IO.Path]::GetFullPath($ReleaseRoot)
+} else {
+  [IO.Path]::GetFullPath((Join-Path $projectRoot 'release'))
+}
+$releaseDir = [IO.Path]::GetFullPath((Join-Path $releaseBase $releaseName))
+if (-not $releaseDir.StartsWith($releaseBase.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+  throw 'Release target is outside the release root.'
 }
 if (Test-Path -LiteralPath $releaseDir) { throw "Release directory already exists: $releaseDir" }
 
@@ -22,7 +29,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
 if ($LASTEXITCODE -ne 0) { throw 'DSH runtime patch failed.' }
 & node scripts/audit-active-avatar-assets.cjs
 if ($LASTEXITCODE -ne 0) { throw 'Active avatar assets failed quality audit.' }
-& npm run pack:dir -- "-c.directories.output=release/$releaseName"
+& npm run pack:dir -- "-c.directories.output=$releaseDir"
 if ($LASTEXITCODE -ne 0) { throw 'Packaging failed.' }
 # electron-builder 会原样保留 pnpm junction，目标仍是开发机 reference；这里改指
 # 包内镜像，并移除被过滤器排除、没有包内镜像的可选链接。随后再跑一次 -Check 兜底。
@@ -43,6 +50,7 @@ $dshReference = Resolve-ReferenceRoot (Join-Path $projectRoot 'reference\dsh-run
 if ($LASTEXITCODE -ne 0) { throw 'DSH runtime link repair failed.' }
 & (Join-Path $PSScriptRoot 'fix-dsh-links.ps1') -Root $dshRuntime -ReferenceRoot $dshReference -Check
 if ($LASTEXITCODE -ne 0) { throw 'DSH runtime is not self-contained after link repair.' }
+$env:ASAR_ARCHIVE = Join-Path $releaseDir 'win-unpacked\resources\app.asar'
 & npm run verify:asar
 if ($LASTEXITCODE -ne 0) { throw 'Packaged app verification failed.' }
 
@@ -54,7 +62,8 @@ if (-not (Test-Path -LiteralPath $exe) -or -not (Test-Path -LiteralPath $icon)) 
 }
 
 if (-not $NoShortcutSwitch) {
-  & (Join-Path $PSScriptRoot 'switch-shortcuts.ps1') -ProjectRoot $projectRoot -ReleaseDir $releaseDir
+  if ((Split-Path -Leaf $releaseBase) -ne 'release') { throw 'Shortcut switch needs a release root named release.' }
+  & (Join-Path $PSScriptRoot 'switch-shortcuts.ps1') -ProjectRoot (Split-Path -Parent $releaseBase) -ReleaseDir $releaseDir
   if ($LASTEXITCODE -ne 0) { throw 'Shortcut switch failed.' }
 }
 
