@@ -274,6 +274,25 @@ describe('task cancellation', () => {
     expect(runtime.getSnapshot().taskMetrics?.usedTokens).toBeUndefined()
   })
 
+  it('replaces a failed ACP user message when the same text is sent again', async () => {
+    let calls = 0
+    const model = {
+      respond: async () => {
+        calls += 1
+        if (calls === 1) throw new Error('DSH ACP 已退出（unknown）')
+        return { text: '继续完成' }
+      }
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    await runtime.sendMessage('同一条任务')
+    expect(runtime.getSnapshot().taskStatus).toBe('failed')
+    await runtime.sendMessage('同一条任务')
+    const snapshot = runtime.getSnapshot()
+    expect(snapshot.taskStatus).toBe('done')
+    expect(snapshot.timeline.filter((entry) => entry.kind === 'user')).toHaveLength(1)
+    expect(snapshot.timeline.find((entry) => entry.kind === 'user')?.text).toBe('同一条任务')
+  })
+
   it('keeps the persisted context reading when the live query is unavailable', async () => {
     const model = {
       respond: async () => ({ text: '完成' }),

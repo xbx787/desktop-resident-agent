@@ -521,8 +521,7 @@ export class AgentRuntime {
   }
 
   /** 会话上下文要重建时，不把上一次真实读数抹掉，只标成旧值。 */
-  private markContextUsageStale(): void {
-    const current = this.state.contextUsage
+  private markContextUsageStale(): void {    const current = this.state.contextUsage
     this.state.contextUsage = current?.status === 'available'
       ? { ...current, stale: true }
       : { status: 'unavailable' }
@@ -766,6 +765,31 @@ export class AgentRuntime {
     }
   }
 
+  /** ACP 崩溃后用户往往会把同一条消息再发一次。若上一轮在用户消息后
+   *  没有产生任何助手内容，就把那条失败的用户消息替换掉，避免时间线里
+   *  出现两个一模一样的请求。 */
+  private dropRepeatedFailedUser(prompt: string): void {
+    if (this.state.taskStatus !== 'failed') return
+    let lastUserIndex = -1
+    for (let index = this.history.length - 1; index >= 0; index -= 1) {
+      if (this.history[index].role === 'user') { lastUserIndex = index; break }
+    }
+    if (lastUserIndex < 0 || this.history[lastUserIndex].content !== prompt) return
+    if (this.history.slice(lastUserIndex + 1).some((line) => line.role === 'assistant')) return
+    let timelineUserIndex = -1
+    for (let index = this.state.timeline.length - 1; index >= 0; index -= 1) {
+      if (this.state.timeline[index].kind === 'user') { timelineUserIndex = index; break }
+    }
+    if (timelineUserIndex < 0) return
+    const timelineUser = this.state.timeline[timelineUserIndex]
+    if (timelineUser.text !== prompt.trim()) return
+    if (this.state.timeline.slice(timelineUserIndex + 1).some((entry) => entry.kind === 'assistant')) return
+    const failure = [...this.state.timeline].reverse().find((entry) => entry.kind === 'system' && entry.tone === 'error')
+    if (!failure?.text.includes('DSH ACP 已退出') && !failure?.text.includes('连接刚刚中断')) return
+    this.history.splice(lastUserIndex, 1)
+    this.state.timeline.splice(timelineUserIndex, 1)
+  }
+
   async sendMessage(rawText: string, attachments: UserAttachment[] = [], sessionContext = '', displayText?: string, hiddenUser = false, divider = false): Promise<void> {
     const text = rawText.trim()
     if (!validAttachmentList(attachments)) {
@@ -792,6 +816,7 @@ export class AgentRuntime {
       this.add('system', '当前任务尚未结束；请先处理待批准操作，或按“停止”。')
       return
     }
+    if (!hiddenUser && !divider) this.dropRepeatedFailedUser(prompt)
 
     const goalBeforeRef = this.state.goal
     const goalBefore = goalBeforeRef ? structuredClone(goalBeforeRef) : null

@@ -6,5 +6,6 @@ describe('public error copy', () => {
     expect(publicErrorText('Claude Code process exited with code 1')).toBe('小鲸引擎 process exited with code 1')
     expect(publicErrorText('Claude Agent 运行失败。')).toBe('小鲸引擎 运行失败。')
     expect(publicErrorText('DeepSeek 认证失败：请检查 API Key。')).toBe('DeepSeek 认证失败：请检查 API Key。')
+    expect(publicErrorText('DSH ACP 已退出（unknown）：stderr')).toBe('连接刚刚中断，消息已保留，请再发送一次。')
   })
 })

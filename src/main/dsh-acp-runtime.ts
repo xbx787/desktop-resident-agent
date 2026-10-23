@@ -113,6 +113,21 @@ function errorText(value: unknown): string {
   return String(value)
 }
 
+/** 只有子进程自己退出才算“可以透明重连”的故障；协议/参数错误不重试。 */
+function isAcpExit(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith('DSH ACP 已退出')
+}
+
+/** 真正会出现在回答里的通知；状态/命令列表更新不算“已经产出”。 */
+function isSubstantiveActivity(method: string, params: Record<string, unknown>): boolean {
+  if (method !== 'session/update') return false
+  const update = params.update && typeof params.update === 'object'
+    ? params.update as Record<string, unknown> : {}
+  const kind = typeof update.sessionUpdate === 'string' ? update.sessionUpdate : ''
+  return kind === 'agent_message_chunk' || kind === 'agent_thought_chunk' ||
+    kind === 'tool_call' || kind === 'tool_call_update' || kind === 'plan'
+}
+
 export class DshAcpRuntime {
   private child: ChildProcessWithoutNullStreams | undefined
   private nextId = 1
@@ -122,6 +137,8 @@ export class DshAcpRuntime {
   private startPromise: Promise<void> | undefined
   private stderrTail = ''
   private runGeneration = 0
+  /** 会话通知序号：prompt 重连前用它判断这一轮是否已经开始产出。 */
+  private activitySerial = 0
   /** 连接握手时协商出的图片输入能力。 */
   private imagePrompts = false
 
@@ -277,6 +294,7 @@ export class DshAcpRuntime {
     if (!method) return
     const params = message.params && typeof message.params === 'object'
       ? message.params as Record<string, unknown> : {}
+    if (isSubstantiveActivity(method, params)) this.activitySerial += 1
     for (const listener of this.listeners) listener({ method, params })
   }
 
@@ -318,12 +336,33 @@ export class DshAcpRuntime {
   }
 
   async prompt(sessionId: string, blocks: DshAcpPromptBlock[], timeoutMs = 30 * 60_000): Promise<{ stopReason?: string }> {
-    return await this.request('session/prompt', {
-      sessionId,
-      prompt: blocks
-    }, timeoutMs) as { stopReason?: string }
+    // ACP 进程偶发退出时，用户不应该看到“DSH ACP 已退出”。如果这次 prompt
+    // 还没有产生任何会话通知，就静默重启进程、恢复同一会话并重放一次；
+    // 中途已经流式输出则不重放，避免重复回答。
+    let target = sessionId
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const activity = this.activitySerial
+      try {
+        return await this.request('session/prompt', {
+          sessionId: target,
+          prompt: blocks
+        }, timeoutMs) as { stopReason?: string }
+      } catch (error) {
+        if (!isAcpExit(error) || this.activitySerial !== activity || attempt === 2) {
+          if (isAcpExit(error)) {
+            throw new Error('连接刚刚中断，自动恢复没有成功。消息已保留，请再发送一次。')
+          }
+          throw error
+        }
+        await this.close().catch(() => undefined)
+        await new Promise<void>((resolve) => setTimeout(resolve, 150 * (attempt + 1)))
+        await this.start()
+        const resumed = await this.resumeSession(target, this.settings.cwd)
+        target = resumed.sessionId || target
+      }
+    }
+    throw new Error('连接刚刚中断，自动恢复没有成功。消息已保留，请再发送一次。')
   }
-
   /** 把我们补的 `session/steer` 打给 DSH：消息插到下一步边界，不打断当前
    *  回合。方法不存在（未打补丁的运行时）时抛错，由调用方回退。 */
   async steer(sessionId: string, blocks: DshAcpPromptBlock[], timeoutMs = 30_000): Promise<{ queued: boolean; messageId?: string }> {
