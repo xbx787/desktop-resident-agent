@@ -89,3 +89,22 @@ describe('LibraryStore adopt', () => {
     expect(launched.mcp.map((item) => item.name)).toEqual(['demo'])
   })
 })
+
+
+describe('LibraryStore source dedupe', () => {
+  it('keeps one entry when the same MCP name appears in Claude and project configs', async () => {
+    const home = path.join(testRoot, 'home')
+    const workspace = path.join(testRoot, 'workspace')
+    await fs.mkdir(home, { recursive: true })
+    await fs.mkdir(workspace, { recursive: true })
+    await fs.writeFile(path.join(home, '.claude.json'), JSON.stringify({
+      mcpServers: { demo: { command: 'node', args: ['user.js'] } }
+    }), 'utf8')
+    await fs.writeFile(path.join(workspace, '.mcp.json'), JSON.stringify({
+      mcpServers: { demo: { command: 'node', args: ['project.js'] } }
+    }), 'utf8')
+    const store = new LibraryStore(testRoot, { homeDir: home, workspace })
+    const entries = (await store.list()).filter((item) => item.kind === 'mcp' && item.name === 'demo')
+    expect(entries).toHaveLength(1)
+  })
+})

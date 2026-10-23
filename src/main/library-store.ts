@@ -89,10 +89,16 @@ export class LibraryStore {
   async list(): Promise<LibraryItem[]> {
     const items = [...await this.read()]
     const seen = new Set(items.map((item) => `${item.kind}:${item.id}`))
+    // A server already installed under one source wins; the same name from
+    // another config must not show up as a second, competing entry.
+    const seenNames = new Set(items.map((item) => `${item.kind}:${item.name.toLocaleLowerCase()}`))
     for (const item of this.scanExternal()) {
       const key = `${item.kind}:${item.id}`
       if (seen.has(key)) continue
+      const nameKey = `${item.kind}:${item.name.toLocaleLowerCase()}`
+      if (seenNames.has(nameKey)) continue
       seen.add(key)
+      seenNames.add(nameKey)
       items.push(item)
     }
     return items
