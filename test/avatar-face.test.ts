@@ -20,7 +20,7 @@ describe('resolved avatar presentation', () => {
     expect(resolveAvatarPresentation({ taskStatus: 'planning', avatarState: 'thinking' }))
       .toEqual({ activity: 'working', face: 'focus', idleAllowed: false })
     expect(resolveAvatarPresentation({ taskStatus: 'awaiting_approval', avatarState: 'thinking' }))
-      .toEqual({ activity: 'waiting', face: 'surprise', idleAllowed: false })
+      .toEqual({ activity: 'waiting', face: 'question', idleAllowed: false })
     expect(resolveAvatarPresentation({ taskStatus: 'executing', avatarState: 'speaking' }))
       .toEqual({ activity: 'speaking', face: 'smile', idleAllowed: false })
     expect(resolveAvatarPresentation({ taskStatus: 'executing', acknowledging: true }))

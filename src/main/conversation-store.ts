@@ -8,6 +8,7 @@ import { protectProfiles, restoreProfiles, type SecretCodec } from './secret-sto
 import type { AgentGoal, ApprovalMode, AvatarSize, ConversationBatchAction, ConversationBatchResult, ConversationLibraryState, ConversationSummary, ContextUsageSnapshot, EffortLevel, ModelMode, ModelProfile, PanelPlacement, PanelTheme, TaskStatus, TimelineEntry, UserAttachment, ConversationSettings, UiSize } from '../shared/contracts'
 import { AUTO_COMPACT_DEFAULT_PERCENT, PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH, isAgentKernelKind, isAutoCompactPercent, isAvatarRenderer } from '../shared/contracts'
 import { isPersonaId } from '../shared/personas'
+import { DEFAULT_SKILL_MARKET_SOURCES, isSkillMarketSourceId } from '../shared/skill-market'
 
 const DEFAULT_VISIBLE_TABS = 5
 const MAX_VISIBLE_TABS = 12
@@ -274,7 +275,7 @@ function readExtendedSettings(settings: Record<string, unknown>): Pick<Conversat
   'goalMaxIterations' | 'goalMaxMinutes' | 'memoryEnabled' | 'panelSize' | 'panelPlacement' | 'panelTheme' | 'uiSize' | 'avatarSize' | 'avatarRenderer' | 'webSearchEnabled' | 'personaId' | 'agentKernel' | 'autoCompactPercent' |
   'toolRowDetail' |
   'outputStyle' | 'appendSystemPrompt' | 'autoScroll' | 'expandFileEditsByDefault' | 'sessionSort' | 'titleLocale' |
-  'titleModel' | 'loadUserSettings'> {
+  'titleModel' | 'loadUserSettings' | 'skillMarketSources'> {
   const profiles = Array.isArray(settings.modelProfiles)
     ? (settings.modelProfiles.filter(isModelProfile) as ModelProfile[]).map((profile) => structuredClone(profile))
     : []
@@ -303,6 +304,9 @@ function readExtendedSettings(settings: Record<string, unknown>): Pick<Conversat
     toolRowDetail: settings.toolRowDetail === 'full' || settings.toolRowDetail === 'name'
       ? settings.toolRowDetail : 'brief',
     webSearchEnabled: settings.webSearchEnabled !== false,
+    skillMarketSources: Array.isArray(settings.skillMarketSources)
+      ? settings.skillMarketSources.filter(isSkillMarketSourceId)
+      : [...DEFAULT_SKILL_MARKET_SOURCES],
     personaId: isPersonaId(settings.personaId) ? settings.personaId : 'xiaojing',
     agentKernel: isAgentKernelKind(settings.agentKernel) ? settings.agentKernel : 'dsh',
     autoCompactPercent: isAutoCompactPercent(settings.autoCompactPercent)

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  approvalAnchor,
   approvalCardHeight,
   approvalCardHtml,
   approvalCardWidth,
@@ -14,10 +15,12 @@ describe('批准卡', () => {
     expect(html).toContain('将执行 npm run pack:release')
     expect(html).toContain('并替换 release 目录中的安装包。')
     expect(html).not.toContain('查看参数')
+    expect(html).toContain('是否允许这次操作？')
     expect(html.indexOf('class="detail"')).toBeLessThan(html.indexOf('class="actions"'))
     expect(html.indexOf('class="actions"')).toBeLessThan(html.indexOf('class="approve"'))
-    // 蓝底主题，而不是旧的黑灰小窗。
-    expect(html).toContain('linear-gradient(160deg,#335ba8')
+    // 蓝底主题，和聊天面板窗口同色系，而不是旧的黑灰小窗。
+    expect(html).toContain('rgba(38,65,125,.98)')
+    expect(html).toContain('rgba(11,26,61,.97)')
     expect(html).toContain('class="reject"')
     expect(html).toContain('class="approve"')
   })
@@ -50,5 +53,15 @@ describe('批准卡', () => {
   it('指针跟着标签中心走，并被限制在卡片圆角内', () => {
     expect(approvalPointerLeft({ x: 500, y: 0, width: 80, height: 28 }, { x: 420, width: 240 })).toBe(120)
     expect(approvalPointerLeft({ x: 0, y: 0, width: 10, height: 28 }, { x: 0, width: 240 })).toBe(22)
+  })
+
+  it('锚点优先标签，其次面板头部，最后面板顶部固定处——不会落到窗口底边', () => {
+    const panel = { x: 100, y: 50, width: 360, height: 500 }
+    const tab = { x: 120, y: 14, width: 70, height: 26 }
+    const header = { x: 0, y: 0, width: 360, height: 42 }
+    expect(approvalAnchor(panel, tab, header)).toEqual({ x: 220, y: 64, width: 70, height: 26 })
+    expect(approvalAnchor(panel, null, header)).toEqual({ x: 100, y: 92, width: 360, height: 0 })
+    expect(approvalAnchor(panel, null, null)).toEqual({ x: 280, y: 102, width: 0, height: 0 })
+    expect(approvalAnchor(panel, null, null).y).not.toBe(panel.y + panel.height)
   })
 })

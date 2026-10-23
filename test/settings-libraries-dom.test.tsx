@@ -117,4 +117,17 @@ describe('settings libraries page', () => {
     expect(probe).toHaveBeenCalledWith(installed.id)
     expect(container!.textContent).toContain('找不到命令：npx')
   })
+
+  it('shows skill market sources and saves a toggle through settings update', async () => {
+    const update = vi.fn(async (patch) => ({ ...settings, ...patch }))
+    await mount(bridge({ update }))
+    await act(async () => click('技能'))
+    expect(container!.textContent).toContain('技能市场来源')
+    expect(container!.textContent).toContain('Anthropic 官方')
+    expect(container!.textContent).toContain('Superpowers（社区）')
+    const source = [...container!.querySelectorAll<HTMLButtonElement>('.settings-skill-source')]
+      .find((button) => button.textContent?.includes('Superpowers'))!
+    await act(async () => source.click())
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ skillMarketSources: ['anthropic'] }))
+  })
 })

@@ -218,6 +218,11 @@ button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55
 .settings-library-actions button:hover:not(:disabled) { background: rgba(160, 191, 251, .22); }
 .settings-library-health.is-ok { color: #9bd8ad; }
 .settings-library-health.is-error { color: #f6aeb5; }
+.settings-skill-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 0 0; }
+.settings-skill-sources > span { margin-right: 3px; color: #9fb8e1; font-size: var(--text-xs); }
+.settings-skill-source { height: 26px; padding: 0 9px; border: 1px solid rgba(190, 213, 253, .24); border-radius: 999px; color: #a9bee4; background: transparent; font-size: var(--text-xs); }
+.settings-skill-source.is-on { color: #dbe8ff; border-color: rgba(111, 211, 255, .5); background: rgba(111, 211, 255, .14); }
+.settings-skill-source:disabled { opacity: .5; }
 .settings-library-market { display: flex; flex-direction: column; gap: 10px; padding-top: 13px; border-top: 1px solid rgba(194, 215, 255, .16); }
 .settings-library-market-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .settings-library-market-head form { display: flex; gap: 6px; flex: 1; justify-content: flex-end; }

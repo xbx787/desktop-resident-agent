@@ -54,6 +54,14 @@ export function placeApprovalCard(anchor: ApprovalRect, size: { width: number; h
   }
 }
 
+/** 三角窗口的锚点：优先当前标签，其次面板头部下沿，最后面板顶部固定偏移。
+ *  任何情况下都不使用面板高度，避免又掉回“整个窗口底边”。 */
+export function approvalAnchor(panel: ApprovalRect, tab: ApprovalRect | null, header: ApprovalRect | null): ApprovalRect {
+  if (tab) return { x: panel.x + tab.x, y: panel.y + tab.y, width: tab.width, height: tab.height }
+  if (header) return { x: panel.x + header.x, y: panel.y + header.y + header.height, width: header.width, height: 0 }
+  return { x: panel.x + Math.round(panel.width / 2), y: panel.y + 52, width: 0, height: 0 }
+}
+
 /** 指针在卡片内的横向位置；卡片被工作区夹住时仍能指回标签中心。 */
 export function approvalPointerLeft(anchor: ApprovalRect, card: { x: number; width: number }): number {
   const center = anchor.x + anchor.width / 2 - card.x
@@ -70,17 +78,18 @@ export function approvalCardHtml(title: string, detail?: string, width = approva
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden}
     body{display:flex;justify-content:center;align-items:flex-start;padding:8px 8px 0;color:#eff5ff;font-family:"Microsoft YaHei UI","Microsoft YaHei",sans-serif}
-    .card{position:relative;box-sizing:border-box;width:${width}px;max-width:calc(100vw - 16px);padding:11px 13px 12px;border:1px solid rgba(142,181,255,.58);border-radius:12px;background:linear-gradient(160deg,#335ba8,#1d3a75 55%,#142a55);box-shadow:0 10px 26px rgba(2,10,28,.42),inset 0 1px 0 rgba(210,228,255,.18)}
-    .pointer{position:absolute;top:-7px;left:var(--pointer-left,50%);transform:translateX(-50%);width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:7px solid #335ba8;filter:drop-shadow(0 -1px 0 rgba(142,181,255,.45))}
+    .card{position:relative;box-sizing:border-box;width:${width}px;max-width:calc(100vw - 16px);padding:11px 13px 12px;border:1px solid rgba(184,209,255,.34);border-radius:12px;background:linear-gradient(155deg,rgba(38,65,125,.98),rgba(21,39,83,.97) 45%,rgba(11,26,61,.97));box-shadow:0 10px 26px rgba(2,8,24,.55),inset 0 1px 0 rgba(210,228,255,.14)}
+    .pointer{position:absolute;top:-7px;left:var(--pointer-left,50%);transform:translateX(-50%);width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:7px solid #26417d;filter:drop-shadow(0 -1px 0 rgba(184,209,255,.35))}
     body.is-above{padding:0 8px 8px;align-items:flex-end}
-    .card.is-above .pointer{top:auto;bottom:-7px;border-bottom:0;border-top:7px solid #142a55;filter:drop-shadow(0 1px 0 rgba(142,181,255,.45))}
-    .title{margin:0;font-size:13px;font-weight:600;line-height:1.45;overflow-wrap:anywhere}
-    .detail{margin:6px 0 0;max-height:340px;overflow-y:auto;color:#cfe0ff;font-size:11px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;scrollbar-width:thin;user-select:text}
+    .card.is-above .pointer{top:auto;bottom:-7px;border-bottom:0;border-top:7px solid #0b1a3d;filter:drop-shadow(0 1px 0 rgba(184,209,255,.35))}
+    .title{margin:0;font-size:13px;font-weight:600;line-height:1.45;color:#edf3ff;overflow-wrap:anywhere}
+    .description{margin:4px 0 0;color:#a9c7f0;font-size:11px;line-height:1.45}
+    .detail{margin:6px 0 0;max-height:340px;overflow-y:auto;color:#c7d8f8;font-size:11px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere;scrollbar-width:thin;user-select:text}
     .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:11px}
     .actions a{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;min-width:64px;height:28px;padding:0 14px;border-radius:8px;text-decoration:none;font-size:12px;line-height:1;user-select:none}
     .reject{color:#dbe8ff;background:rgba(120,158,226,.16);border:1px solid rgba(160,192,248,.4)}
     .reject:hover{background:rgba(120,158,226,.26)}
     .approve{color:#f7fbff;background:#4b82f0;border:1px solid rgba(170,202,255,.7)}
     .approve:hover{background:#5b91ff}
-  </style></head><body><div class="card"><span class="pointer"></span><p class="title">${safeTitle}</p>${body}<div class="actions"><a class="reject" href="https://approval.local/reject" title="拒绝">拒绝</a><a class="approve" href="https://approval.local/approve" title="批准">批准</a></div></div></body></html>`
+  </style></head><body><div class="card"><span class="pointer"></span><p class="title">${safeTitle}</p><p class="description">是否允许这次操作？</p>${body}<div class="actions"><a class="reject" href="https://approval.local/reject" title="拒绝">拒绝</a><a class="approve" href="https://approval.local/approve" title="批准">批准</a></div></div></body></html>`
 }

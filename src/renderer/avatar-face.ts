@@ -42,7 +42,7 @@ export function resolveAvatarPresentation(input: {
   if (avatarState === 'speaking') return { activity: 'speaking', face: 'smile', idleAllowed: false }
   if (avatarState === 'listening') return { activity: 'listening', face: 'focus', idleAllowed: false }
   if (acknowledging) return { activity: 'working', face: 'smile', idleAllowed: false }
-  if (taskStatus === 'awaiting_approval') return { activity: 'waiting', face: 'surprise', idleAllowed: false }
+  if (taskStatus === 'awaiting_approval') return { activity: 'waiting', face: 'question', idleAllowed: false }
   if (['planning', 'executing', 'verifying'].includes(taskStatus ?? '') ||
       avatarState === 'thinking' || avatarState === 'acting') {
     return { activity: 'working', face: 'focus', idleAllowed: false }

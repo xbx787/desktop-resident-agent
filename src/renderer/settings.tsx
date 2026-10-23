@@ -5,6 +5,7 @@ import { LIBRARY_KINDS, LIBRARY_LABELS, LIBRARY_MARKET_LABELS, type LibraryItem,
 import { PERSONA_PRESETS } from '../shared/personas'
 import { personaAvatarUrl } from './avatar-art'
 import { PROVIDER_CATALOG } from '../shared/provider-catalog'
+import { DEFAULT_SKILL_MARKET_SOURCES, SKILL_MARKET_SOURCES } from '../shared/skill-market'
 import { publicErrorText } from '../shared/error-copy'
 import type { GrowthOverview, SettingsAPI } from '../preload/settings'
 import type { MemoryItem } from '../main/memory-service'
@@ -203,7 +204,7 @@ export function SettingsPage() {
       if (active) setMarketBusy(false)
     })
     return () => { active = false }
-  }, [tab, libraryKind])
+  }, [tab, libraryKind, settings?.skillMarketSources?.join(',')])
 
   useEffect(() => {
     // 成长实验不在设置里暴露：面板入口已移除，这段轮询永远不会启动。
@@ -240,6 +241,15 @@ export function SettingsPage() {
     } finally {
       setMarketBusy(false)
     }
+  }
+
+  function toggleSkillSource(id: string, on: boolean): void {
+    const current = settings?.skillMarketSources ?? [...DEFAULT_SKILL_MARKET_SOURCES]
+    const next = on ? [...new Set([...current, id])] : current.filter((item) => item !== id)
+    setMarketItems([])
+    setMarketLoadedFor(null)
+    setMarketError('')
+    void update({ skillMarketSources: next })
   }
 
   async function installLibraryItem(item: LibraryItem): Promise<void> {
@@ -828,6 +838,19 @@ export function SettingsPage() {
             <h2>{LIBRARY_LABELS[libraryKind]}库</h2>
             <p>应用安装的条目用 @ 添加；本地已有的条目由 Claude 配置直接加载。</p>
           </div>
+          {libraryKind === 'skill' && <div className="settings-skill-sources" aria-label="技能市场来源">
+            <span>技能市场来源</span>
+            {SKILL_MARKET_SOURCES.map((source) => {
+              const enabled = (settings?.skillMarketSources ?? DEFAULT_SKILL_MARKET_SOURCES).includes(source.id)
+              return <button key={source.id} type="button" role="switch" aria-checked={enabled}
+                className={`settings-skill-source${enabled ? ' is-on' : ''}`}
+                title={source.description}
+                disabled={!settings || busy}
+                onClick={() => toggleSkillSource(source.id, !enabled)}>
+                {source.name}
+              </button>
+            })}
+          </div>}
           {installedLibraries.length === 0
             ? <p className="settings-library-empty">还没有添加{LIBRARY_LABELS[libraryKind]}。到下面的{LIBRARY_MARKET_LABELS[libraryKind]}找一个。</p>
             : <div className="settings-library-list">

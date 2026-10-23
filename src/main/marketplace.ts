@@ -1,4 +1,5 @@
 import type { LibraryItem, LibraryKind } from '../shared/libraries'
+import { enabledSkillMarketSources, type SkillMarketSource } from '../shared/skill-market'
 
 interface CacheEntry {
   expires: number
@@ -110,29 +111,41 @@ async function searchMcp(query: string): Promise<LibraryItem[]> {
   }).then((items) => items.filter((item) => matches(item, query)))
 }
 
-/** The skill catalog is a repository of one directory per skill. The list is
- *  cached; installation fetches only the chosen directory. */
-async function searchSkills(query: string): Promise<LibraryItem[]> {
-  return cached('skill', async () => {
-    const payload = await json('https://api.github.com/repos/anthropics/skills/contents/skills')
-    return array(payload).flatMap((raw): LibraryItem[] => {
-      const entry = record(raw)
-      const name = text(entry?.name)
-      if (!name || text(entry?.type) !== 'dir') return []
-      const sourceAvailable = ['docx', 'pdf', 'pptx', 'xlsx'].includes(name)
-      return [{
-        id: `anthropics/${name}`,
-        kind: 'skill',
-        name,
-        description: sourceAvailable ? '文档处理技能，仅从来源仓库安装。' : '技能目录中的技能。',
-        source: 'skill-catalog',
-        license: sourceAvailable ? 'source-available' : 'Apache-2.0',
-        repo: 'anthropics/skills',
-        ref: 'main',
-        subdir: `skills/${name}`
-      }]
-    })
-  }).then((items) => items.filter((item) => matches(item, query)))
+/** One GitHub source of one-directory-per-skill. Installation fetches only the
+ *  chosen directory (`repo` + `subdir`), so a huge community catalog stays
+ *  cheap until the user picks something. */
+async function skillSourceItems(source: SkillMarketSource): Promise<LibraryItem[]> {
+  const payload = await json(`https://api.github.com/repos/${source.repo}/contents/${source.path}?ref=${encodeURIComponent(source.ref)}`)
+  return array(payload).flatMap((raw): LibraryItem[] => {
+    const entry = record(raw)
+    const name = text(entry?.name)
+    if (!name || text(entry?.type) !== 'dir') return []
+    const sourceAvailable = source.id === 'anthropic' && ['docx', 'pdf', 'pptx', 'xlsx'].includes(name)
+    return [{
+      id: `${source.id === 'anthropic' ? 'anthropics' : source.id}/${name}`,
+      kind: 'skill',
+      name,
+      description: sourceAvailable ? '文档处理技能，仅从来源仓库安装。' : `${source.name}技能。`,
+      source: source.id,
+      license: sourceAvailable ? 'source-available' : source.license,
+      repo: source.repo,
+      ref: source.ref,
+      subdir: `${source.path}/${name}`
+    }]
+  })
+}
+
+async function searchSkills(query: string, enabledSources?: unknown): Promise<LibraryItem[]> {
+  const sources = enabledSkillMarketSources(enabledSources)
+  if (!sources.length) return []
+  const results = await Promise.allSettled(sources.map((source) =>
+    cached(`skill:${source.id}`, () => skillSourceItems(source))))
+  const successful = results.filter((item): item is PromiseFulfilledResult<LibraryItem[]> => item.status === 'fulfilled')
+  if (!successful.length) {
+    const failed = results.find((item): item is PromiseRejectedResult => item.status === 'rejected')
+    throw failed?.reason instanceof Error ? failed.reason : new Error('技能市场暂时不可用。')
+  }
+  return successful.flatMap((item) => item.value).filter((item) => matches(item, query))
 }
 
 function pluginSource(value: unknown): { repo?: string; subdir?: string; ref?: string } {
@@ -171,9 +184,9 @@ async function searchPlugins(query: string): Promise<LibraryItem[]> {
   }).then((items) => items.filter((item) => matches(item, query)))
 }
 
-export async function searchMarket(kind: LibraryKind, query: string): Promise<LibraryItem[]> {
+export async function searchMarket(kind: LibraryKind, query: string, skillSources?: unknown): Promise<LibraryItem[]> {
   const term = query.trim().slice(0, 120)
   if (kind === 'mcp') return searchMcp(term)
-  if (kind === 'skill') return searchSkills(term)
+  if (kind === 'skill') return searchSkills(term, skillSources)
   return searchPlugins(term)
 }

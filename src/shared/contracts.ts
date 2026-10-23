@@ -254,6 +254,8 @@ export interface ConversationSettings {
   /** 是否允许模型联网搜索/抓取。关闭时工具直接从工具列表移除，并在
    *  人设里明确告知不可搜索，避免模型反复尝试。 */
   webSearchEnabled?: boolean
+  /** 技能市场启用的来源 id；缺省为 Anthropic 官方 + Superpowers。 */
+  skillMarketSources?: string[]
   /** 当前人设预设（xiaojing / rin / rem / yui / yukino），同时决定人设文字、
    *  对话头像和桌面主角色。 */
   personaId?: string

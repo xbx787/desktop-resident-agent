@@ -21,10 +21,20 @@
 - MCP/技能/插件库新增启停与健康检查：停用项不注入会话，检测会核对 stdio 命令、HTTP 服务或安装目录。
 - 会话记录新增 providerId 元数据；会话库支持导出为 `.dsh.json` 和从文件导入，导入会清掉旧云会话绑定、目标和危险审批档。
 
+### 勾叉窗口、状态点与表情
+- 勾叉窗口改成与聊天面板同色系的深蓝渐变，标题下方增加“是否允许这次操作？”说明；落点优先当前标签，测不到标签时贴面板头部下沿，完全不再回退到窗口底边。
+- 当前会话对应的右上角状态点增加一圈小蓝光；等待批准时状态点保留对应的紫色。
+- 等待批准时人物改用新的“困惑问号”表情；Focus 和 Surprise 去掉外圈白边，黑描边和内部白色保留。
+- 新增表情生成 prompt 文档 `docs/2026-10-23-expression-prompt.md`，正向/负向提示都明确要求无白边。
+
+### 技能市场
+- 技能市场从单一 Anthropic 目录扩展为多来源：Anthropic 官方、Superpowers、Awesome Skills 社区聚合；设置 → 库 → 技能里可以单独开关来源。
+- 已把现有 Claude 技能 `build-xmind`、`mineru-extract`、`youtube-audio` 导入 DSH，并安装 `brainstorming` 与依赖的 `writing-plans`。
+
 ### 验证边界
-- `npm run check` 通过；全量 1005 项测试通过、30 项 Live 门控跳过。
+- `npm run check` 通过；全量 1012 项测试通过、30 项 Live 门控跳过。
 - 108 基于 `257b38d`（含 2524b9e 目标恢复修复、257b38d 头像占位修复）；主线最新的状态点旋转提交依赖开发2未提交的 Live2D 字段，留到 109。
-- 打包使用 `-NoShortcutSwitch`，未切换桌面快捷方式、未重启运行中的程序。
+- 打包使用 `-ReleaseRoot D:\DesktopPetProject\release`，发布目录在主项目下；快捷方式会切到 108。
 
 ## [Unreleased] - 2026-10-23（基于 v0.0.107）
 

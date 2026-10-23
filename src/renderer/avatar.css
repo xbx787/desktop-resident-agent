@@ -70,7 +70,8 @@ body.avatar-window { -webkit-user-select: none; user-select: none; }
 .avatar-status-dot.is-done { background: #80d6a1; opacity: .9; }
 .avatar-status-dot.is-failed { background: #f48790; opacity: 1; }
 .avatar-status-dot.is-cancelled { background: #9aa7bd; opacity: .9; }
-.avatar-status-dot.is-current { opacity: 1; }
+.avatar-status-dot.is-current { opacity: 1; box-shadow: 0 0 0 1.5px rgba(126, 190, 255, .9), 0 0 5px 1.5px rgba(74, 146, 255, .65); }
+.avatar-status-dot.is-current.is-waiting { box-shadow: 0 0 0 1.5px rgba(176, 160, 255, .95), 0 0 6px 1.5px rgba(110, 130, 255, .7); }
 /* 不足五个对话时的空槽：只留一圈细边，五个点的位置保持不变。 */
 .avatar-status-dot.is-empty { background: transparent; border: 1px solid rgba(150, 190, 245, .5); opacity: .55; }
 /* 只呼吸透明度，不改尺寸：几个对话点必须始终等大。 */

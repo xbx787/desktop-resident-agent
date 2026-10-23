@@ -266,7 +266,8 @@ describe('persistent conversation library', () => {
       webSearchEnabled: true, personaId: 'xiaojing', agentKernel: 'dsh', autoCompactPercent: 80,
       toolRowDetail: 'brief',
       autoScroll: true, expandFileEditsByDefault: false, sessionSort: 'updated', titleLocale: 'auto',
-      titleModel: 'deepseek-flash', loadUserSettings: true
+      titleModel: 'deepseek-flash', loadUserSettings: true,
+      skillMarketSources: ['anthropic', 'superpowers']
     })
     expect((await migrated.listConversations()).length).toBe(8)
     expect((await migrated.getConversation(created[0].id))?.pendingMessages[0].text).toBe('继续执行')

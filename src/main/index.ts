@@ -48,7 +48,7 @@ import { isEffortLevel } from '../shared/effort'
 import type { AgentKernelKind, AvatarSize, BubbleLayout, ClaudeWorkflowOption, ConversationSettings, PanelDirection, PanelPlacement, UiSize, UserAttachment } from '../shared/contracts'
 import { isAgentKernelKind, isApprovalMode, isAutoCompactPercent, isAvatarRenderer, PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH } from '../shared/contracts'
 import { isPersonaId } from '../shared/personas'
-import { approvalCardHeight, approvalCardHtml, approvalCardWidth, approvalPointerLeft, placeApprovalCard, type ApprovalRect } from './approval-card'
+import { approvalAnchor, approvalCardHeight, approvalCardHtml, approvalCardWidth, approvalPointerLeft, placeApprovalCard, type ApprovalRect } from './approval-card'
 import { probeProviderHealth } from './provider-health'
 import { discoverProviderModels } from './model-discovery'
 import { probeLibrary } from './library-health'
@@ -1391,6 +1391,23 @@ function activeTabRect(win: BrowserWindow): Promise<ApprovalRect | null> {
   }).catch(() => null)
 }
 
+/** 标签按钮测不到时（面板刚切换/头部重绘），退回面板头部下沿；
+ *  绝不退到整个面板窗口的底边。 */
+function panelHeaderRect(win: BrowserWindow): Promise<ApprovalRect | null> {
+  return win.webContents.executeJavaScript(`(() => {
+    const el = document.querySelector('.panel-chat-header');
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y, width: r.width, height: r.height };
+  })()`).then((value: unknown) => {
+    if (!value || typeof value !== 'object') return null
+    const rect = value as Record<string, unknown>
+    const numbers = [rect.x, rect.y, rect.width, rect.height].map((item) => Number(item))
+    if (!numbers.every((item) => Number.isFinite(item)) || numbers[2] <= 0 || numbers[3] <= 0) return null
+    return { x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3] }
+  }).catch(() => null)
+}
+
 function requestApproval(title: string, detail?: string, timeoutMs = 5 * 60_000): Promise<boolean | null> {
   const cardTitle = title.trim() || '需要你的批准'
   const cardDetail = (detail ?? '').trim()
@@ -1443,8 +1460,9 @@ function requestApproval(title: string, detail?: string, timeoutMs = 5 * 60_000)
         // 优先挂当前会话标签：多标签时“开发1”的卡就落在“开发1”下面。
         if (panel && panelWindow && !panelWindow.isDestroyed()) {
           const tab = await activeTabRect(panelWindow)
-          if (tab) anchor = { x: panel.x + tab.x, y: panel.y + tab.y, width: tab.width, height: tab.height }
-          else anchor = { x: panel.x + 14, y: panel.y + panel.height - 6, width: 0, height: 0 }
+          // 标签按钮暂时测不到时贴面板头部下沿；不能用 panel.height 退到窗口底边。
+          const header = tab ? null : await panelHeaderRect(panelWindow)
+          anchor = approvalAnchor(panel, tab, header)
         }
         if (!anchor) {
           const balance = avatar ? balanceBoundsFor(avatar) : null
@@ -1934,7 +1952,8 @@ function registerIpc(): void {
   ipcMain.handle('pet:libraries:search', async (event, kind: unknown, query: unknown) => {
     if (!settingsTrusted(event) || !isLibraryKind(kind)) throw new Error('市场请求无效。')
     if (typeof query !== 'string') throw new Error('搜索词无效。')
-    return searchMarket(kind, query)
+    const settings = (await activeController().getLibraryState()).settings
+    return searchMarket(kind, query, settings.skillMarketSources)
   })
   ipcMain.handle('pet:libraries:install', async (event, raw: unknown) => {
     if (!settingsTrusted(event) || !isLibraryItem(raw)) throw new Error('库条目无效。')
