@@ -27,4 +27,16 @@ describe('conversation sender row', () => {
     expect(html).toContain('开发二')
     expect(html).toContain('>开<')
   })
+
+  it('keeps the normal user avatar for a scheduled-task label', () => {
+    const entry: TimelineEntry = {
+      id: '3', time: '2026-10-23T10:00:00.000Z', kind: 'user',
+      text: '【定时任务】\n开始做 P2。'
+    }
+    const html = renderToStaticMarkup(<EntryItem entry={entry} running={false}
+      display={{ showTimestamps: true, avatars: { user: 'me.png', assistant: null } }} />)
+    expect(html).toContain('定时任务')
+    expect(html).not.toContain('>时<')
+    expect(html).not.toContain('【定时任务】')
+  })
 })

@@ -439,17 +439,19 @@ export const TimelineItem = memo(function TimelineItem({ entry, running = false,
     ? /^【(?:来自对话「([^」]{1,40})」|(定时任务|自动恢复|上下文压缩|重启恢复))】\r?\n?/u.exec(entry.text)
     : null;
   const sourceName = sourceMatch ? (sourceMatch[1] ?? sourceMatch[2] ?? '').trim() : '';
+  const labelOnly = ['定时任务', '自动恢复', '上下文压缩', '重启恢复'].includes(sourceName);
   const sender = entry.kind === 'user'
-    ? entry.sender ?? (sourceName ? { name: sourceName, badge: senderBadge(sourceName) } : undefined)
+    ? entry.sender ?? (sourceName ? { name: sourceName, badge: senderBadge(sourceName), ...(labelOnly ? { keepAvatar: true } : {}) } : undefined)
     : undefined;
+  const senderFace = sender?.keepAvatar ? undefined : sender;
   const bodyEntry = sourceMatch ? { ...entry, text: entry.text.slice(sourceMatch[0].length) } : entry;
   return (
     <article className={`panel-event panel-event-${entry.kind}`} data-entry-id={entry.id} aria-label={`${sender ? sender.name : kindLabels[entry.kind]}，${timeLabel}`}>
       <div className="panel-event-avatar" aria-hidden="true" onContextMenu={onAvatarMenu}>
         {entry.kind === 'user' || entry.kind === 'assistant'
           ? <AvatarGlyph kind={entry.kind}
-              fallback={sender?.badge ?? (entry.kind === 'user' ? '你' : '鲸')}
-              name={sender ? null : entry.kind === 'user' ? display.avatars.user : display.avatars.assistant}
+              fallback={senderFace?.badge ?? (entry.kind === 'user' ? '你' : '鲸')}
+              name={senderFace ? null : entry.kind === 'user' ? display.avatars.user : display.avatars.assistant}
               presetSrc={entry.kind === 'user' ? null : display.personaAvatar} />
           : <span className="panel-event-glyph">系</span>}
         {display.showTimestamps && <time className="panel-event-time" dateTime={entry.time}>{timeLabel}</time>}

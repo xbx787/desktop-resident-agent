@@ -123,7 +123,7 @@ export interface TimelineEntry {
   images?: Array<{ name: string; path: string }>
   /** Present when another local conversation/agent injected this message.
    *  The badge is shown where the user's avatar normally sits. */
-  sender?: { name: string; badge: string }
+  sender?: { name: string; badge: string; /** true 时只显示名字标签，头像仍用当前用户头像。 */ keepAvatar?: boolean }
   tool?: {
     toolUseId: string
     name: string
