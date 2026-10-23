@@ -614,6 +614,25 @@ describe('task cancellation', () => {
     expect(runtime.exportConversationState().contextUsage).toMatchObject(contextUsage)
   })
 
+  it('restores subagent tasks and marks interrupted ones stopped', () => {
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, {
+      respond: async () => ({ text: 'ok' })
+    } as ModelClient)
+    runtime.restoreConversation({
+      id: 'subagents', title: '子代理会话', createdAt: '', updatedAt: '', archivedAt: null, pinnedAt: null,
+      mode: 'claude_code' as const, taskStatus: 'done' as const,
+      timeline: [], history: [], pendingMessages: [], sdkSessionId: null,
+      subagents: [
+        { taskId: 'a', description: '运行中的', status: 'running', toolUses: 2 },
+        { taskId: 'b', description: '已完成的', status: 'completed', toolUses: 1 }
+      ]
+    })
+    expect(runtime.getSnapshot().subagents).toMatchObject([
+      { taskId: 'a', status: 'stopped', summary: '应用重启，任务未恢复' },
+      { taskId: 'b', status: 'completed' }
+    ])
+  })
+
   it('drops a resume id the CLI no longer knows and explains why', async () => {
     const sdk: ModelClient = {
       respond: async () => {

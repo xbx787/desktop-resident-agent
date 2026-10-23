@@ -5,7 +5,7 @@ import type { DialogueLine } from './deepseek'
 import { isEffortLevel } from '../shared/effort'
 import { containsSensitiveData } from './memory-service'
 import { protectProfiles, restoreProfiles, type SecretCodec } from './secret-storage'
-import type { AgentGoal, ApprovalMode, AvatarSize, ConversationBatchAction, ConversationBatchResult, ConversationLibraryState, ConversationSummary, ContextUsageSnapshot, EffortLevel, ModelMode, ModelProfile, PanelPlacement, PanelTheme, TaskStatus, TimelineEntry, UserAttachment, ConversationSettings, UiSize } from '../shared/contracts'
+import type { AgentGoal, ApprovalMode, AvatarSize, ConversationBatchAction, ConversationBatchResult, ConversationLibraryState, ConversationSummary, ContextUsageSnapshot, EffortLevel, ModelMode, ModelProfile, PanelPlacement, PanelTheme, SubagentTask, TaskStatus, TimelineEntry, UserAttachment, ConversationSettings, UiSize } from '../shared/contracts'
 import { AUTO_COMPACT_DEFAULT_PERCENT, PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH, isAgentKernelKind, isAutoCompactPercent, isAvatarRenderer } from '../shared/contracts'
 import { isPersonaId } from '../shared/personas'
 import { DEFAULT_SKILL_MARKET_SOURCES, isSkillMarketSourceId } from '../shared/skill-market'
@@ -68,6 +68,8 @@ export interface ConversationRecord {
   compactionSummary?: string
   /** Entries added to this conversation with @, as `kind:id`. */
   activeLibraries?: string[]
+  /** 子代理托盘的最后状态；重启后用来恢复，不假装运行中的任务还活着。 */
+  subagents?: SubagentTask[]
 }
 
 export interface ConversationPatch {
@@ -87,6 +89,7 @@ export interface ConversationPatch {
   spentYuan?: number
   contextUsage?: ContextUsageSnapshot
   activeLibraries?: string[]
+  subagents?: SubagentTask[]
 }
 
 export interface ConversationSearchOptions {
@@ -143,6 +146,15 @@ function isTimeline(value: unknown): value is TimelineEntry[] {
     typeof entry.time === 'string' &&
     typeof entry.text === 'string' &&
     ['user', 'assistant', 'system', 'tool', 'thinking'].includes(String(entry.kind))
+  )
+}
+
+function isSubagents(value: unknown): value is SubagentTask[] {
+  return Array.isArray(value) && value.length <= 50 && value.every((task) =>
+    isObject(task) &&
+    typeof task.taskId === 'string' &&
+    typeof task.description === 'string' &&
+    ['running', 'completed', 'failed', 'stopped'].includes(String(task.status))
   )
 }
 
@@ -214,6 +226,7 @@ function isRecord(value: unknown): value is LegacyConversationRecord {
     (value.providerId === undefined || typeof value.providerId === 'string') &&
     (value.goal === undefined || isGoal(value.goal)) &&
     (value.contextUsage === undefined || isContextUsage(value.contextUsage)) &&
+    (value.subagents === undefined || isSubagents(value.subagents)) &&
     (value.compactionSummary === undefined || typeof value.compactionSummary === 'string')
 }
 
@@ -846,6 +859,9 @@ export class ConversationStore {
           changes.activeLibraries.some((id) => typeof id !== 'string' || !/^(mcp|skill|plugin):[^\s]+$/u.test(id)))) {
       throw new ConversationStoreError('INVALID_INPUT', '会话库引用格式无效。')
     }
+    if (changes.subagents !== undefined && !isSubagents(changes.subagents)) {
+      throw new ConversationStoreError('INVALID_INPUT', '子代理记录格式无效。')
+    }
     return this.mutate((draft) => {
       const record = findRecord(draft, id)
       if (changes.title !== undefined) record.title = changes.title
@@ -867,6 +883,7 @@ export class ConversationStore {
       if (changes.spentYuan !== undefined) record.spentYuan = changes.spentYuan
       if (changes.contextUsage !== undefined) record.contextUsage = changes.contextUsage
       if (changes.activeLibraries !== undefined) record.activeLibraries = changes.activeLibraries
+      if (changes.subagents !== undefined) record.subagents = changes.subagents
       record.updatedAt = new Date().toISOString()
       return record
     })

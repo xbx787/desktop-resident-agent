@@ -104,6 +104,8 @@ export class ConversationController {
   private displayedRecord: ConversationRecord | null = null
   /** The last goal key written per conversation (see persistGoalChange). */
   private readonly writtenGoals = new Map<string, string>()
+  /** Last subagent task list written per conversation (see persistSubagents). */
+  private readonly writtenSubagents = new Map<string, string>()
   private operations: Promise<void> = Promise.resolve()
   /** Last seen readiness flags — a cold snapshot still has to answer them. */
   private readiness = { modelReady: false, claudeCodeReady: false }
@@ -441,8 +443,21 @@ export class ConversationController {
       const reason = runtime.getQueuePauseReason()
       if (reason) this.pausedQueues.set(id, reason)
       this.persistGoalChange(id, runtime)
+      this.persistSubagents(id, runtime)
     }
     this.emit()
+  }
+
+  /** 子代理托盘跨重启保留最后状态；只在任务集合真的变化时落盘。 */
+  private persistSubagents(id: string, runtime: AgentRuntime): void {
+    const tasks = runtime.getSnapshot().subagents ?? []
+    if (!tasks.length) return
+    const key = JSON.stringify(tasks.map((task) => [task.taskId, task.status, task.summary, task.toolUses, task.endedAt]))
+    if (this.writtenSubagents.get(id) === key) return
+    this.writtenSubagents.set(id, key)
+    void this.serialize(async () => {
+      await this.store.updateConversation(id, { subagents: structuredClone(tasks) })
+    }).catch((error: unknown) => this.onBackgroundError(error))
   }
 
   /** A goal is durable state, not turn state. Writing it only when a turn ends

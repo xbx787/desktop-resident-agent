@@ -699,7 +699,9 @@ export class AgentRuntime {
     this.state.proposal = undefined
     this.state.question = null
     this.state.plan = null
-    this.state.subagents = []
+    this.state.subagents = (record.subagents ?? []).map((task) => task.status === 'running'
+      ? { ...task, status: 'stopped', summary: '应用重启，任务未恢复' }
+      : task)
     this.state.approvedPlan = undefined
     // 重开应用/切换会话时先显示上次真实读到的用量；下一次 usage_update
     // 会覆盖它，不会把“未记录”一直挂在界面上。
