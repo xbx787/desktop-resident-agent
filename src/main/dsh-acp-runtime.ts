@@ -130,6 +130,18 @@ export class DshAcpRuntime {
   /** Increments whenever a fresh process has completed its handshake. */
   get generation(): number { return this.runGeneration }
 
+  /** 供应商地址/Key 在进程启动时注入；只改环境，不在这里关闭进程，
+   *  由调用方决定是立刻重启还是等当前回合结束。 */
+  setDeepSeekEnvironment(patch: { apiKey?: string; baseUrl?: string }): void {
+    const env = this.settings.env ?? (this.settings.env = {})
+    if (patch.apiKey !== undefined) env.DEEPSEEK_API_KEY = patch.apiKey
+    if (patch.baseUrl !== undefined) {
+      const baseUrl = patch.baseUrl.trim()
+      if (baseUrl) env.DEEPSEEK_BASE_URL = baseUrl
+      else delete env.DEEPSEEK_BASE_URL
+    }
+  }
+
   /** The sandbox preset is a process-level env var too. */
   setPermissionMode(mode: 'read-only' | 'workspace-write' | 'danger-full-access'): void {
     if (this.settings.permissionMode === mode) return

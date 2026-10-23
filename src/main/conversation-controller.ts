@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { AgentCapabilities, AppSnapshot, ApprovalMode, AskAnswers, ContextUsageSnapshot, ConversationBatchAction, ConversationBatchResult, ModelMode, ModelProfile, TimelineEntry, UserAttachment } from '../shared/contracts'
 import { AUTO_COMPACT_DEFAULT_PERCENT } from '../shared/contracts'
+import { CLAUDE_BASE_URL, DEFAULT_CLAUDE_MODEL } from './claude-code'
 import { deleteTurnEntries, type AgentRuntime } from './agent-runtime'
 import type { DialogueLine } from './deepseek'
 import { containsSensitiveData } from './memory-service'
@@ -1181,6 +1182,27 @@ export class ConversationController {
       this.applyModelProfile(this.activeProfile())
       this.onRuntimeConfigurationChange?.()
     })
+  }
+
+  /** 当前端点不可达时的一键回退：优先复用已有官方配置，没有就新建一个。 */
+  async useOfficialEndpoint(): Promise<void> {
+    await this.initialize()
+    const settings = this.library!.settings
+    const active = this.activeProfile()
+    const apiKey = active?.apiKey?.trim() ?? ''
+    if (!apiKey) throw new Error('当前模型配置没有可用的 API Key，无法直接切换；请先重新输入 Key。')
+    const existing = settings.modelProfiles.find((profile) => profile.baseUrl === CLAUDE_BASE_URL)
+    const profile: ModelProfile = existing
+      ? { ...existing, apiKey: existing.apiKey || apiKey }
+      : {
+        id: randomUUID(),
+        name: 'DeepSeek 官方',
+        baseUrl: CLAUDE_BASE_URL,
+        apiKey,
+        model: DEFAULT_CLAUDE_MODEL
+      }
+    await this.saveModelProfile(profile)
+    if (this.library!.settings.activeModelProfileId !== profile.id) await this.setModelProfile(profile.id)
   }
 
   /** Applies a profile to every live runtime; only the displayed conversation

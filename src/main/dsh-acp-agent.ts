@@ -36,6 +36,9 @@ import type { DshAcpNotification, DshAcpPromptBlock, DshAcpRuntime, DshAcpServer
 
 const TURN_TIMEOUT_MS = 30 * 60_000
 const MAX_PERMISSION_INPUT = 4_000
+/** 提问卡没有时限地挂着会让整轮和后续消息都排不进来；DSH 原生阻塞提问
+ *  本身不会超时，宿主必须自己兜底。十分钟足够读完问题，也不会永远卡住。 */
+const QUESTION_TIMEOUT_MS = 10 * 60_000
 
 export interface DshAcpAgentOptions {
   runtime: DshAcpRuntime
@@ -43,6 +46,8 @@ export interface DshAcpAgentOptions {
   cwd: string
   provider?: string
   model?: string
+  /** Anthropic 兼容端点；写入 DSH 进程的 DEEPSEEK_BASE_URL。 */
+  baseUrl?: string
   deepseekApiKey?: string
   personaId?: string
   identity?: { userName?: string; assistantName?: string }
@@ -131,6 +136,28 @@ function effectiveToolKind(kind: string, title: string): string {
 /** DSH 里会派生一个子代理的工具名：单次 subagent 和 fork 版。 */
 const SUBAGENT_TOOL = /^(subagent|subagent[_-]?fork|task|agent)$/iu
 
+/** 提问工具的名字在不同 ACP 版本里可能是 `ask_user_question`、`AskUserQuestion`
+ *  或带标题前缀的展示名；只在标题看起来确实是提问工具时才解析。 */
+function isAskQuestionTool(name: string): boolean {
+  const trimmed = name.trim()
+  return /^ask[\s_-]?user([\s_-]?question)?$/iu.test(trimmed) ||
+    /(?:^|[\s_-])ask[\s_-]?user[\s_-]?question(?:$|[\s_-])/iu.test(trimmed)
+}
+
+/** 同一次提问会先以工具调用出现，再以服务请求出现；比较正文就能认出
+ *  是同一张卡，避免面板被同一条问题替换两次。 */
+function sameQuestions(left: AskQuestion[], right: AskQuestion[]): boolean {
+  if (left.length !== right.length) return false
+  return left.every((item, index) => {
+    const other = right[index]
+    return item.key === other.key &&
+      item.question === other.question &&
+      item.multiSelect === other.multiSelect &&
+      item.options.length === other.options.length &&
+      item.options.every((option, optionIndex) => option.label === other.options[optionIndex]?.label)
+  })
+}
+
 function isSubagentTool(name: string): boolean {
   return SUBAGENT_TOOL.test(name.trim())
 }
@@ -141,6 +168,10 @@ export class DshAcpAgentClient implements ModelClient {
   private sessionId: string | null = null
   private provider: string
   private model: string
+  /** 当前配置的供应商地址；空串表示 DSH 默认官方端点。 */
+  private providerBaseUrl: string
+  /** 切换供应商地址后等当前回合结束再重启进程。 */
+  private pendingProviderRestart = false
   private effort: EffortLevel = 'max'
   private approvalMode: ApprovalMode = 'workspace-write'
   private planMode = false
@@ -171,6 +202,8 @@ export class DshAcpAgentClient implements ModelClient {
   private pendingAsk: { callId: string; request: AskQuestionRequest } | null = null
   /** 服务级提问（例如退出计划模式）：等宿主面板回答后直接把答案交回服务。 */
   private pendingHostQuestion: { id: string; questions: AskQuestion[]; resolve: (value: unknown) => void; reject: (error: Error) => void } | null = null
+  /** 无人回答时的兜底计时器；回答、打断或替换问题时清掉。 */
+  private questionTimer?: ReturnType<typeof setTimeout>
   private planModeListener?: (on: boolean) => void
   private lastSessionUsage: DshSessionUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 }
   /** Size of the session log at the last usage read; lets the live poll skip
@@ -183,6 +216,8 @@ export class DshAcpAgentClient implements ModelClient {
   constructor(private readonly options: DshAcpAgentOptions) {
     this.provider = options.provider ?? 'deepseek-official'
     this.model = normalizeDshModel(options.model)
+    this.providerBaseUrl = options.baseUrl?.trim() ?? ''
+    this.runtime.setDeepSeekEnvironment?.({ apiKey: options.deepseekApiKey, baseUrl: this.providerBaseUrl })
     this.personaId = options.personaId ?? 'xiaojing'
     this.identity = options.identity ?? {}
     this.bridge.setDeepSeekApiKey(options.deepseekApiKey)
@@ -225,6 +260,11 @@ export class DshAcpAgentClient implements ModelClient {
       this.pendingRestart = false
       this.resetSession()
       this.applyPersona()
+      await this.runtime.close().catch(() => undefined)
+    }
+    // 地址/Key 在回合中改过：下一轮换新进程，但保留会话 id 继续续接上下文。
+    if (this.pendingProviderRestart) {
+      this.pendingProviderRestart = false
       await this.runtime.close().catch(() => undefined)
     }
     // 上一轮结束的子代理不带到这一轮。
@@ -422,6 +462,11 @@ export class DshAcpAgentClient implements ModelClient {
     } finally {
       clearInterval(usageTimer)
       this.busy = false
+      // 取消/异常结束时 DSH 可能不再回 tool_call_update；这里主动收尾，
+      // 保证下一次提问不会继承一张已经失效的卡。
+      if (this.pendingHostQuestion || this.pendingAsk) {
+        this.settleQuestions('本轮已结束，未回答的问题已取消。')
+      }
       unsubscribe()
       signal.removeEventListener('abort', onAbort)
     }
@@ -668,9 +713,10 @@ export class DshAcpAgentClient implements ModelClient {
     })
   }
 
-  /** DSH 的提问工具：从入参解析出问题，交给已有的提问面板。 */
+  /** DSH 的提问工具：从入参解析出问题，交给已有的提问面板。
+   *  如果服务级请求已经先到，工具调用只是同一条问题的重复通知，不再盖一张卡。 */
   private maybeStartQuestion(callId: string, title: string, rawInput: unknown): void {
-    if (title.trim().toLowerCase() !== 'ask_user_question') return
+    if (!isAskQuestionTool(title) || this.pendingHostQuestion) return
     const input = rawInput && typeof rawInput === 'object' ? rawInput as Record<string, unknown> : {}
     const questions = this.parseQuestions(input.questions)
     if (!questions.length) return
@@ -678,21 +724,58 @@ export class DshAcpAgentClient implements ModelClient {
     this.questionListener?.({ id: callId, questions })
   }
 
+  private clearQuestionTimer(): void {
+    if (this.questionTimer) clearTimeout(this.questionTimer)
+    this.questionTimer = undefined
+  }
+
+  /** 回答、停止或换问题时统一收尾：面板清空，等待中的 ACP 请求必须被拒绝，
+   *  否则这一轮会永远停在“等回答”。 */
+  private settleQuestions(reason: string): void {
+    this.clearQuestionTimer()
+    const host = this.pendingHostQuestion
+    this.pendingHostQuestion = null
+    this.pendingAsk = null
+    if (host) host.reject(new Error(reason))
+    this.questionListener?.(null)
+  }
+
   /** 服务级提问（例如退出计划模式）：等面板回答后把答案直接交回服务。 */
   private askHostQuestion(params: Record<string, unknown>): Promise<unknown> {
     const questions = this.parseQuestions(params.questions)
     if (!questions.length) throw new Error('提问内容为空。')
     if (!this.questionListener) throw new Error('当前没有可用的提问面板。')
-    const id = randomUUID()
+    // 工具调用先到时会挂着一张同内容的卡；复用它的 id，面板不闪第二遍。
+    const duplicate = this.pendingAsk && sameQuestions(this.pendingAsk.request.questions, questions)
+      ? this.pendingAsk : null
+    // 同一个连接里不可能同时回答两个问题；新的问题覆盖旧的，旧请求明确失败。
+    if (this.pendingHostQuestion) {
+      const stale = this.pendingHostQuestion
+      this.pendingHostQuestion = null
+      stale.reject(new Error('新的提问替换了未回答的问题。'))
+    }
+    this.clearQuestionTimer()
+    this.pendingAsk = null
+    const id = duplicate?.callId ?? randomUUID()
     return new Promise((resolve, reject) => {
       this.pendingHostQuestion = { id, questions, resolve, reject }
-      this.questionListener?.({ id, questions })
+      this.questionTimer = setTimeout(() => {
+        if (this.pendingHostQuestion?.id !== id) return
+        this.pendingHostQuestion = null
+        this.pendingAsk = null
+        this.questionTimer = undefined
+        this.questionListener?.(null)
+        reject(new Error('等待回答超时，问题已取消。'))
+      }, QUESTION_TIMEOUT_MS)
+      this.questionTimer.unref?.()
+      if (!duplicate) this.questionListener?.({ id, questions })
     })
   }
 
   async answerQuestion(id: string, answers: AskAnswers | null): Promise<boolean> {
     const host = this.pendingHostQuestion
     if (host && host.id === id) {
+      this.clearQuestionTimer()
       this.pendingHostQuestion = null
       this.questionListener?.(null)
       if (!answers) {
@@ -708,6 +791,7 @@ export class DshAcpAgentClient implements ModelClient {
     }
     const pending = this.pendingAsk
     if (!pending || pending.callId !== id) return false
+    this.clearQuestionTimer()
     this.pendingAsk = null
     this.questionListener?.(null)
     if (!this.sessionId) return false
@@ -838,6 +922,16 @@ export class DshAcpAgentClient implements ModelClient {
     void this.runtime.close().catch(() => undefined)
   }
 
+  /** 供应商地址变了：进程环境必须重建，但会话不重置——下一轮用同一个
+   *  session id 续接，切换模型不该丢上下文。 */
+  private restartForProvider(): void {
+    if (this.busy) {
+      this.pendingProviderRestart = true
+      return
+    }
+    void this.runtime.close().catch(() => undefined)
+  }
+
   setAutoCompactPercent(percent: number): void {
     if (this.autoCompactPercent === percent) return
     this.autoCompactPercent = percent
@@ -898,7 +992,14 @@ export class DshAcpAgentClient implements ModelClient {
 
   setProvider(provider?: { baseUrl: string; apiKey: string; model: string; smallModel?: string; extraEnv?: string }): void {
     if (provider?.model) this.model = normalizeDshModel(provider.model)
-    if (provider) this.bridge.setDeepSeekApiKey(resolveDeepSeekToolsKey(provider))
+    if (provider) {
+      const baseUrl = provider.baseUrl?.trim() ?? ''
+      const changed = baseUrl !== this.providerBaseUrl
+      this.providerBaseUrl = baseUrl
+      this.runtime.setDeepSeekEnvironment?.({ apiKey: provider.apiKey, baseUrl })
+      this.bridge.setDeepSeekApiKey(resolveDeepSeekToolsKey(provider))
+      if (changed) this.restartForProvider()
+    }
   }
 
   setIdentity(identity?: { userName?: string; assistantName?: string }): void {
@@ -953,10 +1054,16 @@ export class DshAcpAgentClient implements ModelClient {
   }
 
   async interrupt(): Promise<void> {
+    // 先清掉等待面板的问题：停止后它已经没有意义，不能让面板继续挂着。
+    this.settleQuestions('本轮已停止，问题已取消。')
+    for (const pending of this.pendingPermissions.values()) pending.resolve(null)
+    this.pendingPermissions.clear()
+    this.permissionListener?.(null)
     if (this.sessionId) await this.runtime.cancel(this.sessionId)
   }
 
   async dispose(): Promise<void> {
+    this.settleQuestions('运行时已关闭，问题已取消。')
     await this.runtime.close().catch(() => undefined)
     await this.bridge.close().catch(() => undefined)
   }

@@ -528,6 +528,27 @@ describe('task cancellation', () => {
     expect(interrupted).toHaveLength(1)
   })
 
+  it('restores the saved context usage so reopening a conversation is not "unknown"', () => {
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, {
+      respond: async () => ({ text: 'ok' })
+    } as ModelClient)
+    const contextUsage = {
+      status: 'available' as const,
+      usedTokens: 214_000,
+      maxTokens: 1_000_000,
+      usedPercent: 21.4,
+      remainingTokens: 786_000,
+      checkedAt: '2026-10-23T04:00:00.000Z'
+    }
+    runtime.restoreConversation({
+      id: 'usage', title: '用量会话', createdAt: '', updatedAt: '', archivedAt: null, pinnedAt: null,
+      mode: 'claude_code' as const, taskStatus: 'done' as const,
+      timeline: [], history: [], pendingMessages: [], sdkSessionId: null, contextUsage
+    })
+    expect(runtime.getSnapshot().contextUsage).toMatchObject(contextUsage)
+    expect(runtime.exportConversationState().contextUsage).toMatchObject(contextUsage)
+  })
+
   it('drops a resume id the CLI no longer knows and explains why', async () => {
     const sdk: ModelClient = {
       respond: async () => {
@@ -1012,5 +1033,39 @@ describe('subagents, interactions and goal truth in the snapshot', () => {
     finish({ text: '完成' })
     await running
     await vi.waitFor(() => expect(runtime.isRunning()).toBe(false))
+  })
+
+  it('插话不打断当前生成，投递后原任务和新指令都留在上下文里', async () => {
+    const replies: Array<(reply: ModelReply) => void> = []
+    const histories: DialogueLine[][] = []
+    let interrupts = 0
+    const model = {
+      respond: (history: DialogueLine[]) => {
+        histories.push(structuredClone(history))
+        return new Promise<ModelReply>((resolve) => replies.push(resolve))
+      },
+      steer: async () => ({ accepted: true, messageId: 'steer-1' }),
+      interrupt: async () => { interrupts += 1 },
+      setSteerEchoListener: () => undefined
+    } as ModelClient
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    const first = runtime.sendMessage('原始任务：做一个蓝色按钮')
+    await vi.waitFor(() => expect(runtime.isRunning()).toBe(true))
+
+    await expect(runtime.steerMessage('补充：按钮改成圆角')).resolves.toBe(true)
+    // 关键语义：插话不是“取消这一轮”，生成仍在继续。
+    expect(interrupts).toBe(0)
+    expect(runtime.isRunning()).toBe(true)
+    replies[0]({ text: '第一轮完成' })
+    await first
+
+    const second = runtime.sendMessage('继续')
+    await vi.waitFor(() => expect(histories.length).toBe(2))
+    const context = histories[1].map((line) => line.content).join('\n')
+    expect(context).toContain('原始任务：做一个蓝色按钮')
+    expect(context).toContain('补充：按钮改成圆角')
+    expect(context).toContain('第一轮完成')
+    replies[1]({ text: '第二轮完成' })
+    await second
   })
 })

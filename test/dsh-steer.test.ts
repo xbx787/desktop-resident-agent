@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { DshAcpAgentClient } from '../src/main/dsh-acp-agent'
+import { DshAcpRuntime } from '../src/main/dsh-acp-runtime'
 
 function createClient(steer: (sessionId: string, blocks: unknown[]) => Promise<{ queued: boolean; messageId?: string }>): DshAcpAgentClient {
   const runtime = {
@@ -59,5 +60,20 @@ describe('DSH 原生插队', () => {
     const client = createClient(async () => { called = true; return { queued: true } })
     await expect(client.steer('插一句')).resolves.toEqual({ accepted: false })
     expect(called).toBe(false)
+  })
+
+  it('ACP 客户端真的发出 session/steer，并带回 DSH 的 messageId', async () => {
+    const runtime = new DshAcpRuntime({
+      bin: 'unused',
+      home: '.cache/tests/dsh-steer-wire',
+      cwd: process.cwd()
+    })
+    const request = vi.spyOn(runtime, 'request').mockResolvedValue({ queued: true, messageId: 'message-wire' })
+    await expect(runtime.steer('session-wire', [{ type: 'text', text: '插一句' }]))
+      .resolves.toEqual({ queued: true, messageId: 'message-wire' })
+    expect(request).toHaveBeenCalledWith('session/steer', {
+      sessionId: 'session-wire',
+      prompt: [{ type: 'text', text: '插一句' }]
+    }, 30_000)
   })
 })

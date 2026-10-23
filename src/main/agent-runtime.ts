@@ -674,7 +674,9 @@ export class AgentRuntime {
     this.state.plan = null
     this.state.subagents = []
     this.state.approvedPlan = undefined
-    this.state.contextUsage = { status: 'unavailable' }
+    // 重开应用/切换会话时先显示上次真实读到的用量；下一次 usage_update
+    // 会覆盖它，不会把“未记录”一直挂在界面上。
+    this.state.contextUsage = record.contextUsage ?? { status: 'unavailable' }
     this.state.contextCompacting = false
     this.state.contextCompactingAuto = false
     this.state.taskMetrics = undefined
@@ -718,13 +720,15 @@ export class AgentRuntime {
     this.emit()
   }
 
-  exportConversationState(): Pick<ConversationRecord, 'mode' | 'timeline' | 'history' | 'sdkSessionId' | 'spentYuan' | 'goal' | 'planMode' | 'approvalMode'> {
+  exportConversationState(): Pick<ConversationRecord, 'mode' | 'timeline' | 'history' | 'sdkSessionId' | 'spentYuan' | 'contextUsage' | 'goal' | 'planMode' | 'approvalMode'> {
     return {
       mode: this.state.mode,
       timeline: structuredClone(this.state.timeline),
       history: structuredClone(this.history),
       sdkSessionId: this.sdkSessionId,
       spentYuan: this.state.conversationSpentYuan,
+      // 上下文用量随会话保存：打开已有会话时先显示上次的真实读数。
+      contextUsage: this.state.contextUsage,
       // All three survive a restart: the goal comes back as "unverified" until
       // the CLI re-confirms it; the approval mode is what the next query is
       // built with, and planMode stays for records from before it existed.

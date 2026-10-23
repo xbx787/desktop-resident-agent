@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { DshAcpAgentClient } from '../src/main/dsh-acp-agent'
 import type { AskQuestionRequest } from '../src/shared/contracts'
 
@@ -12,6 +12,7 @@ function createClient(answer: (sessionId: string, callId: string, batch: unknown
     onNotification(): () => void { return () => undefined },
     start: async () => undefined,
     close: async () => undefined,
+    cancel: async () => undefined,
     request: async () => ({}),
     answer
   }
@@ -100,6 +101,70 @@ describe('DSH 提问与作答', () => {
     await expect(client.answerQuestion(id, { q1: '批准' })).resolves.toBe(true)
     await expect(pending).resolves.toEqual({ answers: [{ id: 'q1', selected: ['批准'] }] })
     expect(planModes).toEqual([false])
+    expect(seen.at(-1)).toBeNull()
+  })
+
+  it('工具调用和服务请求是同一张卡：不重复弹出，回答仍交回服务', async () => {
+    const client = createClient(async () => true)
+    const seen: Array<AskQuestionRequest | null> = []
+    client.setQuestionListener((request) => seen.push(request))
+    const internal = client as unknown as {
+      sessionId: string
+      maybeStartQuestion: (callId: string, title: string, input: unknown) => void
+      handleServerRequest: (request: { method: string; params: Record<string, unknown> }) => Promise<unknown>
+    }
+    internal.sessionId = 'session-dup'
+    internal.maybeStartQuestion('call-dup', 'AskUserQuestion', {
+      questions: [{ id: 'q1', question: '选一个', options: [{ label: '甲' }] }]
+    })
+    const pending = internal.handleServerRequest({
+      method: 'session/question',
+      params: { sessionId: 'session-dup', questions: [{ id: 'q1', question: '选一个', options: [{ label: '甲' }] }] }
+    })
+    // 第二张同内容的卡被合并，面板只看到第一次的请求。
+    expect(seen).toHaveLength(1)
+    await expect(client.answerQuestion('call-dup', { q1: '甲' })).resolves.toBe(true)
+    await expect(pending).resolves.toEqual({ answers: [{ id: 'q1', selected: ['甲'] }] })
+  })
+
+  it('无人回答时十分钟后自动取消，面板清空且请求失败而不是永久挂着', async () => {
+    vi.useFakeTimers()
+    try {
+      const client = createClient(async () => true)
+      const seen: Array<AskQuestionRequest | null> = []
+      client.setQuestionListener((request) => seen.push(request))
+      const internal = client as unknown as {
+        handleServerRequest: (request: { method: string; params: Record<string, unknown> }) => Promise<unknown>
+      }
+      const pending = internal.handleServerRequest({
+        method: 'session/question',
+        params: { sessionId: 's', questions: [{ id: 'q1', question: '还在吗？', options: [{ label: '在' }] }] }
+      })
+      const rejected = expect(pending).rejects.toThrow('等待回答超时')
+      await vi.advanceTimersByTimeAsync(10 * 60_000)
+      await rejected
+      expect(seen.at(-1)).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('停止本轮会取消等待中的问题并解除 ACP 请求', async () => {
+    const client = createClient(async () => true)
+    const seen: Array<AskQuestionRequest | null> = []
+    client.setQuestionListener((request) => seen.push(request))
+    const internal = client as unknown as {
+      sessionId: string
+      handleServerRequest: (request: { method: string; params: Record<string, unknown> }) => Promise<unknown>
+    }
+    internal.sessionId = 'session-stop'
+    const pending = internal.handleServerRequest({
+      method: 'session/question',
+      params: { sessionId: 'session-stop', questions: [{ id: 'q1', question: '继续吗？', options: [{ label: '继续' }] }] }
+    })
+    const rejected = expect(pending).rejects.toThrow('本轮已停止')
+    await client.interrupt()
+    await rejected
     expect(seen.at(-1)).toBeNull()
   })
 })

@@ -132,4 +132,16 @@ describe('AskQuestionPanel interactions', () => {
     await act(async () => click(view.querySelector('.panel-ask-submit')!))
     expect(submitted).toEqual([{ q1: '甲' }])
   })
+
+  it('填空题没有选项时只显示自定义输入，输入后可以提交', async () => {
+    const submitted: AskAnswers[] = []
+    const view = await mount(async (answers) => { submitted.push(answers); return true }, async () => true,
+      { id: 'r3', questions: [{ key: 'q1', question: '给这个会话起个名字', options: [], multiSelect: false }] })
+    expect(view.querySelectorAll('.panel-ask-option')).toHaveLength(1)
+    expect((view.querySelector('.panel-ask-submit') as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => type(view.querySelector('.panel-ask-other') as HTMLInputElement, '开发一'))
+    expect((view.querySelector('.panel-ask-submit') as HTMLButtonElement).disabled).toBe(false)
+    await act(async () => click(view.querySelector('.panel-ask-submit')!))
+    expect(submitted).toEqual([{ q1: '开发一' }])
+  })
 })

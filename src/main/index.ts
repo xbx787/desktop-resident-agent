@@ -48,6 +48,8 @@ import { isEffortLevel } from '../shared/effort'
 import type { AgentKernelKind, AvatarSize, BubbleLayout, ClaudeWorkflowOption, ConversationSettings, PanelDirection, PanelPlacement, UiSize, UserAttachment } from '../shared/contracts'
 import { isAgentKernelKind, isApprovalMode, isAutoCompactPercent, isAvatarRenderer, PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH } from '../shared/contracts'
 import { isPersonaId } from '../shared/personas'
+import { approvalCardHeight, approvalCardHtml, approvalCardWidth, approvalPointerLeft, placeApprovalCard, type ApprovalRect } from './approval-card'
+import { probeProviderHealth } from './provider-health'
 
 const projectRoot = app.isPackaged ? path.dirname(process.execPath) : path.resolve(__dirname, '../..')
 const dataProjectRoot = findSourceProjectRoot(projectRoot) ?? projectRoot
@@ -1360,25 +1362,40 @@ interface PendingApproval {
 }
 const pendingApprovals = new Map<string, PendingApproval>()
 
+/** 打包/重启这类请示的小卡：只用来批准或拒绝。
+ *
+ *  卡片按内容取自然宽度，标题和待批准内容完整显示，按钮固定在底部；
+ *  位置锚定当前会话标签（例如“开发1”）的正下方，而不是面板窗口最下沿。
+ *  标签位置由渲染进程量出来，主进程只负责把它换算成屏幕坐标。 */
+function activeTabRect(win: BrowserWindow): Promise<ApprovalRect | null> {
+  return win.webContents.executeJavaScript(`(() => {
+    const el = document.querySelector('.panel-quick-tab.is-current');
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.x, y: r.y, width: r.width, height: r.height };
+  })()`).then((value: unknown) => {
+    if (!value || typeof value !== 'object') return null
+    const rect = value as Record<string, unknown>
+    const numbers = [rect.x, rect.y, rect.width, rect.height].map((item) => Number(item))
+    if (!numbers.every((item) => Number.isFinite(item)) || numbers[2] <= 0 || numbers[3] <= 0) return null
+    return { x: numbers[0], y: numbers[1], width: numbers[2], height: numbers[3] }
+  }).catch(() => null)
+}
+
 function requestApproval(title: string, detail?: string, timeoutMs = 5 * 60_000): Promise<boolean | null> {
-  const label = `${title} ${detail ?? ''}`.replace(/[&<>"']/gu, (character) => (
-    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character] ?? character
-  )).trim()
-  const html = `<!doctype html><html><head><meta charset="utf-8"><style>
-    html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden}
-    .card{position:absolute;left:50%;top:9px;transform:translateX(-50%);width:60px;height:34px;box-sizing:border-box;display:flex;flex-direction:row;align-items:center;justify-content:center;gap:6px;border-radius:9px;background:rgba(23,31,44,.94);border:1px solid rgba(126,160,214,.42)}
-    .pointer{position:absolute;top:-8px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:7px solid transparent;border-right:7px solid transparent;border-bottom:8px solid rgba(23,31,44,.94)}
-    a{display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;text-decoration:none;box-shadow:none}
-    .yes{background:rgba(52,168,104,.9);color:#f0fff5;border:1px solid rgba(120,235,170,.55)}
-    .no{background:rgba(196,72,84,.88);color:#fff2f3;border:1px solid rgba(255,140,150,.5)}
-    svg{display:block}
-  </style></head><body title="${label}"><div class="card"><span class="pointer"></span><a class="yes" href="https://approval.local/approve" title="批准"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></a><a class="no" href="https://approval.local/reject" title="拒绝"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"/></svg></a></div></body></html>`
+  const cardTitle = title.trim() || '需要你的批准'
+  const cardDetail = (detail ?? '').trim()
+  const cardWidth = approvalCardWidth(cardTitle, cardDetail)
+  const cardHeight = approvalCardHeight(cardTitle, cardDetail, cardWidth)
+  const html = approvalCardHtml(cardTitle, cardDetail, cardWidth)
   return new Promise((resolve) => {
-    // 批准时把余额框收起来：同一位置只留两个按钮。
+    // 批准时把余额框收起来：同一位置只留批准/拒绝。
     if (balanceOpen) setBalanceOpen(false)
     const win = new BrowserWindow({
-      width: 64,
-      height: 46,
+      // 左右各留 8px 给卡片阴影，不然阴影会被窗口边缘切掉。
+      width: cardWidth + 16,
+      // 先给足高度让正文按最终宽度排版，量完实际高度再缩到内容大小。
+      height: Math.max(cardHeight, 480),
       frame: false,
       transparent: true,
       backgroundColor: '#00000000',
@@ -1408,30 +1425,98 @@ function requestApproval(title: string, detail?: string, timeoutMs = 5 * 60_000)
     win.on('closed', () => finish(null))
     void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
     win.webContents.once('did-finish-load', () => {
-      if (win.isDestroyed()) return
-      const avatar = avatarWindow && !avatarWindow.isDestroyed() ? avatarWindow.getBounds() : null
-      const panel = panelWindow && !panelWindow.isDestroyed() && panelWindow.isVisible() ? panelWindow.getBounds() : null
-      const work = screen.getPrimaryDisplay().workArea
-      // 优先挂在聊天面板下沿、靠左：这个位置就在人物左边，三角朝上指着那段对话。
-      // 面板不在人物上方或没打开时，退回余额框的位置（同样是人物左侧）。
-      let anchorX: number
-      let anchorY: number
-      if (panel && (!avatar || panel.y + panel.height <= avatar.y + 24)) {
-        anchorX = panel.x + 14
-        anchorY = panel.y + panel.height + 2
-      } else {
-        const anchor = avatar ? balanceBoundsFor(avatar) : null
-        anchorX = anchor ? anchor.x + anchor.width - 44 : Math.round(work.x + (work.width - 64) / 2)
-        anchorY = anchor ? anchor.y + 4 : Math.round(work.y + (work.height - 46) / 2)
-      }
-      const x = Math.min(work.x + work.width - 64 - 8, Math.max(work.x + 8, anchorX))
-      const y = Math.min(work.y + work.height - 46 - 8, Math.max(work.y + 8, anchorY))
-      win.setPosition(x, y, false)
-      win.show()
-      win.moveTop()
-      win.focus()
+      void (async () => {
+        if (win.isDestroyed()) return
+        const panel = panelWindow && !panelWindow.isDestroyed() && panelWindow.isVisible() ? panelWindow.getBounds() : null
+        const avatar = avatarWindow && !avatarWindow.isDestroyed() ? avatarWindow.getBounds() : null
+        const work = screen.getDisplayMatching(panel ?? avatar ?? screen.getPrimaryDisplay().workArea).workArea
+        let anchor: ApprovalRect | null = null
+        // 优先挂当前会话标签：多标签时“开发1”的卡就落在“开发1”下面。
+        if (panel && panelWindow && !panelWindow.isDestroyed()) {
+          const tab = await activeTabRect(panelWindow)
+          if (tab) anchor = { x: panel.x + tab.x, y: panel.y + tab.y, width: tab.width, height: tab.height }
+          else anchor = { x: panel.x + 14, y: panel.y + panel.height - 6, width: 0, height: 0 }
+        }
+        if (!anchor) {
+          const balance = avatar ? balanceBoundsFor(avatar) : null
+          anchor = balance
+            ? { x: balance.x + balance.width - 44, y: balance.y, width: 0, height: 0 }
+            : { x: work.x + Math.round((work.width - cardWidth) / 2), y: work.y + 24, width: 0, height: 0 }
+        }
+        const size = { width: cardWidth + 16, height: cardHeight }
+        // 估算只用于开窗；内容渲染完后按实际高度再定一次，避免正文被窗口裁掉。
+        const measured = await win.webContents.executeJavaScript(`(() => {
+          const r = document.querySelector('.card')?.getBoundingClientRect();
+          return r ? { height: Math.ceil(r.height) } : null;
+        })()`).catch(() => null) as { height?: number } | null
+        if (measured?.height && Number.isFinite(measured.height)) {
+          size.height = Math.min(490, Math.max(96, measured.height + 18))
+        }
+        const position = placeApprovalCard(anchor, size, work)
+        const above = position.y < anchor.y
+        win.setBounds({ ...position, ...size }, false)
+        // 卡片被工作区夹住时指针仍指向标签中心；翻到标签上方时三角朝下。
+        const pointer = approvalPointerLeft(anchor, { x: position.x + 8, width: cardWidth })
+        await win.webContents.executeJavaScript(`(() => {
+          document.documentElement.style.setProperty('--pointer-left', '${pointer}px');
+          document.body.classList.toggle('is-above', ${above});
+          const card = document.querySelector('.card');
+          if (card) card.classList.toggle('is-above', ${above});
+        })()`).catch(() => undefined)
+        if (win.isDestroyed()) return
+        win.show()
+        win.moveTop()
+        win.focus()
+      })()
     })
   })
+}
+
+/** 启动/切换模型后探测一次供应商地址。ConnectionRefused 时明确告诉用户
+ *  是本地代理没起来，并给一个“切换到官方地址”的按钮；用户选“暂不”后同一
+ *  地址不再反复弹。 */
+let providerCheckInFlight: Promise<void> | undefined
+let dismissedProviderBaseUrl = ''
+function checkProviderHealth(): Promise<void> {
+  providerCheckInFlight ??= (async () => {
+    if (process.argv.includes('--self-test')) return
+    const settings = (await activeController().getLibraryState()).settings
+    const profile = settings.modelProfiles.find((item) => item.id === settings.activeModelProfileId)
+    if (!profile?.baseUrl) return
+    const health = await probeProviderHealth(profile.baseUrl)
+    if (health.ok || !health.localProxy) {
+      if (health.ok) dismissedProviderBaseUrl = ''
+      return
+    }
+    if (dismissedProviderBaseUrl === profile.baseUrl) return
+    const options = {
+      type: 'warning' as const,
+      title: '模型地址无法连接',
+      message: health.message,
+      detail: '本地代理没有运行时，DSH 请求会直接 ConnectionRefused。启动代理后重试，或现在切到 DeepSeek 官方 Anthropic 兼容地址。',
+      buttons: ['切换到官方地址', '暂不切换'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true
+    }
+    const parent = panelWindow && !panelWindow.isDestroyed() ? panelWindow : undefined
+    const result = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options)
+    if (result.response !== 0) {
+      dismissedProviderBaseUrl = profile.baseUrl
+      return
+    }
+    try {
+      await activeController().useOfficialEndpoint()
+      dismissedProviderBaseUrl = ''
+    } catch (error) {
+      dialog.showErrorBox('切换官方地址失败', error instanceof Error ? error.message : String(error))
+    }
+  })().catch((error: unknown) => {
+    console.warn('Provider health check unavailable:', error instanceof Error ? error.message : String(error))
+  }).finally(() => {
+    providerCheckInFlight = undefined
+  })
+  return providerCheckInFlight
 }
 
 function createTray(): void {
@@ -2222,10 +2307,13 @@ function registerIpc(): void {
     if (typeof id !== 'string') throw new Error('模型配置编号无效。')
     return activeController().deleteModelProfile(id)
   })
-  ipcMain.handle('pet:set-model-profile', (event, id: unknown) => {
+  ipcMain.handle('pet:set-model-profile', async (event, id: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     if (id !== null && typeof id !== 'string') throw new Error('模型配置编号无效。')
-    return activeController().setModelProfile(id)
+    const result = await activeController().setModelProfile(id)
+    // 切换后异步探测，不拖慢按钮；不可达时再弹明确提示。
+    void checkProviderHealth()
+    return result
   })
   ipcMain.handle('pet:test-model-profile', async (event, profile: unknown) => {
     if (!modelTrusted(event)) throw new Error('无效的界面请求。')
@@ -2690,6 +2778,8 @@ if (ownsSingleInstance) void app.whenReady().then(async () => {
       if (win && !win.isDestroyed()) win.webContents.send('pet:input-activity', activity)
     }
   })
+  // 启动探测放在窗口出现之后，弹提示时才有正确的父窗口；自检模式不打扰。
+  if (!process.argv.includes('--self-test')) setTimeout(() => { void checkProviderHealth() }, 3_000)
 
   // First run with no model configured: let the pet appear first, then offer
   // the DeepSeek wizard. The marker file makes "later" a decision we remember.

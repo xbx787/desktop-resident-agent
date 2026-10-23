@@ -128,6 +128,10 @@ function PlusIcon() {
   return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12" /></svg>;
 }
 
+function AttachmentIcon() {
+  return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M12.8 6.2 7.4 11.6a2.5 2.5 0 0 0 3.5 3.5l5.4-5.4a4 4 0 0 0-5.7-5.7L4.8 9.8a5.5 5.5 0 0 0 7.8 7.8l3.6-3.6" /></svg>;
+}
+
 function ReturnIcon() {
   // The enter/return arrow: the guide-a-queued-message action says it with a
   // key shape the way the keyboard actually does it.
@@ -792,6 +796,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
   /** 切换对话后的短时间窗里，程序滚动不能被 onScroll 当成“用户离开底部”。 */
   const switchJumpRef = useRef(false);
   const editorRef = useRef<HTMLTextAreaElement>(null);
+  const attachmentInputRef = useRef<HTMLInputElement>(null);
   const feedWrapRef = useRef<HTMLDivElement>(null);
   const openImageViewer = useCallback((name: string, url: string) => setImageViewer({ name, url }), []);
   openImageViewerRef.current = openImageViewer;
@@ -3064,6 +3069,16 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
               </div>
               <VoiceWaveform phase={voicePhase} />
               <div className="panel-composer-toolbar">
+                <input ref={attachmentInputRef} className="panel-attachment-input" type="file" multiple hidden
+                  onChange={(event) => {
+                    const files = Array.from(event.target.files ?? []);
+                    event.target.value = '';
+                    if (files.length) void addFiles(files);
+                  }} />
+                <button type="button" className="panel-tool-button panel-attachment-button" aria-label="添加附件"
+                  title="添加图片或文件（也可以直接拖入或粘贴）" onClick={() => attachmentInputRef.current?.click()}>
+                  <AttachmentIcon />
+                </button>
                 {compactEmpty && (library?.conversations.length ?? 0) > 1 && <button type="button" className="panel-tool-button panel-conversations-button" aria-label="会话库" title="会话库" onClick={openLibrary}><ConversationsIcon /></button>}
                 <div className="panel-model-picker-wrap" ref={modelPickerRef}>
                   <button type="button" className="panel-model-button" aria-label="模型与上下文" title="模型与上下文" aria-haspopup="dialog" aria-expanded={modelPickerOpen} onClick={() => setModelPickerOpen((open) => !open)}>

@@ -5,7 +5,7 @@ import type { DialogueLine } from './deepseek'
 import { isEffortLevel } from '../shared/effort'
 import { containsSensitiveData } from './memory-service'
 import { protectProfiles, restoreProfiles, type SecretCodec } from './secret-storage'
-import type { AgentGoal, ApprovalMode, AvatarSize, ConversationBatchAction, ConversationBatchResult, ConversationLibraryState, ConversationSummary, EffortLevel, ModelMode, ModelProfile, PanelPlacement, PanelTheme, TaskStatus, TimelineEntry, UserAttachment, ConversationSettings, UiSize } from '../shared/contracts'
+import type { AgentGoal, ApprovalMode, AvatarSize, ConversationBatchAction, ConversationBatchResult, ConversationLibraryState, ConversationSummary, ContextUsageSnapshot, EffortLevel, ModelMode, ModelProfile, PanelPlacement, PanelTheme, TaskStatus, TimelineEntry, UserAttachment, ConversationSettings, UiSize } from '../shared/contracts'
 import { AUTO_COMPACT_DEFAULT_PERCENT, PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH, isAgentKernelKind, isAutoCompactPercent, isAvatarRenderer } from '../shared/contracts'
 import { isPersonaId } from '../shared/personas'
 
@@ -56,6 +56,8 @@ export interface ConversationRecord {
   draft?: string
   /** Running cost of the conversation in yuan (see AppSnapshot.conversationSpentYuan). */
   spentYuan?: number
+  /** 上一次真实读到的上下文用量；重开应用后先显示它，等新回合再刷新。 */
+  contextUsage?: ContextUsageSnapshot
   /** When the conversation last saw real message activity. Listing order and
    *  date grouping key off this, so renaming or pinning never moves a row.
    *  Absent on older records — readers fall back to updatedAt. */
@@ -79,6 +81,7 @@ export interface ConversationPatch {
   draft?: string
   compactionSummary?: string | null
   spentYuan?: number
+  contextUsage?: ContextUsageSnapshot
   activeLibraries?: string[]
 }
 
@@ -172,6 +175,16 @@ function isGoal(value: unknown): value is AgentGoal | null {
     (value.statusMessage === undefined || typeof value.statusMessage === 'string' && value.statusMessage.length <= 500)
 }
 
+function isContextUsage(value: unknown): value is ContextUsageSnapshot {
+  if (!isObject(value) || (value.status !== 'available' && value.status !== 'unavailable')) return false
+  const numbers = ['usedTokens', 'maxTokens', 'usedPercent', 'remainingTokens', 'remainingPercent',
+    'autoCompactThresholdTokens', 'autoCompactThresholdPercent']
+  return numbers.every((key) => value[key] === undefined ||
+    typeof value[key] === 'number' && Number.isFinite(value[key])) &&
+    (value.compactionOutcome === undefined || value.compactionOutcome === 'compacted' || value.compactionOutcome === 'not_needed') &&
+    (value.checkedAt === undefined || typeof value.checkedAt === 'string')
+}
+
 type LegacyConversationRecord = Omit<ConversationRecord, 'pendingMessages' | 'pinnedAt' | 'taskStatus' | 'goal'> & {
   pendingMessages?: PendingMessage[]
   pinnedAt?: string | null
@@ -194,6 +207,7 @@ function isRecord(value: unknown): value is LegacyConversationRecord {
     (value.pendingMessages === undefined || isPendingMessages(value.pendingMessages)) &&
     (value.sdkSessionId === null || typeof value.sdkSessionId === 'string') &&
     (value.goal === undefined || isGoal(value.goal)) &&
+    (value.contextUsage === undefined || isContextUsage(value.contextUsage)) &&
     (value.compactionSummary === undefined || typeof value.compactionSummary === 'string')
 }
 
@@ -782,6 +796,9 @@ export class ConversationStore {
     if (changes.compactionSummary !== undefined && changes.compactionSummary !== null && typeof changes.compactionSummary !== 'string') {
       throw new ConversationStoreError('INVALID_INPUT', '上下文摘要格式无效。')
     }
+    if (changes.contextUsage !== undefined && !isContextUsage(changes.contextUsage)) {
+      throw new ConversationStoreError('INVALID_INPUT', '上下文用量格式无效。')
+    }
     if (changes.activeLibraries !== undefined &&
         (!Array.isArray(changes.activeLibraries) || changes.activeLibraries.length > 64 ||
           changes.activeLibraries.some((id) => typeof id !== 'string' || !/^(mcp|skill|plugin):[^\s]+$/u.test(id)))) {
@@ -805,6 +822,7 @@ export class ConversationStore {
       if (changes.compactionSummary === null) delete record.compactionSummary
       else if (changes.compactionSummary !== undefined) record.compactionSummary = changes.compactionSummary
       if (changes.spentYuan !== undefined) record.spentYuan = changes.spentYuan
+      if (changes.contextUsage !== undefined) record.contextUsage = changes.contextUsage
       if (changes.activeLibraries !== undefined) record.activeLibraries = changes.activeLibraries
       record.updatedAt = new Date().toISOString()
       return record
