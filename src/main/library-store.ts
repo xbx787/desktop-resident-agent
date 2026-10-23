@@ -40,6 +40,8 @@ export interface LibraryEnvironment {
   homeDir?: string
   /** Active workspace, scanned for a project-level .claude folder. */
   workspace?: string
+  /** DSH's own skill root, so built-in skills appear in the same library. */
+  dshSkillsDir?: string
 }
 
 export class LibraryStore {
@@ -47,6 +49,7 @@ export class LibraryStore {
   private readonly file: string
   private readonly home?: string
   private workspace?: string
+  private dshSkillsDir?: string
   private installQueue: Promise<unknown>
   private cached: LibraryItem[] | null = null
 
@@ -56,6 +59,7 @@ export class LibraryStore {
     // Discovery is opt-in: callers pass the real home, tests stay isolated.
     this.home = environment.homeDir
     this.workspace = environment.workspace
+    this.dshSkillsDir = environment.dshSkillsDir
     this.installQueue = Promise.resolve()
   }
 
@@ -177,6 +181,7 @@ export class LibraryStore {
       ...(this.home ? [{ dir: path.join(this.home, '.claude', 'skills'), source: '~/.claude/skills' }] : []),
       { dir: path.join(this.root, '..', 'claude', 'skills'), source: 'Claude 配置目录' },
       ...(this.workspace ? [{ dir: path.join(this.workspace, '.claude', 'skills'), source: '项目 .claude/skills' }] : []),
+      ...(this.dshSkillsDir ? [{ dir: this.dshSkillsDir, source: 'DSH 技能' }] : []),
       ...plugins.filter((plugin) => plugin.path).map((plugin) => ({
         dir: path.join(plugin.path!, 'skills'), source: `插件 ${plugin.name}`
       }))
@@ -356,7 +361,7 @@ export class LibraryStore {
     const items = (await this.read()).filter((item) => wanted.has(`${item.kind}:${item.id}`) && !item.disabled)
     return {
       mcp: items.filter((item) => item.kind === 'mcp' && item.launch?.type === 'mcp'),
-      plugins: items.filter((item) => item.kind !== 'mcp' && item.path && existsSync(item.path))
+      plugins: items.filter((item) => item.kind === 'plugin' && item.path && existsSync(item.path))
     }
   }
 }

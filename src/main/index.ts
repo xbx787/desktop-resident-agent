@@ -399,7 +399,7 @@ function schedulePanelSizeSave(): void {
 const apiKey = getEnabledDeepSeekKey(process.env)
 const claudeKey = process.env.DEEPSEEK_API_KEY?.trim()
 const claudeExecutable = findClaudeExecutable(process.env)
-const libraryStore = new LibraryStore(dataRoot, { homeDir: userHome, workspace: agentWorkspace })
+const libraryStore = new LibraryStore(dataRoot, { homeDir: userHome, workspace: agentWorkspace, dshSkillsDir: path.join(dataRoot, 'dsh-home', 'skills') })
 const voiceService = new VoiceService({
   dataRoot,
   codec: electronSecretCodec(),
