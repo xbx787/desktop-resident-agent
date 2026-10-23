@@ -355,6 +355,23 @@ describe('task cancellation', () => {
     expect(runtime.getSnapshot().taskStatus).toBe('done')
   })
 
+  it('drops an early streamed answer when the final reply repeats it', async () => {
+    const early = '不用。现在之所以会 close，是因为切换模式和进程环境绑在了同一刻。'
+    const final = `${early} 现在改成下一次发消息前再生效。`
+    const model: ModelClient = {
+      respond: async (_history, _signal, progress, _session, onToolEvent) => {
+        progress?.(early, 0)
+        onToolEvent?.({ toolUseId: 'edit-1', toolName: 'Edit', phase: 'start' })
+        onToolEvent?.({ toolUseId: 'edit-1', toolName: 'Edit', phase: 'result', output: 'ok' })
+        return { text: final }
+      }
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    await runtime.sendMessage('解释')
+    const assistants = runtime.getSnapshot().timeline.filter((entry) => entry.kind === 'assistant')
+    expect(assistants.map((entry) => entry.text)).toEqual([final])
+  })
+
   it('keeps one structured tool activity entry as the SDK tool completes', async () => {
     const model: ModelClient = {
       respond: async (_history, _signal, _progress, _session, onToolEvent) => {

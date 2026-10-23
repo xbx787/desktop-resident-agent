@@ -790,6 +790,27 @@ export class AgentRuntime {
     this.state.timeline.splice(timelineUserIndex, 1)
   }
 
+  /** 同一轮里模型可能先流出一段临时回答，工具结束后又把同样的话作为
+   *  最终回答再发一次。最终回答已经包含前一段时，删掉前一段，避免界面
+   *  出现两个内容相同的助手气泡。 */
+  private dropSupersededAssistant(text: string): void {
+    const finalText = text.trim()
+    if (finalText.length < 20) return
+    let userIndex = -1
+    for (let index = this.state.timeline.length - 1; index >= 0; index -= 1) {
+      if (this.state.timeline[index].kind === 'user') { userIndex = index; break }
+    }
+    for (let index = this.state.timeline.length - 1; index > userIndex; index -= 1) {
+      const entry = this.state.timeline[index]
+      if (entry.kind !== 'assistant') continue
+      const partial = entry.text.trim()
+      if (partial.length < 20) continue
+      if (finalText.includes(partial) || partial.includes(finalText)) {
+        this.state.timeline.splice(index, 1)
+      }
+    }
+  }
+
   async sendMessage(rawText: string, attachments: UserAttachment[] = [], sessionContext = '', displayText?: string, hiddenUser = false, divider = false): Promise<void> {
     const text = rawText.trim()
     if (!validAttachmentList(attachments)) {
@@ -1333,7 +1354,10 @@ export class AgentRuntime {
           progressEntry.text = reply.text
           this.markTimelineDirty(progressEntry)
           this.emit()
-        } else this.add('assistant', reply.text)
+        } else {
+          this.dropSupersededAssistant(reply.text)
+          this.add('assistant', reply.text)
+        }
       }
     }
     if (reply.note) {
