@@ -482,9 +482,19 @@ function AvatarGlyph({ kind, name, fallback, presetSrc }: { kind: 'user' | 'assi
     }).catch(() => { if (!cancelled) setUrl(null); });
     return () => { cancelled = true; };
   }, [kind, name, presetSrc]);
-  return url
-    ? <img className="panel-avatar-img" src={url} alt="" />
-    : <span className="panel-event-glyph">{fallback}</span>;
+  return (
+    <span className="panel-avatar-shell">
+      <span className="panel-event-glyph">{fallback}</span>
+      {url && (
+        <img
+          className="panel-avatar-img"
+          src={url}
+          alt=""
+          onError={() => setUrl(null)}
+        />
+      )}
+    </span>
+  );
 }
 
 /** Module scope on purpose: a work cluster re-renders only when this identity is stable.
