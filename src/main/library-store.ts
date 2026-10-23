@@ -358,7 +358,9 @@ export class LibraryStore {
   /** The launch details for the given ids, split by what the engine expects. */
   async launches(ids: readonly string[]): Promise<{ mcp: LibraryItem[]; plugins: LibraryItem[] }> {
     const wanted = new Set(ids)
-    const items = (await this.read()).filter((item) => wanted.has(`${item.kind}:${item.id}`) && !item.disabled)
+    // Include externally discovered entries: mentioning a Claude/project MCP
+    // can launch it without a separate import step.
+    const items = (await this.list()).filter((item) => wanted.has(`${item.kind}:${item.id}`) && !item.disabled)
     return {
       mcp: items.filter((item) => item.kind === 'mcp' && item.launch?.type === 'mcp'),
       plugins: items.filter((item) => item.kind === 'plugin' && item.path && existsSync(item.path))
