@@ -29,6 +29,8 @@ export interface EvolveTask {
   goalCondition?: string
   steps: EvolveStep[]
   restartCount: number
+  /** 只有计划重启才置 true；手动启动不得自动续跑。 */
+  resumePending?: boolean
   status: 'active' | 'paused' | 'done' | 'failed'
   note?: string
   createdAt: string
@@ -187,9 +189,18 @@ export class EvolveStore {
       return false
     }
     task.restartCount += 1
+    task.resumePending = true
     this.save(task)
     this.audit('restart', { task: task.id, count: task.restartCount })
     return true
+  }
+
+  /** 自动续跑已经发生，清掉这次重启的续跑许可。 */
+  markResumed(): void {
+    const task = this.load()
+    if (!task) return
+    task.resumePending = false
+    this.save(task)
   }
 
   nextPending(): EvolveStep | null {
