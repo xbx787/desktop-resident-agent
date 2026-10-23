@@ -246,7 +246,7 @@ function syncPanelBounds(): void {
 
 /** 左上角缩放手柄的独立置顶小窗：面板窗口不置顶，抓手要一直在最上面。
  *  抓手的拖动事件由这个小窗发给主进程，尺寸在这里算，面板实时跟随。 */
-const GRIP_SIZE = 44
+const GRIP_SIZE = 10
 let gripWindow: BrowserWindow | undefined
 let gripDrag: { startX: number; startY: number; width: number; height: number; targetWidth: number; targetHeight: number; right: number; bottom: number; top: number } | undefined
 
@@ -268,11 +268,9 @@ function ensureGripWindow(): BrowserWindow {
   })
   win.setAlwaysOnTop(true, 'screen-saver')
   // 只有左上角 L 形边框接收点击，内部让给面板菜单按钮。
-  // 可点击区缩成左上角 10x10 的正方形，其余透明区域全部穿透给面板。
-  win.setShape([{ x: 0, y: 0, width: 10, height: 10 }])
   const html = `<!doctype html><html><head><meta charset="utf-8"><style>
     html,body{margin:0;width:100%;height:100%;background:transparent;overflow:hidden;cursor:nwse-resize}
-    .grip{position:absolute;inset:3px;border:2px solid rgba(190,214,255,.62);border-radius:15px;clip-path:inset(0 17px 17px 0);filter:drop-shadow(0 0 3px rgba(160,205,255,.5))}
+    .grip{position:absolute;inset:0;border:2px solid rgba(190,214,255,.72);border-radius:4px;filter:drop-shadow(0 0 3px rgba(160,205,255,.55))}
     .grip:hover{border-color:rgba(225,242,255,.95);filter:drop-shadow(0 0 6px rgba(160,205,255,.9))}
   </style></head><body><div class="grip"></div><script>
     const { ipcRenderer } = require('electron')
