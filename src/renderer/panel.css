@@ -501,7 +501,8 @@ body.panel-placement-right .panel-bubble::after { display: none; }
 .panel-tool-icon { stroke: #8fb3ea; }
 /* The live row's icon carries the same warm accent as its sheen. */
 .panel-thought.is-streaming .panel-thought-icon, .panel-tool-activity.is-running .panel-tool-icon { stroke: #f0c47b; }
-.panel-thought-label { color: #cddcf8; }
+.panel-thought-label { color: #cddcf8; font-weight: 400; }
+.panel-thought-label.panel-live-label { font-weight: 700; }
 .panel-thought-time { color: #9fb7df; font-variant-numeric: tabular-nums; }
 .panel-thought-state { margin-left: auto; flex: none; color: #9bd8ad; font-size: var(--glyph-sm); line-height: 1; }
 .panel-thought-state.is-running { color: #f0c47b; opacity: calc(1 - .45 * var(--panel-pulse-p, 0)); transform: scale(calc(1 - .15 * var(--panel-pulse-p, 0))); }
@@ -617,8 +618,10 @@ body.panel-placement-right .panel-bubble::after { display: none; }
 .panel-tool-activity { min-width: 0; }
 .panel-tool-activity summary { display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 25px; list-style: none; cursor: pointer; }
 .panel-tool-activity summary::-webkit-details-marker { display: none; }
-/* 名称绝不能被长路径挤成竖排：不收缩、按内容宽。 */
-.panel-tool-activity summary code { flex: 0 0 auto; min-width: max-content; color: #cddcf8; font: var(--text-sm)/1.4 var(--font-mono); font-weight: 700; white-space: nowrap; }
+/* 名称绝不能被长路径挤成竖排：不收缩、按内容宽。只有正在运行的那一行加粗；
+   执行完的恢复常规字重，不再和当前行抢注意力。 */
+.panel-tool-activity summary code { flex: 0 0 auto; min-width: max-content; color: #cddcf8; font: var(--text-sm)/1.4 var(--font-mono); font-weight: 400; white-space: nowrap; }
+.panel-tool-activity summary code.panel-live-label { font-weight: 700; }
 /* What the call acts on, dimmed next to the name; the row expands to the result only. */
 .panel-tool-argument { flex: 1; min-width: 0; overflow: hidden; color: #8199c2; font: var(--text-sm)/1.4 var(--font-mono); text-overflow: ellipsis; white-space: nowrap; }
 /* Added and removed lines for the file-writing tools, GitHub style. */
