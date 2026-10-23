@@ -70,8 +70,9 @@ function Steps({ task }: { task: SubagentTask }) {
  * head opens a compact read-only pane: identity, running counters, the child's
  * latest steps and the two controls the SDK exposes (background, stop).
  */
-export function SubagentTray({ subagents, onBackgroundTask, onStopTask, onMessageSubagent }: {
+export function SubagentTray({ subagents, controlsEnabled = true, onBackgroundTask, onStopTask, onMessageSubagent }: {
   subagents?: SubagentTask[]
+  controlsEnabled?: boolean
   onBackgroundTask?: (task: SubagentTask) => void
   onStopTask?: (task: SubagentTask) => void
   onMessageSubagent?: (task: SubagentTask, text: string) => void
@@ -194,6 +195,7 @@ export function SubagentTray({ subagents, onBackgroundTask, onStopTask, onMessag
           <button type="button" onClick={() => onBackgroundTask(openTask)}>后台运行</button>}
         {onStopTask && <button type="button" className="is-stop" onClick={() => onStopTask(openTask)}>停止</button>}
       </div>}
+      {!controlsEnabled && openTask.status === 'running' && <p className="panel-subagent-note">DSH 不支持单独停止子代理；需要中止时请用整轮「停止」。</p>}
       {openTask.status === 'running' && openTask.toolUseId && onMessageSubagent && <form className="panel-subagent-message"
         onSubmit={(event) => { event.preventDefault(); sendMessage() }}>
         <input value={messageDraft} maxLength={4_000}

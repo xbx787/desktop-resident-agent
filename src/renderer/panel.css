@@ -744,6 +744,7 @@ body.panel-placement-right .panel-bubble::after { display: none; }
 .panel-subagent-step { display: flex; align-items: baseline; gap: 6px; min-width: 0; color: #c6d5ef; font-size: var(--text-xs); line-height: 1.5; }
 .panel-subagent-step-mark { flex: none; width: 10px; color: #84cfff; text-align: center; }
 .panel-subagent-step-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.panel-subagent-note { margin: 4px 0 0; color: #a9bee4; font-size: var(--text-xs); line-height: 1.45; }
 .panel-subagent-actions { display: flex; gap: 6px; padding-top: 1px; }
 .panel-subagent-actions button { padding: 2px 8px; border: 1px solid rgba(190, 212, 255, .26); border-radius: 6px; color: #dbe8ff; background: rgba(127, 216, 255, .1); font-size: var(--text-xs); }
 .panel-subagent-actions button:hover { background: rgba(127, 216, 255, .2); }

@@ -2860,7 +2860,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
         {(status !== 'idle' || (snapshot?.subagents?.length ?? 0) > 0) && !sideExpanded && (
           <div className="panel-status-row">
             <span className={`panel-status panel-status-${status}`} role="status"><i />{statusLive ? <span className="panel-live-label">{taskLabels[status]}</span> : taskLabels[status]}</span>
-            <SubagentTray subagents={snapshot?.subagents}
+            <SubagentTray subagents={snapshot?.subagents} controlsEnabled={snapshot?.subagentControls !== false}
               onBackgroundTask={snapshot?.subagentControls === false ? undefined : (task) => {
                 const toolUseId = task.toolUseId;
                 if (!toolUseId) return;
