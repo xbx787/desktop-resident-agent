@@ -577,6 +577,12 @@ export class AgentRuntime {
       this.addSystem(usage.compactionOutcome === 'not_needed'
         ? '当前对话较短，暂不需要压缩。'
         : '上下文已压缩，可以继续当前对话。', undefined, undefined, '上下文压缩')
+    } catch (error) {
+      if (generation === this.contextGeneration && sessionId === this.sdkSessionId) {
+        const message = error instanceof Error ? publicErrorText(error.message) : '上下文压缩失败。'
+        this.addSystem(`上下文压缩失败：${message}`, 'error', this.lastUserPrompt(), '上下文压缩')
+      }
+      throw error
     } finally {
       this.state.contextCompacting = false
       this.state.contextCompactingAuto = false
