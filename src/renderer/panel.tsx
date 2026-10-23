@@ -233,6 +233,9 @@ const EMPTY_TIMELINE: TimelineEntry[] = [];
  *  a five-thousand-node DOM on every open. */
 const EARLIER_MIN_ENTRIES = 240;
 const EARLIER_STEP_GROUPS = 6;
+/** 1.6 万条时间线不能在首帧一次性分组；先只取尾部一段，滚动到顶再扩。 */
+const INITIAL_HISTORY_ENTRIES = 600;
+const HISTORY_STEP_ENTRIES = 600;
 
 
 function timeText(iso: string): string {
@@ -2292,14 +2295,23 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
   // snapshots an unchanged timeline keeps its identity, so these memos let
   // every render that doesn't touch the timeline reuse the last result.
   const timeline = snapshot?.timeline ?? EMPTY_TIMELINE;
+  const activeSummary = library?.conversations.find((item) => item.id === (library?.activeConversationId ?? snapshot?.conversationId));
+  const historyLoading = !snapshot || (timeline.length === 0 && (activeSummary?.messageCount ?? 0) > 0);
+  const [historyEntries, setHistoryEntries] = useState(INITIAL_HISTORY_ENTRIES);
+  useEffect(() => { setHistoryEntries(INITIAL_HISTORY_ENTRIES) }, [snapshot?.conversationId]);
+  // 首帧只 group 尾部，避免 1.6 万条历史在打开会话时一次性分组。
+  const timelineForRender = useMemo(
+    () => timeline.length > historyEntries ? timeline.slice(-historyEntries) : timeline,
+    [timeline, historyEntries]
+  );
   // While a turn runs, its start marks the live window: a user line past it
   // was steered into the running turn. New records carry the flag on the entry
   // itself; this covers the steers already on disk without one.
   const liveTurnStart = active && snapshot?.taskMetrics && !snapshot.taskMetrics.finishedAt
     ? Date.parse(snapshot.taskMetrics.startedAt) : NaN;
   const liveTurnStartMs = Number.isFinite(liveTurnStart) ? liveTurnStart : undefined;
-  const timelineGroups = useMemo(() => groupTimeline(timeline, liveTurnStartMs), [timeline, liveTurnStartMs]);
-  const tasks = useMemo(() => agentTasks(timeline), [timeline]);
+  const timelineGroups = useMemo(() => groupTimeline(timelineForRender, liveTurnStartMs), [timelineForRender, liveTurnStartMs]);
+  const tasks = useMemo(() => agentTasks(timelineForRender), [timelineForRender]);
   const navMarkList = useMemo(() => navMarks(timelineGroups), [timelineGroups]);
   const [earlierGroups, setEarlierGroups] = useState(0);
   const earlierAnchorRef = useRef<{ height: number } | null>(null);
@@ -2308,13 +2320,17 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
     () => tailWindow(timelineGroups, EARLIER_MIN_ENTRIES, earlierGroups),
     [timelineGroups, earlierGroups]
   );
-  const hasEarlier = visibleGroups.length < timelineGroups.length;
+  const hasEarlier = timeline.length > timelineForRender.length || visibleGroups.length < timelineGroups.length;
   // Reaching the top of the feed pulls in the next stretch of older history,
   // keeping the reader's place by the height the new rows added above.
   function loadEarlier(): void {
     const feed = feedRef.current;
     if (!feed || !hasEarlier) return;
     earlierAnchorRef.current = { height: feed.scrollHeight };
+    if (timeline.length > timelineForRender.length) {
+      setHistoryEntries((count) => Math.min(timeline.length, count + HISTORY_STEP_ENTRIES));
+      return;
+    }
     setEarlierGroups((count) => count + EARLIER_STEP_GROUPS);
   }
   /** The rail's click: scroll to a message, widening the rendered window to
@@ -2367,7 +2383,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
     pendingJumpRef.current = null;
     followFeedRef.current = false;
     target.scrollIntoView({ block: 'start' });
-  }, [earlierGroups, visibleGroups]);
+  }, [earlierGroups, historyEntries, visibleGroups]);
 
   useLayoutEffect(() => {
     const editor = editorRef.current;
@@ -2864,6 +2880,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
             if (feed.scrollTop < 240) loadEarlier();
           }}>
             {sideExpanded && <p className="panel-side-intro">临时会话，记录不进入会话库</p>}
+            {historyLoading && <p className="panel-history-loading" role="status">正在加载历史…</p>}
             {visibleGroups.map((group, index) => {
               if (group.kind === 'single') {
                 if (group.entry.divider) {
@@ -3191,6 +3208,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
                       <div className="panel-context-stat"><span>已用</span><strong>{Math.round(contextUsage.usedPercent!)}%</strong></div>
                       {contextUsage.maxTokens !== undefined && contextUsage.usedTokens !== undefined && <div className="panel-context-tokens">{contextUsage.usedTokens.toLocaleString()} / {contextUsage.maxTokens.toLocaleString()} token</div>}
                     </> : <div className="panel-context-unknown">用量暂不可读取</div>}
+                    {contextUsage?.status === 'available' && contextUsage.stale && <div className="panel-context-stale">上次读数，等待刷新</div>}
                     <div className="panel-context-tokens panel-context-threshold" role="slider" tabIndex={0}
                       aria-label="自动压缩阈值" aria-valuemin={AUTO_COMPACT_MIN_PERCENT} aria-valuemax={AUTO_COMPACT_MAX_PERCENT}
                       aria-valuenow={library?.settings.autoCompactPercent ?? AUTO_COMPACT_DEFAULT_PERCENT}

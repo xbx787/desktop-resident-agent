@@ -91,6 +91,8 @@ describe('the auto-compaction threshold row', () => {
 
   it('shows the configured percentage, not the SDK estimate', async () => {
     const row = await openMenu()
+    expect(host.querySelector('.panel-context-meter')?.getAttribute('title')).toContain('55%')
+    expect(host.textContent).not.toContain('暂不可读取')
     expect(row.textContent).toContain('80%')
     expect(row.textContent).not.toContain('97')
     expect(row.getAttribute('aria-valuenow')).toBe('80')

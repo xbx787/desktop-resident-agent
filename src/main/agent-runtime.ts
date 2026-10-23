@@ -225,7 +225,7 @@ export class AgentRuntime {
     this.sdkSessionId = null
     this.model = mode === 'claude_code' ? this.claudeCodeModel : mode === 'live' ? this.configuredModel : undefined
     this.state.mode = mode
-    this.state.contextUsage = { status: 'unavailable' }
+    this.markContextUsageStale()
     this.state.taskMetrics = undefined
     this.state.modelReady = Boolean(this.configuredModel)
     if (silent) this.emit()
@@ -520,16 +520,44 @@ export class AgentRuntime {
     return imageInput === undefined ? {} : { imageInput }
   }
 
+  /** 会话上下文要重建时，不把上一次真实读数抹掉，只标成旧值。 */
+  private markContextUsageStale(): void {
+    const current = this.state.contextUsage
+    this.state.contextUsage = current?.status === 'available'
+      ? { ...current, stale: true }
+      : { status: 'unavailable' }
+  }
+
   async getContextUsage(): Promise<ContextUsageSnapshot> {
     const model = this.model as (ModelClient & { getContextUsage?: (sessionId?: string | null) => Promise<ContextUsageSnapshot> }) | undefined
-    if (this.state.mode !== 'claude_code' || !model?.getContextUsage) return { status: 'unavailable' }
+    const current = this.state.contextUsage
+    if (this.state.mode !== 'claude_code' || !model?.getContextUsage) {
+      return current?.status === 'available'
+        ? { ...structuredClone(current), stale: true }
+        : { status: 'unavailable' }
+    }
     const generation = this.contextGeneration
     const sessionId = this.sdkSessionId
-    const usage = await model.getContextUsage(sessionId)
-    if (generation !== this.contextGeneration || this.state.mode !== 'claude_code' || sessionId !== this.sdkSessionId) {
-      return { status: 'unavailable' }
+    let usage: ContextUsageSnapshot
+    try {
+      usage = await model.getContextUsage(sessionId)
+    } catch {
+      usage = { status: 'unavailable' }
     }
-    this.state.contextUsage = { ...usage, checkedAt: new Date().toISOString() }
+    if (generation !== this.contextGeneration || this.state.mode !== 'claude_code' || sessionId !== this.sdkSessionId) {
+      return current?.status === 'available'
+        ? { ...structuredClone(current), stale: true }
+        : { status: 'unavailable' }
+    }
+    // A cold DSH session has no live usage yet; keep the persisted reading
+    // instead of replacing it with "unknown". It is marked stale so the UI can
+    // say it is the last known value.
+    if (usage.status !== 'available' && current?.status === 'available') {
+      this.state.contextUsage = { ...current, stale: true }
+      this.emit()
+      return structuredClone(this.state.contextUsage)
+    }
+    this.state.contextUsage = { ...usage, stale: false, checkedAt: new Date().toISOString() }
     this.emit()
     return structuredClone(this.state.contextUsage)
   }
@@ -1059,7 +1087,7 @@ export class AgentRuntime {
     this.configuredModel?.setPersonaId?.(id)
     this.contextGeneration += 1
     this.sdkSessionId = null
-    this.state.contextUsage = { status: 'unavailable' }
+    this.markContextUsageStale()
     if (this.state.goal) {
       this.goalSessionInvalidated = true
       this.state.goal = { ...this.state.goal, phase: 'unverified',
@@ -1116,7 +1144,7 @@ export class AgentRuntime {
   private invalidateSdkPrompt(): void {
     this.contextGeneration += 1
     this.sdkSessionId = null
-    this.state.contextUsage = { status: 'unavailable' }
+    this.markContextUsageStale()
     this.emit()
   }
 

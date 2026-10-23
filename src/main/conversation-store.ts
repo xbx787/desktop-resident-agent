@@ -185,6 +185,7 @@ function isContextUsage(value: unknown): value is ContextUsageSnapshot {
     'autoCompactThresholdTokens', 'autoCompactThresholdPercent']
   return numbers.every((key) => value[key] === undefined ||
     typeof value[key] === 'number' && Number.isFinite(value[key])) &&
+    (value.stale === undefined || typeof value.stale === 'boolean') &&
     (value.compactionOutcome === undefined || value.compactionOutcome === 'compacted' || value.compactionOutcome === 'not_needed') &&
     (value.checkedAt === undefined || typeof value.checkedAt === 'string')
 }

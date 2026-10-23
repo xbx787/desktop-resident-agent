@@ -274,6 +274,27 @@ describe('task cancellation', () => {
     expect(runtime.getSnapshot().taskMetrics?.usedTokens).toBeUndefined()
   })
 
+  it('keeps the persisted context reading when the live query is unavailable', async () => {
+    const model = {
+      respond: async () => ({ text: '完成' }),
+      getContextUsage: async () => ({ status: 'unavailable' as const })
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    const contextUsage = {
+      status: 'available' as const, usedTokens: 558_806, maxTokens: 1_000_000,
+      usedPercent: 55.9, remainingTokens: 441_194, checkedAt: '2026-10-23T07:13:47.673Z'
+    }
+    runtime.restoreConversation({
+      id: 'large', title: '大会话', createdAt: '', updatedAt: '', archivedAt: null, pinnedAt: null,
+      mode: 'claude_code' as const, taskStatus: 'done' as const,
+      timeline: [], history: [], pendingMessages: [], sdkSessionId: 'session-large', contextUsage
+    })
+    await expect(runtime.getContextUsage()).resolves.toMatchObject({
+      status: 'available', usedTokens: 558_806, stale: true
+    })
+    expect(runtime.getSnapshot().contextUsage).toMatchObject({ status: 'available', usedTokens: 558_806, stale: true })
+  })
+
   it('sends bounded @file content to the model without persisting it and rejects escaping paths before model dispatch', async () => {
     const workspace = path.join(testRoot, 'workspace')
     await fs.mkdir(path.join(workspace, 'docs'), { recursive: true })

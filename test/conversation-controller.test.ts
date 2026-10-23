@@ -175,7 +175,9 @@ describe('conversation controller', () => {
     const cold = await store.createConversation('旧会话', 'claude_code')
     const metrics = { startedAt: '2026-10-13T02:00:00.000Z', finishedAt: '2026-10-13T02:00:02.000Z',
       usedTokens: 42, usage: { total: 42, input: 30, output: 12 }, spentYuan: 0.321 }
-    await store.updateConversation(cold.id, { taskStatus: 'done', spentYuan: 0.321,
+    const contextUsage = { status: 'available' as const, usedTokens: 558_806, maxTokens: 1_000_000,
+      usedPercent: 55.9, remainingTokens: 441_194, checkedAt: '2026-10-23T07:13:47.673Z' }
+    await store.updateConversation(cold.id, { taskStatus: 'done', spentYuan: 0.321, contextUsage,
       timeline: [{ id: 'cold-user', kind: 'user', time: metrics.startedAt, text: '旧问题', metrics }] })
     await store.createConversation('当前会话', 'claude_code')
     const controller = new ConversationController(store,
@@ -187,6 +189,8 @@ describe('conversation controller', () => {
     expect(snapshot.timeline[0].metrics).toEqual(metrics)
     expect(snapshot.conversationSpentYuan).toBe(0.321)
     expect(snapshot.taskMetrics).toBeUndefined()
+    expect(snapshot.contextUsage).toMatchObject({ status: 'available', usedTokens: 558_806 })
+    await expect(controller.getContextUsage(cold.id)).resolves.toMatchObject({ status: 'available', usedTokens: 558_806 })
   })
 
 

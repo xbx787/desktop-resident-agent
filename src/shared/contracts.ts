@@ -350,6 +350,8 @@ export interface PendingMessage {
 
 export interface ContextUsageSnapshot {
   status: 'available' | 'unavailable'
+  /** 这是上次保存的读数，运行时刷新失败时不清空，只标记为旧值。 */
+  stale?: boolean
   compactionOutcome?: 'compacted' | 'not_needed'
   usedTokens?: number
   maxTokens?: number

@@ -172,6 +172,7 @@ body.panel-placement-right .panel-bubble::after { display: none; }
 .panel-side-paused { min-width: 0; margin-left: auto; overflow: hidden; color: #eac18d; font-size: var(--text-2xs); text-overflow: ellipsis; white-space: nowrap; }
 .panel-side-meta .panel-side-paused { margin-left: 0; }
 .panel-side-intro { margin: 2px 0 12px; padding: 0 2px; color: #9db9e6; font-size: var(--text-xs); line-height: 1.45; }
+.panel-history-loading { margin: 12px 2px; color: #9db9e6; font-size: var(--text-xs); line-height: 1.45; }
 
 .panel-chat-header { position: relative; z-index: 5; display: flex; align-items: center; gap: 6px; flex: none; min-width: 0; height: 46px; padding: 4px 83px 0 10px; border-bottom: 1px solid rgba(188, 212, 255, .14); }
 .panel-library-toggle { display: grid; place-items: center; flex: none; width: 28px; height: 28px; margin-bottom: 0; padding: 0; border: 0; border-radius: 9px; color: #d3e2ff; background: rgba(178, 203, 251, .09); }
@@ -1148,6 +1149,7 @@ body.panel-placement-right .panel-bubble::after { display: none; }
 .panel-context-stat { display: flex; justify-content: space-between; padding: 2px 8px; color: #b9ceef; font-size: var(--text-sm); }
 .panel-context-stat strong { color: #edf4ff; font-variant-numeric: tabular-nums; }
 .panel-context-tokens, .panel-context-unknown { padding: 3px 8px; color: #a9bee4; font-size: var(--text-xs); }
+.panel-context-stale { padding: 3px 8px; color: #8fa6cf; font-size: var(--text-2xs); }
 .panel-context-threshold { border-radius: 6px; cursor: ns-resize; user-select: none; overscroll-behavior: contain; }
 .panel-context-threshold:hover { color: #dce9ff; background: rgba(160, 191, 251, .10); }
 .panel-context-threshold:focus-visible { outline: 1px solid rgba(180, 209, 255, .75); outline-offset: 0; }

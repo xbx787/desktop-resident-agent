@@ -425,6 +425,9 @@ export class ConversationController {
       timelineRevision: 0,
       conversationSpentYuan: typeof record?.spentYuan === 'number' && Number.isFinite(record.spentYuan) && record.spentYuan >= 0
         ? record.spentYuan : undefined,
+      // 冷会话不建 runtime 也要先显示上次保存的用量；否则大历史的会话
+      // 首帧会停在“暂不可读取”，直到运行时重新查询。
+      contextUsage: record?.contextUsage ?? { status: 'unavailable' },
       modelReady: this.readiness.modelReady,
       claudeCodeReady: this.readiness.claudeCodeReady,
       conversationId: id,
@@ -1262,9 +1265,12 @@ export class ConversationController {
 
   async getContextUsage(conversationId?: string): Promise<ContextUsageSnapshot> {
     await this.initialize()
-    const runtime = this.runtimeIfAny(conversationId ?? this.activeId)
-    if (!runtime) return { status: 'unavailable' }
-    return runtime.getContextUsage()
+    const id = conversationId ?? this.activeId
+    const runtime = this.runtimeIfAny(id)
+    if (runtime) return runtime.getContextUsage()
+    // 没有 runtime 的冷会话：直接回持久化读数，不要回“不可读取”。
+    const record = await this.store.getConversation(id ?? '')
+    return record?.contextUsage ?? { status: 'unavailable' }
   }
 
   /** 导出前先落盘一次，确保导出的就是界面当前看到的内容。 */
