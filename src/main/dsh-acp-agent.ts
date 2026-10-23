@@ -273,7 +273,7 @@ export class DshAcpAgentClient implements ModelClient {
     if (!latestUser) throw new Error('没有可发送的用户消息。')
 
     await this.bridge.start()
-    this.runtime.setPermissionMode(this.permissionForMode(this.approvalMode))
+    this.runtime.setPermissionMode(this.planMode ? 'read-only' : this.permissionForMode(this.approvalMode))
     // DSH 在 initialize 握手时就用 profile 默认模型判断图片能力；必须在进程
     // 启动前把模型钉到目录里的 id，否则会回 image:false。
     try {
@@ -539,7 +539,7 @@ export class DshAcpAgentClient implements ModelClient {
 
   /** 冷启动时如果停在计划模式，把状态补给刚建好的 DSH 会话。 */
   private syncPlanMode(sessionId: string): void {
-    if (this.approvalMode !== 'read-only') return
+    if (!this.planMode && this.approvalMode !== 'read-only') return
     void this.runtime.setPlan(sessionId, true).catch(() => undefined)
   }
 
@@ -652,9 +652,8 @@ export class DshAcpAgentClient implements ModelClient {
 
   setApprovalMode(mode: ApprovalMode): boolean {
     this.approvalMode = mode
-    // DSH reads the sandbox preset when it spawns. Do not kill a running
-    // turn; the next respond() applies it after this one settles.
-    if (!this.busy) this.runtime.setPermissionMode(this.permissionForMode(mode))
+    // 不在这里关闭进程：DSH 的沙箱预设是进程级 env，下一次 respond()
+    // 在真正发 prompt 前才需要换进程。切模式本身不应该打断/关闭当前进程。
     // 计划模式同时交给 DSH 的 planMode 服务：模型会拿到计划提示和
     // exit_plan_mode 工具，退出时的问题再经 session/question 回到面板。
     if (this.sessionId) {
@@ -665,8 +664,8 @@ export class DshAcpAgentClient implements ModelClient {
 
   setPlanMode(on: boolean): boolean {
     this.planMode = on
-    if (!this.busy) {
-      this.runtime.setPermissionMode(on ? 'read-only' : this.permissionForMode(this.approvalMode))
+    if (this.sessionId) {
+      void this.runtime.setPlan(this.sessionId, on).catch(() => undefined)
     }
     return true
   }

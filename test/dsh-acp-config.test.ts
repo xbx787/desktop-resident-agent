@@ -29,7 +29,8 @@ class FakeRuntime {
   get supportsImagePrompts(): boolean { return true }
   setRequestHandler(): void {}
   setSystemPrompt(): void {}
-  setPermissionMode(): void {}
+  permissionModes: string[] = []
+  setPermissionMode(mode: string): void { this.permissionModes.push(mode) }
   async start(): Promise<void> {}
   async newSession(): Promise<{ sessionId: string }> { return { sessionId: 'session-1' } }
   async resumeSession(sessionId: string): Promise<{ sessionId: string }> { return { sessionId } }
@@ -49,6 +50,7 @@ class FakeRuntime {
   }
 
   async prompt(): Promise<{ stopReason: string }> { return { stopReason: 'end_turn' } }
+  async setPlan(): Promise<boolean> { return true }
   async cancel(): Promise<void> {}
   async close(): Promise<void> {}
 }
@@ -128,5 +130,13 @@ describe('DSH ACP 会话模型设置', () => {
     const effort = runtime.requests.find((request) =>
       request.method === 'session/set_config_option' && request.params.configId === 'reasoning_effort')
     expect(effort?.params.value).toBe('high')
+  })
+
+  it('切换审批模式只更新状态，下一次发消息前才换权限', async () => {
+    const { client, runtime } = await create()
+    client.setApprovalMode('selfEvolve')
+    expect(runtime.permissionModes).toEqual([])
+    await client.respond([{ role: 'user', content: '你好' }], new AbortController().signal)
+    expect(runtime.permissionModes).toContain('danger-full-access')
   })
 })
