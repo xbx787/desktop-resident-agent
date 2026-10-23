@@ -14,6 +14,8 @@ import { electronSecretCodec, publicSettings, publicSnapshot, SecretProtectionUn
 import { linkClaudeUserResources } from './claude-resource-links'
 import { CLAUDE_BASE_URL, DEFAULT_CLAUDE_MODEL, findClaudeExecutable, probeAnthropicEndpoint } from './claude-code'
 import { seedClaudeMemory } from './claude-memory'
+import { loadWindowsMcpConfig } from './mcp-config'
+import { setPersonaDirectory } from './persona'
 import { BUBBLE_BOTTOM, computeStageBounds, STAGE_HEIGHT, STAGE_WIDTH, TRIANGLE_ROOM } from './stage-bounds'
 import { runSelfTest } from './self-test'
 import { startInputActivity, stopInputActivity } from './input-activity'
@@ -71,6 +73,7 @@ mkdirSync(path.join(dataRoot, 'claude'), { recursive: true })
 // A fresh install ships with an editable personal-settings file for the
 // engine; existing files are the user's and never touched (see claude-memory).
 seedClaudeMemory(path.join(dataRoot, 'claude'))
+setPersonaDirectory(path.join(dataRoot, 'persona'))
 app.setPath('userData', userDataDirectory)
 if (process.platform === 'win32') app.setAppUserModelId('local.desktop.resident.agent')
 
@@ -766,6 +769,19 @@ const createRuntime = (conversationId: string, onChange: () => void, persistSess
                   // 联网搜索关闭时桥不声明搜索/抓取工具。
                   { name: 'PET_MCP_WEB', value: bridge.webSearchEnabled ? '1' : '0' }
                 ]
+              })
+            }
+            // Reuse the user's installed Windows MCP (and its env) directly;
+            // do not keep a second copy in the app's library.
+            for (const [name, raw] of Object.entries(loadWindowsMcpConfig(path.join(userHome, '.claude.json')))) {
+              const config = raw as { type?: string; command?: string; args?: string[]; env?: Record<string, string> }
+              if (config.type !== 'stdio' || !config.command) continue
+              if (servers.some((server) => server.name === name)) continue
+              servers.push({
+                name,
+                command: config.command,
+                args: config.args ?? [],
+                env: Object.entries(config.env ?? {}).map(([key, value]) => ({ name: key, value }))
               })
             }
             for (const [name, raw] of Object.entries(dshLibraries.mcp)) {
