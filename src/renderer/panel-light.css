@@ -1213,3 +1213,7 @@ body.panel-theme-light .panel-timeline-divider span{ flex: none; padding: 0 2px;
 
 
 
+
+/* 头像槽：图片解码前先显示字形占位，避免左侧时间线出现空白。 */
+body.panel-theme-light .panel-avatar-shell{ position: relative; display: grid; place-items: center; width: 33px; height: 33px; flex: none; }
+body.panel-theme-light .panel-avatar-shell .panel-avatar-img{ position: absolute; inset: 0; }

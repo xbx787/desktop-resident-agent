@@ -26,10 +26,22 @@ if ($LASTEXITCODE -ne 0) { throw 'Active avatar assets failed quality audit.' }
 if ($LASTEXITCODE -ne 0) { throw 'Packaging failed.' }
 # electron-builder 会原样保留 pnpm junction，目标仍是开发机 reference；这里改指
 # 包内镜像，并移除被过滤器排除、没有包内镜像的可选链接。随后再跑一次 -Check 兜底。
+# worktree 里的 reference 可能是指向主仓库的 junction；修复脚本必须认识真实
+# 目标，否则会把所有包内链接误判成“逃出发布目录”。
+function Resolve-ReferenceRoot([string]$Path) {
+  $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+  $target = @($item.Target)[0]
+  if ($target) {
+    if (-not [IO.Path]::IsPathRooted($target)) { $target = Join-Path (Split-Path -LiteralPath $Path) $target }
+    return [IO.Path]::GetFullPath($target)
+  }
+  return [IO.Path]::GetFullPath($Path)
+}
 $dshRuntime = Join-Path $releaseDir 'win-unpacked\resources\dsh'
-& (Join-Path $PSScriptRoot 'fix-dsh-links.ps1') -Root $dshRuntime
+$dshReference = Resolve-ReferenceRoot (Join-Path $projectRoot 'reference\dsh-runtime')
+& (Join-Path $PSScriptRoot 'fix-dsh-links.ps1') -Root $dshRuntime -ReferenceRoot $dshReference
 if ($LASTEXITCODE -ne 0) { throw 'DSH runtime link repair failed.' }
-& (Join-Path $PSScriptRoot 'fix-dsh-links.ps1') -Root $dshRuntime -Check
+& (Join-Path $PSScriptRoot 'fix-dsh-links.ps1') -Root $dshRuntime -ReferenceRoot $dshReference -Check
 if ($LASTEXITCODE -ne 0) { throw 'DSH runtime is not self-contained after link repair.' }
 & npm run verify:asar
 if ($LASTEXITCODE -ne 0) { throw 'Packaged app verification failed.' }
