@@ -64,12 +64,13 @@ export function workflowSuggestionItems(options: readonly ClaudeWorkflowOption[]
 export function librarySuggestionItems(items: readonly LibraryItem[], query: string, limit = 6): ComposerSuggestion[] {
   const term = query.toLocaleLowerCase();
   return items
-    .filter((item) => !term || `${item.name} ${item.id} ${item.kind}`.toLocaleLowerCase().includes(term))
+    .filter((item) => !term || `${item.name} ${item.id} ${item.kind} ${item.source} ${item.description}`
+      .toLocaleLowerCase().includes(term))
     .slice(0, Math.max(0, limit))
     .map((item) => ({
       id: `library:${item.kind}:${item.id}`,
       label: libraryMentionToken(item),
-      detail: `${LIBRARY_LABELS[item.kind]}库，添加到本对话`,
+      detail: `${LIBRARY_LABELS[item.kind]}库 · ${item.source}`,
       insertText: libraryMentionToken(item),
     }));
 }

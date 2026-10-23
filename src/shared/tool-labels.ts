@@ -63,6 +63,14 @@ const TOOL_LABELS: Record<string, string> = {
   readmcpresourcedirtool: '浏览目录',
   // DSH 原生工具：不带标签就会在时间线里露出英文名。
   // Windows MCP / MCP 通用工具：调用行里显示中文动作，而不是 Screenshot 这类英文名。
+  request_approval: '请求批准',
+  conversations_list: '列出对话',
+  conversations_send_message: '发送对话消息',
+  evolve_status: '查看进化',
+  evolve_schedule: '安排进化',
+  evolve_restart: '重启应用',
+  list_mcp_resources: '资源列表',
+  read_mcp_resource: '读取资源',
   screenshot: '截屏',
   snapshot: '查看屏幕',
   click: '点击',
