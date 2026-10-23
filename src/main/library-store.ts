@@ -104,6 +104,7 @@ export class LibraryStore {
     if (!this.home) return []
     const files = [
       { file: path.join(this.home, '.claude.json'), source: '~/.claude.json' },
+      { file: path.join(this.root, '..', 'claude', '.claude.json'), source: 'Claude 配置目录' },
       ...(this.workspace ? [{ file: path.join(this.workspace, '.mcp.json'), source: '项目 .mcp.json' }] : [])
     ]
     const items: LibraryItem[] = []
