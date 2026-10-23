@@ -103,6 +103,8 @@ export interface TimelineEntry {
   /** System notices only: `error` renders as a warning, apart from the
    *  ordinary muted notice line. */
   tone?: 'error'
+  /** 失败的系统消息可带上一轮用户原文，面板据此显示“重试”。 */
+  retryText?: string
   endedAt?: string
   /** Settled usage and price of the task this user message started. Kept with
    *  the turn so past footers survive switching conversations or restarting. */

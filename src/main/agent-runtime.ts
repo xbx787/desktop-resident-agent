@@ -784,8 +784,6 @@ export class AgentRuntime {
     const timelineUser = this.state.timeline[timelineUserIndex]
     if (timelineUser.text !== prompt.trim()) return
     if (this.state.timeline.slice(timelineUserIndex + 1).some((entry) => entry.kind === 'assistant')) return
-    const failure = [...this.state.timeline].reverse().find((entry) => entry.kind === 'system' && entry.tone === 'error')
-    if (!failure?.text.includes('DSH ACP 已退出') && !failure?.text.includes('连接刚刚中断')) return
     this.history.splice(lastUserIndex, 1)
     this.state.timeline.splice(timelineUserIndex, 1)
   }
@@ -1004,7 +1002,7 @@ export class AgentRuntime {
       this.state.avatarState = 'error'
       this.closeThinkingEntries()
       this.finishRunningTools('未完成')
-      this.addSystem(error instanceof Error ? publicErrorText(error.message) : '模型请求失败。', 'error')
+      this.addSystem(error instanceof Error ? publicErrorText(error.message) : '模型请求失败。', 'error', this.lastUserPrompt())
     } finally {
       if (currentGeneration === this.generation) this.activeRequest = undefined
     }
@@ -1528,8 +1526,18 @@ export class AgentRuntime {
 
   /** A notice occupies its own row in the panel; `error` switches it to the
    *  warning treatment instead of the quiet centered line. */
-  private addSystem(text: string, tone?: TimelineEntry['tone']): TimelineEntry {
-    return this.add('system', text, undefined, undefined, tone)
+  private lastUserPrompt(): string | undefined {
+    for (let index = this.state.timeline.length - 1; index >= 0; index -= 1) {
+      const entry = this.state.timeline[index]
+      if (entry.kind === 'user' && !entry.interrupted) return entry.text
+    }
+    return undefined
+  }
+
+  private addSystem(text: string, tone?: TimelineEntry['tone'], retryText?: string): TimelineEntry {
+    const entry = this.add('system', text, undefined, undefined, tone)
+    if (retryText) entry.retryText = retryText
+    return entry
   }
 
   /** Shows a message from another local conversation/agent without starting a

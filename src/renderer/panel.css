@@ -478,6 +478,8 @@ body.panel-placement-right .panel-bubble::after { display: none; }
 .panel-event-system.is-error .panel-event-body::before, .panel-event-system.is-error .panel-event-body::after { background: linear-gradient(90deg, rgba(244, 143, 152, .46), rgba(244, 143, 152, .04)); }
 .panel-event-system.is-error .panel-event-body p { color: #ffb8bf; }
 .panel-event-system-mark { flex: none; display: grid; place-items: center; width: 14px; height: 14px; border: 1px solid rgba(244, 143, 152, .62); border-radius: 50%; color: #ffb8bf; font-size: var(--text-2xs); font-weight: 600; line-height: 1; }
+.panel-event-retry { flex: none; height: 22px; padding: 0 9px; border: 1px solid rgba(244, 143, 152, .38); border-radius: 999px; color: #ffd2d6; background: rgba(244, 143, 152, .10); font-size: var(--text-2xs); }
+.panel-event-retry:hover { background: rgba(244, 143, 152, .18); }
 /* A user message with attachments: the file list sits under its own hairline
    instead of trailing the sentence on the same line. */
 .panel-event-attachments { display: grid; gap: 7px; margin-top: 8px; }

@@ -420,6 +420,8 @@ export const TimelineItem = memo(function TimelineItem({ entry, running = false,
       <div className="panel-event-body">
         {failed && <span className="panel-event-system-mark" aria-hidden="true">!</span>}
         <p>{entry.text}</p>
+        {entry.retryText && <button type="button" className="panel-event-retry"
+          onClick={() => { void petBridge().sendMessage(entry.retryText!).catch(() => undefined) }}>重试</button>}
       </div>
     </article>;
   }

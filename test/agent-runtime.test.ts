@@ -274,6 +274,14 @@ describe('task cancellation', () => {
     expect(runtime.getSnapshot().taskMetrics?.usedTokens).toBeUndefined()
   })
 
+  it('attaches the failed prompt to the error notice for one-click retry', async () => {
+    const model = { respond: async () => { throw new Error('连接刚刚中断') } }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    await runtime.sendMessage('重试这条')
+    const error = runtime.getSnapshot().timeline.find((entry) => entry.kind === 'system' && entry.tone === 'error')
+    expect(error?.retryText).toBe('重试这条')
+  })
+
   it('replaces a failed ACP user message when the same text is sent again', async () => {
     let calls = 0
     const model = {
