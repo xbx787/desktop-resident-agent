@@ -1894,11 +1894,17 @@ async function readAvatarDataUrl(kind: 'user' | 'assistant'): Promise<string | n
 function registerIpc(): void {
   const trusted = (event: Electron.IpcMainInvokeEvent): boolean =>
     event.sender.id === avatarWindow?.webContents.id || event.sender.id === panelWindow?.webContents.id
-  const resolveAttachments = async (items: UserAttachment[]): Promise<UserAttachment[]> => Promise.all(items.map(async (item) => {
-    if (!item.path) return item
-    const file = await verifyDroppedFilePath(item.path)
-    return { ...item, path: file.path, name: file.name }
-  }))
+  const resolveAttachments = async (items: UserAttachment[]): Promise<UserAttachment[]> => {
+    const resolved = await Promise.all(items.map(async (item) => {
+      if (!item.path) return item
+      // Library mentions (mcp:/skill:/plugin:) are not files; treating them as
+      // attachments makes every send fail with “找不到引用文件”.
+      if (/^(?:mcp|skill|plugin):/iu.test(item.path)) return null
+      const file = await verifyDroppedFilePath(item.path)
+      return { ...item, path: file.path, name: file.name }
+    }))
+    return resolved.filter((item): item is UserAttachment => item !== null)
+  }
   // The settings window manages model profiles and avatars too — the data
   // lives beside its own settings — so those channels accept either window.
   // Everything else stays avatar-only on purpose.
