@@ -185,6 +185,9 @@ function Avatar() {
     snapshot?.conversationLibrary?.settings.tabOrder ?? []
   );
   const currentConversationId = snapshot?.conversationLibrary?.activeConversationId ?? snapshot?.conversationId;
+  // 弧半径跟人物大小同比缩放；对话超过 5 个时顺时针继续加槽，最多 10 个。
+  const statusRadius = STATUS_ARC_RADIUS * avatarDisplaySize(1, 1, avatarSize).width / 116.5;
+  const statusSlots = Math.max(STATUS_ARC_SLOTS, Math.min(10, statusConversations.length));
   const [unseenFinished, setUnseenFinished] = useState<ReadonlySet<string>>(() => new Set());
   const previousStatuses = useRef(new Map<string, string>());
   useEffect(() => {
@@ -618,11 +621,11 @@ function Avatar() {
           定位，点会落到头发中间，而不是窗口右上角。 */}
       {statusConversations.length > 0 && <span className="avatar-status-strip" aria-hidden="true">
         <span className="avatar-status-dots">
-          {Array.from({ length: STATUS_ARC_SLOTS }, (_, index) => {
-            // 半径固定在 50：第一个点在上方，之后沿转角弧往右下排。
+          {Array.from({ length: statusSlots }, (_, index) => {
+            // 半径随人物大小缩放：人物越大，弧线仍贴着头部。
             const angle = (STATUS_ARC_START_DEG + STATUS_ARC_ROTATION_DEG + STATUS_ARC_STEP_DEG * index) * Math.PI / 180;
-            const arcRight = STATUS_ARC_RADIUS - STATUS_ARC_RADIUS * Math.cos(angle);
-            const arcTop = STATUS_ARC_RADIUS + STATUS_ARC_RADIUS * Math.sin(angle) - STATUS_ARC_CENTER_LIFT;
+            const arcRight = statusRadius - statusRadius * Math.cos(angle);
+            const arcTop = statusRadius + statusRadius * Math.sin(angle) - STATUS_ARC_CENTER_LIFT;
             const style = {
               '--avatar-dot-right': `${arcRight.toFixed(2)}px`,
               '--avatar-dot-top': `${arcTop.toFixed(2)}px`
