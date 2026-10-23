@@ -1207,6 +1207,13 @@ function runEvolveCommand(command: string): Promise<{ ok: boolean; output: strin
 async function resumeEvolveTask(): Promise<void> {
   const task = evolveStore.load()
   if (!task || task.status !== 'active') return
+  // 手动启动不自动续跑：只有计划重启（noteRestart 置位）才继续。
+  if (!task.resumePending) {
+    evolveStore.setStatus('paused', '应用是手动启动的，目标未自动续跑。')
+    return
+  }
+  evolveStore.markResumed()
+  if (!task || task.status !== 'active') return
   const id = task.conversationId
   try {
     const record = await controller?.selectConversation(id)
