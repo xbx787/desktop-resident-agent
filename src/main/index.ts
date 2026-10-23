@@ -410,11 +410,14 @@ const voiceService = new VoiceService({
   }
 })
 
-function libraryServerName(id: string): string {
+function libraryServerName(name: string, id: string): string {
+  // Prefer the user-visible name so the same server keeps the same tool prefix
+  // in Claude and DSH (mcp__windows-mcp__Move, not mcp__lib_...__Move).
+  const slug = (name || id).toLowerCase().replace(/[^a-z0-9_-]+/gu, '_').replace(/^_+|_+$/gu, '').slice(0, 40)
+  if (slug) return slug
   let hash = 0x811c9dc5
   for (let index = 0; index < id.length; index += 1) hash = Math.imul(hash ^ id.charCodeAt(index), 0x01000193)
-  const slug = id.replace(/[^a-zA-Z0-9_-]+/gu, '_').replace(/^_+|_+$/gu, '').slice(0, 40)
-  return `lib_${slug || 'entry'}_${(hash >>> 0).toString(36)}`
+  return `lib_${(hash >>> 0).toString(36)}`
 }
 
 /** Turns `kind:id` keys into the engine's MCP map and plugin directories.
@@ -423,12 +426,16 @@ const resolveLibraries: LibraryLaunchResolver = async (keys) => {
   const { mcp, plugins } = await libraryStore.launches(keys)
   const resolved: string[] = []
   const servers: Record<string, unknown> = {}
+  const usedNames = new Set<string>()
   for (const item of mcp) {
     const launch = item.launch
     if (!launch) continue
     if (!launch.url && !launch.command) continue
     resolved.push(`mcp:${item.id}`)
-    servers[libraryServerName(item.id)] = launch.url
+    let serverName = libraryServerName(item.name, item.id)
+    if (usedNames.has(serverName)) serverName = `${serverName}_${(item.id.length + usedNames.size).toString(36)}`
+    usedNames.add(serverName)
+    servers[serverName] = launch.url
       ? { type: 'http', url: launch.url }
       : {
           type: 'stdio',
