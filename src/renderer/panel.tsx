@@ -115,6 +115,11 @@ function sideOnlySlashError(text: string): string | null {
     : `/${name} 仅适用于主线，请先收起临时会话。`;
 }
 
+const senderBadges: Record<string, string> = { 定时任务: '时', 自动恢复: '恢', 上下文压缩: '压', 重启恢复: '启' };
+function senderBadge(name: string): string {
+  return senderBadges[name] ?? name.slice(0, 1);
+}
+
 const kindLabels: Record<TimelineEntry['kind'], string> = {
   user: '你',
   assistant: '小鲸',
@@ -419,6 +424,7 @@ export const TimelineItem = memo(function TimelineItem({ entry, running = false,
     return <article className={`panel-event panel-event-system${failed ? ' is-error' : ''}`} aria-label={`${kindLabels.system}${failed ? '，错误' : ''}`}>
       <div className="panel-event-body">
         {failed && <span className="panel-event-system-mark" aria-hidden="true">!</span>}
+        {entry.tag && <span className="panel-event-tag">{entry.tag}</span>}
         <p>{entry.text}</p>
         {entry.retryText && <button type="button" className="panel-event-retry"
           onClick={() => { void petBridge().sendMessage(entry.retryText!).catch(() => undefined) }}>重试</button>}
@@ -430,10 +436,11 @@ export const TimelineItem = memo(function TimelineItem({ entry, running = false,
   // sender identity (name + first-character badge) instead of showing it as
   // ordinary prose.
   const sourceMatch = entry.kind === 'user'
-    ? /^【来自对话「([^」]{1,40})」】\r?\n?/u.exec(entry.text)
+    ? /^【(?:来自对话「([^」]{1,40})」|(定时任务|自动恢复|上下文压缩|重启恢复))】\r?\n?/u.exec(entry.text)
     : null;
+  const sourceName = sourceMatch ? (sourceMatch[1] ?? sourceMatch[2] ?? '').trim() : '';
   const sender = entry.kind === 'user'
-    ? entry.sender ?? (sourceMatch ? { name: sourceMatch[1].trim(), badge: sourceMatch[1].trim().slice(0, 1) } : undefined)
+    ? entry.sender ?? (sourceName ? { name: sourceName, badge: senderBadge(sourceName) } : undefined)
     : undefined;
   const bodyEntry = sourceMatch ? { ...entry, text: entry.text.slice(sourceMatch[0].length) } : entry;
   return (

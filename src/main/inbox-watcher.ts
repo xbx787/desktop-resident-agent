@@ -103,7 +103,8 @@ export class InboxWatcher {
           if (message.autoRun) {
             // A normal user message: it starts a turn, shows in the transcript,
             // and produces a reply. Meant for schedulers and self-evolution.
-            await this.controller.sendMessage(message.text, [], 'queue', message.conversationId)
+            // The prefix is rendered as a sender badge instead of prose.
+            await this.controller.sendMessage(`【定时任务】\n${message.text}`, [], 'queue', message.conversationId)
           } else {
             await this.controller.appendExternalMessage(message.text, from, message.conversationId)
           }

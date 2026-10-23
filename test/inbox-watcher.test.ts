@@ -72,7 +72,7 @@ describe('inbox watcher', () => {
     expect(parseInboxMessage({ from: { name: '定时任务', badge: '时' }, text: '执行', autoRun: true }))
       .toMatchObject({ autoRun: true })
     await watcher.poll()
-    expect(sendMessage).toHaveBeenCalledWith('执行今天的任务', [], 'queue', undefined)
+    expect(sendMessage).toHaveBeenCalledWith('【定时任务】\n执行今天的任务', [], 'queue', undefined)
     expect(appendExternalMessage).not.toHaveBeenCalled()
     expect(await fs.readdir(testRoot)).toEqual([])
   })

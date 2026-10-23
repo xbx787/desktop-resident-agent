@@ -574,9 +574,9 @@ export class AgentRuntime {
       const usage = await model.compact(sessionId)
       if (generation !== this.contextGeneration || sessionId !== this.sdkSessionId) return
       this.state.contextUsage = { ...usage, checkedAt: new Date().toISOString() }
-      this.add('system', usage.compactionOutcome === 'not_needed'
+      this.addSystem(usage.compactionOutcome === 'not_needed'
         ? '当前对话较短，暂不需要压缩。'
-        : '上下文已压缩，可以继续当前对话。')
+        : '上下文已压缩，可以继续当前对话。', undefined, undefined, '上下文压缩')
     } finally {
       this.state.contextCompacting = false
       this.state.contextCompactingAuto = false
@@ -861,7 +861,7 @@ export class AgentRuntime {
         for (let index = timeline.length - 1; index >= 0; index -= 1) {
           if (timeline[index].kind === 'user') return timeline[index].id
         }
-        return this.add('system', '已重启，继续执行目标').id
+        return this.addSystem('已重启，继续执行目标', undefined, undefined, '重启恢复').id
       })()
       : (() => {
         const entry = this.add('user', displayText ?? (attachments.length ? `${text || '请阅读附件并帮助我。'}\n附件：${attachments.map(({ name }) => name).join('、')}` : text), messageImages(attachments))
@@ -1343,7 +1343,7 @@ export class AgentRuntime {
       this.emit()
     }
     if (this.state.mode === 'claude_code' && reply.sdkSessionId) this.sdkSessionId = reply.sdkSessionId
-    if (reply.compacted) this.add('system', '上下文已自动压缩，可继续当前会话。')
+    if (reply.compacted) this.addSystem('上下文已自动压缩，可继续当前会话。', undefined, undefined, '上下文压缩')
     if (reply.text) {
       this.history.push({ role: 'assistant', content: reply.text })
       if (!reply.timelineHandled) {
@@ -1534,9 +1534,10 @@ export class AgentRuntime {
     return undefined
   }
 
-  private addSystem(text: string, tone?: TimelineEntry['tone'], retryText?: string): TimelineEntry {
+  private addSystem(text: string, tone?: TimelineEntry['tone'], retryText?: string, tag?: string): TimelineEntry {
     const entry = this.add('system', text, undefined, undefined, tone)
     if (retryText) entry.retryText = retryText
+    if (tag) entry.tag = tag
     return entry
   }
 

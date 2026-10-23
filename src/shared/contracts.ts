@@ -105,6 +105,8 @@ export interface TimelineEntry {
   tone?: 'error'
   /** 失败的系统消息可带上一轮用户原文，面板据此显示“重试”。 */
   retryText?: string
+  /** 系统事件的小标签，例如“上下文压缩”“重启恢复”。 */
+  tag?: string
   endedAt?: string
   /** Settled usage and price of the task this user message started. Kept with
    *  the turn so past footers survive switching conversations or restarting. */
