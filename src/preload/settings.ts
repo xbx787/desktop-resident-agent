@@ -57,6 +57,7 @@ export interface SettingsAPI {
   searchLibraryMarket(kind: LibraryKind, query: string): Promise<LibraryItem[]>
   /** Installs one market entry, then returns the refreshed libraries. */
   installLibrary(item: LibraryItem): Promise<LibrarySnapshot>
+  adoptLibrary?(id: string): Promise<LibrarySnapshot>
   removeLibrary(id: string): Promise<LibrarySnapshot>
   /** 停用/启用已安装条目；停用后不会注入会话。 */
   setLibraryEnabled?(id: string, enabled: boolean): Promise<LibrarySnapshot>
@@ -107,6 +108,7 @@ const api: SettingsAPI = {
   libraries: () => ipcRenderer.invoke('pet:libraries:list'),
   searchLibraryMarket: (kind, query) => ipcRenderer.invoke('pet:libraries:search', kind, query),
   installLibrary: (item) => ipcRenderer.invoke('pet:libraries:install', item),
+  adoptLibrary: (id) => ipcRenderer.invoke('pet:libraries:adopt', id),
   removeLibrary: (id) => ipcRenderer.invoke('pet:libraries:remove', id),
   setLibraryEnabled: (id, enabled) => ipcRenderer.invoke('pet:libraries:set-enabled', id, enabled),
   probeLibrary: (id) => ipcRenderer.invoke('pet:libraries:health', id),

@@ -1991,6 +1991,13 @@ function registerIpc(): void {
     await libraryStore.install(raw)
     return libraryStore.snapshot()
   })
+  ipcMain.handle('pet:libraries:adopt', async (event, id: unknown) => {
+    if (!settingsTrusted(event) || typeof id !== 'string') throw new Error('库条目无效。')
+    const found = (await libraryStore.list()).find((item) => item.id === id && item.external === true)
+    if (!found) throw new Error('只有环境中的条目可以导入。')
+    await libraryStore.adopt(found)
+    return libraryStore.snapshot()
+  })
   ipcMain.handle('pet:libraries:remove', async (event, id: unknown) => {
     if (!settingsTrusted(event) || typeof id !== 'string') throw new Error('库条目无效。')
     await libraryStore.remove(id)

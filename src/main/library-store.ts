@@ -336,6 +336,20 @@ export class LibraryStore {
     return job
   }
 
+  /** Copies an externally discovered entry into the library so it becomes
+   *  editable (enable/disable, probe, remove) instead of read-only. */
+  adopt(item: LibraryItem): Promise<void> {
+    const job = this.installQueue.then(async () => {
+      const items = await this.read()
+      if (items.some((entry) => entry.kind === item.kind && entry.id === item.id)) return
+      const local = { ...item }
+      delete (local as { external?: boolean }).external
+      await this.write([...items, local])
+    })
+    this.installQueue = job.catch(() => undefined)
+    return job
+  }
+
   /** The launch details for the given ids, split by what the engine expects. */
   async launches(ids: readonly string[]): Promise<{ mcp: LibraryItem[]; plugins: LibraryItem[] }> {
     const wanted = new Set(ids)

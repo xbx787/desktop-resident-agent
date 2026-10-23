@@ -266,6 +266,19 @@ export function SettingsPage() {
     }
   }
 
+  async function adoptLibraryItem(item: LibraryItem): Promise<void> {
+    if (libraryBusyId || !window.whaleSettings.adoptLibrary) return
+    setLibraryBusyId(item.id)
+    try {
+      setLibraries(await window.whaleSettings.adoptLibrary(item.id))
+      setNotice({ text: `已把 ${item.name} 导入库，可单独启停和检测。`, error: false })
+    } catch (cause) {
+      setNotice({ text: errorMessage(cause), error: true })
+    } finally {
+      setLibraryBusyId(null)
+    }
+  }
+
   async function removeLibraryItem(item: LibraryItem): Promise<void> {
     if (libraryBusyId) return
     setLibraryBusyId(item.id)
@@ -863,7 +876,10 @@ export function SettingsPage() {
                       {libraryHealth[item.id] && <small className={libraryHealth[item.id].ok ? 'settings-library-health is-ok' : 'settings-library-health is-error'} role="status">{libraryHealth[item.id].message}</small>}
                     </div>
                     {item.external
-                      ? <span className="settings-library-external">已在环境中</span>
+                      ? <div className="settings-library-actions">
+                          <span className="settings-library-external">已在环境中</span>
+                          <button type="button" disabled={libraryBusyId !== null} onClick={() => { void adoptLibraryItem(item) }}>{libraryBusyId === item.id ? '导入中…' : '导入到库'}</button>
+                        </div>
                       : <div className="settings-library-actions">
                           <button type="button" disabled={libraryBusyId !== null} onClick={() => { void toggleLibraryItem(item) }}>{item.disabled ? '启用' : '停用'}</button>
                           <button type="button" disabled={libraryHealthBusyId !== null} onClick={() => { void checkLibraryItem(item) }}>{libraryHealthBusyId === item.id ? '检测中…' : '检测'}</button>
