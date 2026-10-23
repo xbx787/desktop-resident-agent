@@ -20,6 +20,12 @@ const GOAL_START = '# >>> 小鲸：目标工具（应用写入，勿手改）'
 const GOAL_END = '# <<< 小鲸：目标工具（应用写入，勿手改）'
 const ACP_MODEL_START = '# >>> 小鲸：ACP 模型（应用写入，勿手改）'
 const ACP_MODEL_END = '# <<< 小鲸：ACP 模型（应用写入，勿手改）'
+const MODEL_CATALOG_START = '# >>> 小鲸：供应商模型目录（应用写入，勿手改）'
+const MODEL_CATALOG_END = '# <<< 小鲸：供应商模型目录（应用写入，勿手改）'
+
+function yamlQuote(value: string): string {
+  return `'${value.replace(/'/gu, "''")}'`
+}
 
 function stripBlock(text: string, start: string, end: string): string {
   const from = text.indexOf(start)
@@ -79,10 +85,12 @@ export function syncDshGoalToolPatch(home: string): void {
  *
  *  @param home 应用自己的 DSH_HOME（data/dsh-home）。
  *  @param provider DSH provider id，例如 deepseek-official。
- *  @param model DSH 模型 id；允许带 `[1m]` 等 Claude 侧别名，函数内会规范化。 */
-export function syncDshAcpModelPatch(home: string, provider: string, model: string): void {
+ *  @param model DSH 模型 id；允许带 `[1m]` 等 Claude 侧别名，函数内会规范化。
+ *  @param baseUrl 自定义供应商地址；非官方地址时把该模型写进 DSH 的模型目录，
+ *         否则 ACP 会以 unknown model option 拒绝切换。官方地址保持默认目录。 */
+export function syncDshAcpModelPatch(home: string, provider: string, model: string, baseUrl = ''): void {
   const normalized = normalizeDshModel(model)
-  if (!/^[a-z0-9._-]+$/iu.test(provider) || !/^[a-z0-9._-]+$/iu.test(normalized)) {
+  if (!/^[a-z0-9._-]+$/iu.test(provider) || !/^[a-z0-9._/-]+$/iu.test(normalized)) {
     throw new Error(`非法的 DSH 模型配置：${provider}/${model}`)
   }
   const dir = path.join(home, 'profiles', 'acp')
@@ -92,5 +100,31 @@ export function syncDshAcpModelPatch(home: string, provider: string, model: stri
   mkdirSync(dir, { recursive: true })
   rewriteFile(path.join(dir, 'cordis.patch.yml'), ACP_MODEL_START, ACP_MODEL_END,
     `- id: acp\n  config:\n    provider: ${provider}\n    model: ${normalized}`)
+
+  const trimmed = baseUrl.trim()
+  let custom = ''
+  if (trimmed) {
+    let url: URL
+    try {
+      url = new URL(trimmed)
+    } catch {
+      throw new Error(`非法的供应商地址：${baseUrl}`)
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      throw new Error(`供应商地址只支持 http/https：${baseUrl}`)
+    }
+    if (url.origin !== 'https://api.deepseek.com') {
+      custom = [
+        '- id: llm-deepseek',
+        '  config:',
+        `    baseURL: ${yamlQuote(trimmed)}`,
+        '    models:',
+        `      - id: ${yamlQuote(normalized)}`,
+        `        name: ${yamlQuote(normalized)}`,
+        '        inputModalities: [text]'
+      ].join('\n')
+    }
+  }
+  rewriteFile(path.join(dir, 'cordis.patch.yml'), MODEL_CATALOG_START, MODEL_CATALOG_END, custom)
 }
 

@@ -50,6 +50,8 @@ import { isAgentKernelKind, isApprovalMode, isAutoCompactPercent, isAvatarRender
 import { isPersonaId } from '../shared/personas'
 import { approvalCardHeight, approvalCardHtml, approvalCardWidth, approvalPointerLeft, placeApprovalCard, type ApprovalRect } from './approval-card'
 import { probeProviderHealth } from './provider-health'
+import { discoverProviderModels } from './model-discovery'
+import { probeLibrary } from './library-health'
 
 const projectRoot = app.isPackaged ? path.dirname(process.execPath) : path.resolve(__dirname, '../..')
 const dataProjectRoot = findSourceProjectRoot(projectRoot) ?? projectRoot
@@ -1937,6 +1939,17 @@ function registerIpc(): void {
     await libraryStore.remove(id)
     return libraryStore.snapshot()
   })
+  ipcMain.handle('pet:libraries:set-enabled', async (event, id: unknown, enabled: unknown) => {
+    if (!settingsTrusted(event) || typeof id !== 'string' || typeof enabled !== 'boolean') throw new Error('库条目无效。')
+    await libraryStore.setEnabled(id, enabled)
+    return libraryStore.snapshot()
+  })
+  ipcMain.handle('pet:libraries:health', async (event, id: unknown) => {
+    if (!settingsTrusted(event) || typeof id !== 'string') throw new Error('库条目无效。')
+    const item = (await libraryStore.list()).find((entry) => entry.id === id)
+    if (!item) throw new Error('找不到这个库条目。')
+    return probeLibrary(item)
+  })
   ipcMain.handle('pet:memory:list', (event) => {
     if (!settingsTrusted(event)) throw new Error('无效的界面请求。')
     return memory.list()
@@ -2151,6 +2164,37 @@ function registerIpc(): void {
     await activeController().deleteConversation(id)
     await sideChat.discardParent(id)
   })
+  ipcMain.handle('pet:export-conversation', async (event, id: unknown) => {
+    if (!trusted(event) || typeof id !== 'string') throw new Error('会话编号无效。')
+    const payload = await activeController().exportConversation(id)
+    const safe = payload.conversation.title.replace(/[\\/:*?"<>|]/gu, '-').trim().slice(0, 60) || 'conversation'
+    const options: Electron.SaveDialogOptions = {
+      title: '导出会话',
+      defaultPath: `${safe}.dsh.json`,
+      filters: [{ name: 'DSH 会话', extensions: ['json'] }]
+    }
+    const parent = panelWindow && !panelWindow.isDestroyed() ? panelWindow : undefined
+    const result = parent ? await dialog.showSaveDialog(parent, options) : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return null
+    await fsp.writeFile(result.filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8')
+    return result.filePath
+  })
+  ipcMain.handle('pet:import-conversation', async (event) => {
+    if (!trusted(event)) throw new Error('无效的界面请求。')
+    const options: Electron.OpenDialogOptions = {
+      title: '导入会话',
+      properties: ['openFile'],
+      filters: [{ name: 'DSH 会话', extensions: ['json'] }]
+    }
+    const parent = panelWindow && !panelWindow.isDestroyed() ? panelWindow : undefined
+    const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options)
+    const file = result.canceled ? undefined : result.filePaths[0]
+    if (!file) return null
+    const stat = await fsp.stat(file)
+    if (stat.size > 64 * 1024 * 1024) throw new Error('会话文件超过 64 MB，无法导入。')
+    const parsed: unknown = JSON.parse(await fsp.readFile(file, 'utf8'))
+    return activeController().importConversation(parsed)
+  })
   ipcMain.handle('pet:batch-manage-conversations', async (event, action: unknown, ids: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')
     if ((action !== 'archive' && action !== 'restore' && action !== 'delete' &&
@@ -2306,6 +2350,19 @@ function registerIpc(): void {
     if (!modelTrusted(event)) throw new Error('无效的界面请求。')
     if (typeof id !== 'string') throw new Error('模型配置编号无效。')
     return activeController().deleteModelProfile(id)
+  })
+  ipcMain.handle('pet:set-model-profile-enabled', (event, id: unknown, enabled: unknown) => {
+    if (!modelTrusted(event)) throw new Error('无效的界面请求。')
+    if (typeof id !== 'string' || typeof enabled !== 'boolean') throw new Error('模型配置格式无效。')
+    return activeController().setModelProfileEnabled(id, enabled)
+  })
+  ipcMain.handle('pet:discover-models', async (event, profile: unknown) => {
+    if (!modelTrusted(event)) throw new Error('无效的界面请求。')
+    if (!isModelProfile(profile)) throw new Error('模型配置格式无效。')
+    const saved = (await activeController().getLibraryState()).settings.modelProfiles.find((item) => item.id === profile.id)
+    const apiKey = profile.apiKey || (saved?.baseUrl === profile.baseUrl ? saved.apiKey : '')
+    if (!apiKey) throw new Error('请先输入 API Key。')
+    return discoverProviderModels({ baseUrl: profile.baseUrl, apiKey })
   })
   ipcMain.handle('pet:set-model-profile', async (event, id: unknown) => {
     if (!trusted(event)) throw new Error('无效的界面请求。')

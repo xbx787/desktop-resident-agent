@@ -180,6 +180,14 @@ function DeleteIcon() {
   return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4.5 5.5h11m-9 0 .6 11h5.8l.6-11M8 5.5V3.7h4v1.8M8.5 8.5v5m3-5v5" /></svg>;
 }
 
+function ExportIcon() {
+  return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3.5v8.2m-3-3.1 3 3.1 3-3.1M4.5 13.5v2.2h11v-2.2" /></svg>;
+}
+
+function ImportIcon() {
+  return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 11.7V3.5m-3 3.1 3-3.1 3 3.1M4.5 13.5v2.2h11v-2.2" /></svg>;
+}
+
 function PinIcon({ pinned }: { pinned: boolean }) {
   return <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M7 3.5h6l-.7 4 2.7 2.7v1.3H5v-1.3l2.7-2.7-.7-4ZM10 11.5v5" />{pinned && <path d="M4.5 15.5 15.5 4.5" />}</svg>;
 }
@@ -2739,6 +2747,8 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
             <button type="button" className="panel-library-icon panel-library-back" aria-label="返回对话" title="返回对话" onClick={() => setLibraryOpen(false)}><BackIcon /></button>
             <h2>会话</h2>
             <button type="button" className="panel-library-icon panel-library-select" aria-label={multiSelect ? '退出多选' : '多选会话'} title={multiSelect ? '退出多选' : '多选会话'} aria-pressed={multiSelect} disabled={libraryBusy} onClick={() => { if (multiSelect) { setMultiSelect(false); clearSelection(); } else { setMultiSelect(true); setDeleteId(null); setRenameId(null); } }}><SelectIcon /></button>
+            <button type="button" className="panel-library-icon panel-library-import" aria-label="导入会话" title="从文件导入会话" disabled={libraryBusy}
+              onClick={() => { void run(async (bridge) => { await bridge.importConversation?.(); }); }}><ImportIcon /></button>
             <button type="button" className="panel-library-icon panel-library-new" disabled={libraryBusy} aria-label="新建会话" title="新建会话" onClick={() => { void createConversation(); }}><PlusIcon /></button>
           </header>
           <div className="panel-library-tabs" role="tablist" aria-label="会话状态">
@@ -2767,6 +2777,8 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
                   <strong>{item.title}</strong><span>{item.preview || (item.archivedAt ? '点击恢复' : '暂无消息')}</span>
                 </button>
                 {!multiSelect && <div className="panel-session-actions">
+                  <button type="button" aria-label={`导出 ${item.title}`} title="导出会话" disabled={libraryBusy}
+                    onClick={() => { void run(async (bridge) => { await bridge.exportConversation?.(item.id); }); }}><ExportIcon /></button>
                   {!item.archivedAt && <button type="button" aria-label={item.pinnedAt ? '取消置顶' : '置顶会话'} title={item.pinnedAt ? '取消置顶' : '置顶会话'} disabled={libraryBusy} onClick={() => { void libraryAction((bridge) => bridge.setConversationPinned(item.id, !item.pinnedAt)); }}><PinIcon pinned={Boolean(item.pinnedAt)} /></button>}
                   <button type="button" aria-label={`重命名 ${item.title}`} title="重命名" onClick={() => { setRenameId(item.id); setRenameDraft(item.title); }}><EditIcon /></button>
                   <button type="button" aria-label={`${item.archivedAt ? '恢复' : '归档'} ${item.title}`} title={statusRunning(item) ? '这个会话还在运行，结束后才能归档' : item.archivedAt ? '恢复' : '归档'} disabled={libraryBusy || statusRunning(item)} onClick={() => { void libraryAction((bridge) => item.archivedAt ? bridge.restoreConversation(item.id) : bridge.archiveConversation(item.id), () => { if (!item.archivedAt) forgetParentSide(item.id); }); }}><ArchiveIcon restore={Boolean(item.archivedAt)} /></button>
@@ -3113,9 +3125,9 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
                     <div className="panel-popover-heading">模型</div>
                     <div className="panel-model-list" role="radiogroup" aria-label="选择模型配置">
                       {sideExpanded && <div className="panel-model-empty">临时会话沿用开启时的模型。回到主线可切换配置。</div>}
-                      {(library?.settings.modelProfiles ?? []).length === 0 &&
-                        <div className="panel-model-empty">还没有模型配置——<button type="button" className="panel-model-empty-link" onClick={() => { void run((bridge) => bridge.openOnboarding()); }}>打开配置向导</button></div>}
-                      {(library?.settings.modelProfiles ?? []).map((profile) => (
+                      {(library?.settings.modelProfiles ?? []).filter((profile) => profile.enabled !== false).length === 0 &&
+                        <div className="panel-model-empty">还没有可用的模型配置——<button type="button" className="panel-model-empty-link" onClick={() => { void run((bridge) => bridge.openOnboarding()); }}>打开配置向导</button></div>}
+                      {(library?.settings.modelProfiles ?? []).filter((profile) => profile.enabled !== false).map((profile) => (
                         <button key={profile.id} type="button" role="radio" aria-checked={profile.id === library?.settings.activeModelProfileId}
                           className={`panel-model-pick${profile.id === library?.settings.activeModelProfileId ? ' is-active' : ''}`}
                           disabled={sideExpanded}

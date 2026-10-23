@@ -22,6 +22,13 @@ import {
 
 export type SendStrategy = 'queue' | 'steer'
 
+export interface ConversationExport {
+  format: 'dsh-conversation'
+  version: 1
+  exportedAt: string
+  conversation: ConversationRecord
+}
+
 /** A draft longer than one message could ever be is capped instead of rejected
  *  — the panel saves on a debounce and must never fail loudly mid-typing. */
 const MAX_DRAFT_CHARS = 8_000
@@ -500,10 +507,12 @@ export class ConversationController {
   private async persistConversation(id: string, title?: string): Promise<void> {
     const pending = structuredClone(this.pending.get(id) ?? [])
     const runtime = this.runtimes.get(id)
+    const providerId = this.library?.settings.activeModelProfileId
     if (!runtime) {
       await this.store.updateConversation(id, {
         taskStatus: this.displayedRecord?.id === id ? this.displayedRecord.taskStatus : 'idle',
         pendingMessages: pending,
+        ...(providerId ? { providerId } : {}),
         ...(title ? { title } : {})
       })
       await this.refreshLibrary()
@@ -513,6 +522,7 @@ export class ConversationController {
       ...runtime.exportConversationState(),
       taskStatus: runtime.getSnapshot().taskStatus,
       pendingMessages: pending,
+      ...(providerId ? { providerId } : {}),
       ...(title ? { title } : {})
     })
     await this.refreshLibrary()
@@ -1143,11 +1153,15 @@ export class ConversationController {
         ...profile,
         apiKey: profile.apiKey || previous?.apiKey || '',
         extraEnv: profile.extraEnv === undefined ? previous?.extraEnv : profile.extraEnv,
+        enabled: profile.enabled ?? previous?.enabled ?? true,
         needsKeyReentry: false,
         apiKeyConfigured: undefined,
         extraEnvConfigured: undefined
       }
       if (!resolved.apiKey) throw new Error('请重新输入 API Key。')
+      if (resolved.enabled === false && settings.activeModelProfileId === resolved.id) {
+        throw new Error('正在使用的模型不能停用，请先切换到别的模型。')
+      }
       const modelProfiles = previous
         ? settings.modelProfiles.map((item) => item.id === resolved.id ? resolved : item)
         : [...settings.modelProfiles, resolved]
@@ -1177,9 +1191,31 @@ export class ConversationController {
   async setModelProfile(id: string | null): Promise<void> {
     await this.initialize()
     await this.serialize(async () => {
+      const settings = this.library!.settings
+      const target = id === null ? null : settings.modelProfiles.find((profile) => profile.id === id)
+      if (id !== null && !target) throw new Error('找不到这个模型配置。')
+      if (target?.enabled === false) throw new Error('这个模型配置已停用，启用后才能切换。')
       await this.store.updateSettings({ activeModelProfileId: id })
       await this.refreshLibrary()
       this.applyModelProfile(this.activeProfile())
+      this.onRuntimeConfigurationChange?.()
+    })
+  }
+
+  /** 只改启用状态，不删除配置；停用当前配置会被拒绝，避免把界面切到空模型。 */
+  async setModelProfileEnabled(id: string, enabled: boolean): Promise<void> {
+    await this.initialize()
+    await this.serialize(async () => {
+      const settings = this.library!.settings
+      const profile = settings.modelProfiles.find((item) => item.id === id)
+      if (!profile) throw new Error('找不到这个模型配置。')
+      if (!enabled && settings.activeModelProfileId === id) {
+        throw new Error('正在使用的模型不能停用，请先切换到别的模型。')
+      }
+      const modelProfiles = settings.modelProfiles.map((item) =>
+        item.id === id ? { ...item, enabled } : item)
+      await this.store.updateSettings({ modelProfiles })
+      await this.refreshLibrary()
       this.onRuntimeConfigurationChange?.()
     })
   }
@@ -1220,7 +1256,8 @@ export class ConversationController {
   private activeProfile(): ModelProfile | null {
     const settings = this.library?.settings
     if (!settings) return null
-    return settings.modelProfiles.find((item) => item.id === settings.activeModelProfileId) ?? null
+    return settings.modelProfiles.find((item) =>
+      item.id === settings.activeModelProfileId && item.enabled !== false) ?? null
   }
 
   async getContextUsage(conversationId?: string): Promise<ContextUsageSnapshot> {
@@ -1228,6 +1265,37 @@ export class ConversationController {
     const runtime = this.runtimeIfAny(conversationId ?? this.activeId)
     if (!runtime) return { status: 'unavailable' }
     return runtime.getContextUsage()
+  }
+
+  /** 导出前先落盘一次，确保导出的就是界面当前看到的内容。 */
+  async exportConversation(conversationId?: string): Promise<ConversationExport> {
+    await this.initialize()
+    const id = conversationId ?? this.activeId
+    if (!id) throw new ConversationStoreError('NOT_FOUND', '找不到这个会话。')
+    await this.persistConversation(id)
+    const conversation = await this.store.getConversation(id)
+    if (!conversation) throw new ConversationStoreError('NOT_FOUND', '找不到这个会话。')
+    return {
+      format: 'dsh-conversation',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      conversation
+    }
+  }
+
+  /** 导入后立即切到新会话；云端会话 id、目标和审批档已由存储层清掉。 */
+  async importConversation(payload: unknown): Promise<ConversationLibraryState> {
+    await this.initialize()
+    if (!payload || typeof payload !== 'object') throw new Error('导入文件格式无效。')
+    const wrapper = payload as Record<string, unknown>
+    if (wrapper.format !== 'dsh-conversation' || wrapper.version !== 1 || !wrapper.conversation) {
+      throw new Error('这不是 DeepSeek Harness Desktop 的会话导出文件。')
+    }
+    return this.serialize(async () => {
+      const record = await this.store.importConversation(wrapper.conversation as ConversationRecord)
+      await this.setDisplayed(record.id)
+      return structuredClone(this.library!)
+    })
   }
 
   async compactConversation(conversationId?: string): Promise<void> {

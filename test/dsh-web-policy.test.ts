@@ -69,6 +69,28 @@ describe('DSH ACP 模型托管块', () => {
   it('拒绝可能破坏 YAML 的非法 id', () => {
     expect(() => syncDshAcpModelPatch(root, 'deepseek-official', 'bad model: x')).toThrow('非法的 DSH 模型配置')
   })
+
+  it('自定义供应商地址会同时注入 baseURL 和该模型目录条目', async () => {
+    const profile = path.join(root, 'profiles', 'acp')
+    await fs.mkdir(profile, { recursive: true })
+    await fs.writeFile(path.join(profile, 'package.json'), '{}\n', 'utf8')
+    await fs.writeFile(path.join(profile, 'cordis.patch.yml'), '[]\n', 'utf8')
+
+    syncDshAcpModelPatch(root, 'deepseek-official', 'Kimi-K3', 'https://api.moonshot.cn/anthropic')
+    const text = await fs.readFile(path.join(profile, 'cordis.patch.yml'), 'utf8')
+    expect(text).toContain('- id: llm-deepseek')
+    expect(text).toContain("baseURL: 'https://api.moonshot.cn/anthropic'")
+    expect(text).toContain("- id: 'Kimi-K3'")
+    expect(text).toContain("- id: acp")
+    expect(text).toContain('model: Kimi-K3')
+
+    // 切回官方地址时移除自定义目录，恢复 DSH 自带目录。
+    syncDshAcpModelPatch(root, 'deepseek-official', 'deepseek-flash', 'https://api.deepseek.com/anthropic')
+    const official = await fs.readFile(path.join(profile, 'cordis.patch.yml'), 'utf8')
+    expect(official).not.toContain('llm-deepseek')
+    expect(official).not.toContain('baseURL')
+    expect(official).toContain('model: deepseek-flash')
+  })
 })
 
 describe('DSH 联网搜索开关', () => {

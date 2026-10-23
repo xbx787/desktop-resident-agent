@@ -138,4 +138,17 @@ describe('conversation library layout', () => {
     await act(async () => click(host.querySelector('.panel-library-toggle')!))
     expect(expanded()).toBe('false')
   })
+
+  it('exports a conversation row and imports from the library header', async () => {
+    const exportConversation = vi.fn(async () => null)
+    const importConversation = vi.fn(async () => snapshot().conversationLibrary!)
+    ;(bridge as unknown as Record<string, unknown>).exportConversation = exportConversation
+    ;(bridge as unknown as Record<string, unknown>).importConversation = importConversation
+    await renderAtWidth(554)
+    const row = [...host.querySelectorAll('.panel-session')].find((item) => item.textContent?.includes('会话 a'))!
+    await act(async () => click(row.querySelector('[aria-label^="导出"]')!))
+    expect(exportConversation).toHaveBeenCalledWith('a')
+    await act(async () => click(host.querySelector('.panel-library-import')!))
+    expect(importConversation).toHaveBeenCalledTimes(1)
+  })
 })

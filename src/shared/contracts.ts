@@ -298,6 +298,8 @@ export interface ModelProfile {
   smallModel?: string
   /** Extra KEY=VALUE lines merged into the CLI environment (advanced). */
   extraEnv?: string
+  /** 停用的配置仍保留在列表里，但不会被选中或出现在模型切换菜单。 */
+  enabled?: boolean
 }
 
 export interface ConversationSummary {
@@ -737,6 +739,10 @@ export interface PetAPI {
   setModelProfile(id: string | null): Promise<void>
   /** Sends one tiny request to the endpoint and reports what came back. */
   testModelProfile(profile: ModelProfile): Promise<{ ok: boolean; message: string }>
+  /** 导出会话到用户选择的文件；取消时返回 null。 */
+  exportConversation?(conversationId: string): Promise<string | null>
+  /** 从文件导入会话并切过去。 */
+  importConversation?(): Promise<ConversationLibraryState>
   setEnableAutoTitleGeneration(on: boolean): Promise<void>
   setShowMessageTimestamps(on: boolean): Promise<void>
   setUserNames(userName: string, assistantName: string): Promise<void>

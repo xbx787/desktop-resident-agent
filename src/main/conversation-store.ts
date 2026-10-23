@@ -43,6 +43,8 @@ export interface ConversationRecord {
   history: DialogueLine[]
   pendingMessages: PendingMessage[]
   sdkSessionId: string | null
+  /** 创建/最近一次持久化时使用的模型配置 id；用于导出元数据和跨设备辨认。 */
+  providerId?: string
   goal?: AgentGoal | null
   /** Plan mode as last known. The CLI re-reports the real state on its next
    *  init, so this only has to survive the restart in between. */
@@ -75,6 +77,7 @@ export interface ConversationPatch {
   history?: DialogueLine[]
   pendingMessages?: PendingMessage[]
   sdkSessionId?: string | null
+  providerId?: string
   goal?: AgentGoal | null
   planMode?: boolean
   approvalMode?: ApprovalMode
@@ -206,6 +209,7 @@ function isRecord(value: unknown): value is LegacyConversationRecord {
     isHistory(value.history) &&
     (value.pendingMessages === undefined || isPendingMessages(value.pendingMessages)) &&
     (value.sdkSessionId === null || typeof value.sdkSessionId === 'string') &&
+    (value.providerId === undefined || typeof value.providerId === 'string') &&
     (value.goal === undefined || isGoal(value.goal)) &&
     (value.contextUsage === undefined || isContextUsage(value.contextUsage)) &&
     (value.compactionSummary === undefined || typeof value.compactionSummary === 'string')
@@ -231,7 +235,8 @@ export function isModelProfile(value: unknown): value is ModelProfile {
     typeof value.baseUrl === 'string' && /^https?:\/\//i.test(value.baseUrl) &&
     typeof value.apiKey === 'string' && typeof value.model === 'string' && value.model.trim() !== '' &&
     (value.smallModel === undefined || typeof value.smallModel === 'string') &&
-    (value.extraEnv === undefined || typeof value.extraEnv === 'string')
+    (value.extraEnv === undefined || typeof value.extraEnv === 'string') &&
+    (value.enabled === undefined || typeof value.enabled === 'boolean')
 }
 
 /** The settings that arrived after version 2 shipped: read leniently so an
@@ -754,6 +759,35 @@ export class ConversationStore {
     return this.mutate((draft) => addConversation(draft, clean, mode))
   }
 
+  /** 从另一个设备/备份导入一条完整会话：保留消息与用量，但清掉云端会话
+   *  绑定、目标循环和危险审批档，避免导入后自动续跑旧目标。 */
+  async importConversation(source: ConversationRecord): Promise<ConversationRecord> {
+    if (!isRecord(source)) throw new ConversationStoreError('INVALID_INPUT', '导入的会话格式无效。')
+    return this.mutate((draft) => {
+      const now = new Date().toISOString()
+      const record: ConversationRecord = {
+        ...structuredClone(source),
+        id: randomUUID(),
+        title: cleanTitle(source.title),
+        archivedAt: null,
+        pinnedAt: null,
+        taskStatus: 'idle',
+        pendingMessages: [],
+        sdkSessionId: null,
+        goal: null,
+        planMode: false,
+        approvalMode: 'workspace-write',
+        draft: undefined,
+        updatedAt: now,
+        lastActivityAt: now
+      }
+      draft.conversations.push(record)
+      draft.settings.tabOrder.unshift(record.id)
+      draft.activeConversationId = record.id
+      return record
+    })
+  }
+
   /** Copy only a settled, final reply. The expected entry ID is checked in
    *  the same write transaction as the new record, so a stale UI cannot fork
    *  a different turn. Model history stays in the main process. */
@@ -790,6 +824,9 @@ export class ConversationStore {
     if (changes.sdkSessionId !== undefined && changes.sdkSessionId !== null && typeof changes.sdkSessionId !== 'string') {
       throw new ConversationStoreError('INVALID_INPUT', 'SDK 会话 ID 格式无效。')
     }
+    if (changes.providerId !== undefined && (typeof changes.providerId !== 'string' || !changes.providerId.trim())) {
+      throw new ConversationStoreError('INVALID_INPUT', '模型配置 ID 格式无效。')
+    }
     if (changes.goal !== undefined && !isGoal(changes.goal)) {
       throw new ConversationStoreError('INVALID_INPUT', '目标状态格式无效。')
     }
@@ -815,6 +852,7 @@ export class ConversationStore {
       if (changes.timeline !== undefined || changes.history !== undefined) record.lastActivityAt = new Date().toISOString()
       if (changes.pendingMessages !== undefined) record.pendingMessages = changes.pendingMessages
       if (changes.sdkSessionId !== undefined) record.sdkSessionId = changes.sdkSessionId
+      if (changes.providerId !== undefined) record.providerId = changes.providerId
       if (changes.goal !== undefined) record.goal = changes.goal
       if (changes.planMode !== undefined) record.planMode = changes.planMode
       if (changes.approvalMode !== undefined) record.approvalMode = changes.approvalMode

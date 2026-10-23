@@ -22,10 +22,10 @@ const MODEL_ALIASES: Record<string, string> = {
 export function normalizeDshModel(model: string | undefined | null): string {
   const raw = (model ?? '').trim()
   if (!raw) return DEFAULT_DSH_MODEL
-  const lower = raw.toLowerCase()
-  const alias = MODEL_ALIASES[lower]
+  const alias = MODEL_ALIASES[raw.toLowerCase()]
   if (alias) return alias
-  // 只去掉 Claude Code 侧的 1M 后缀，不改动其它未知 id。
-  const withoutSuffix = lower.replace(/\[1m\]$/u, '')
+  // 只去掉 Claude Code 侧的 1M 后缀，不改动其它未知 id 的大小写：
+  // 自定义供应商的模型 id 可能区分大小写。
+  const withoutSuffix = raw.replace(/\[1m\]$/iu, '')
   return withoutSuffix || DEFAULT_DSH_MODEL
 }

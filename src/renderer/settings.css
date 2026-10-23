@@ -110,6 +110,15 @@ button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55
 .settings-model-test { padding: 8px 10px; border-radius: 8px; font-size: var(--text-sm); line-height: 1.45; overflow-wrap: anywhere; }
 .settings-model-test.is-ok { color: #a8e8bc; background: rgba(128, 214, 161, .12); }
 .settings-model-test.is-error { color: #f6aeb5; background: rgba(244, 135, 144, .12); }
+.settings-model-disabled { margin-left: 7px; padding: 1px 7px; border-radius: 999px; color: #9fb0cc; background: rgba(160, 180, 210, .12); font-size: var(--text-xs); font-weight: 400; }
+.settings-model-discover-row { display: flex; gap: 7px; }
+.settings-model-discover-row button { height: 32px; padding: 0 12px; flex: none; border: 1px solid rgba(190, 213, 253, .28); border-radius: 8px; color: #dbe8ff; background: rgba(160, 191, 251, .1); font-size: var(--text-sm) !important; }
+.settings-model-discover-row button:hover:not(:disabled) { background: rgba(160, 191, 251, .22); }
+.settings-model-discover-row input { flex: 1; min-width: 0; height: 32px; padding: 0 10px; border: 1px solid rgba(190, 213, 253, .35); border-radius: 8px; color: #eef4ff; background: rgba(10, 24, 58, .45); outline: none; font-family: inherit; font-size: var(--text-sm); }
+.settings-model-discovered { display: flex; flex-wrap: wrap; gap: 5px; max-height: 108px; overflow-y: auto; }
+.settings-model-discovered button { padding: 3px 8px; border: 1px solid rgba(190, 213, 253, .24); border-radius: 7px; color: #cfe0ff; background: transparent; font-family: var(--font-mono); font-size: var(--text-xs) !important; }
+.settings-model-discovered button.is-active { border-color: rgba(240, 196, 123, .7); color: #f7d9ab; background: rgba(240, 196, 123, .12); }
+.settings-model-discover-message { color: #a9bee4; font-size: var(--text-sm); overflow-wrap: anywhere; }
 .settings-model-form-actions { display: flex; justify-content: flex-end; gap: 7px; }
 .settings-model-form-actions button { height: 32px; padding: 0 12px; border: 1px solid rgba(190, 213, 253, .28); border-radius: 8px; color: #dbe8ff; background: rgba(160, 191, 251, .1); font-size: var(--text-sm) !important; }
 .settings-model-form-actions button:hover:not(:disabled) { background: rgba(160, 191, 251, .22); }
@@ -204,6 +213,11 @@ button:disabled, input:disabled, select:disabled { cursor: default; opacity: .55
 .settings-library-version { padding: 1px 5px; border-radius: 5px; color: #9fb8e1; background: rgba(160, 191, 251, .1); font-size: var(--text-2xs); font-weight: 400; }
 .settings-library-item > button { flex: none; height: 28px; padding: 0 10px; border: 1px solid rgba(190, 213, 253, .28); border-radius: 8px; color: #dbe8ff; background: rgba(160, 191, 251, .1); font-size: var(--text-sm); font-weight: 400; }
 .settings-library-item > button:hover:not(:disabled) { background: rgba(160, 191, 251, .22); }
+.settings-library-actions { display: flex; flex: none; flex-direction: column; gap: 6px; }
+.settings-library-actions button { height: 28px; padding: 0 10px; border: 1px solid rgba(190, 213, 253, .28); border-radius: 8px; color: #dbe8ff; background: rgba(160, 191, 251, .1); font-size: var(--text-sm); font-weight: 400; }
+.settings-library-actions button:hover:not(:disabled) { background: rgba(160, 191, 251, .22); }
+.settings-library-health.is-ok { color: #9bd8ad; }
+.settings-library-health.is-error { color: #f6aeb5; }
 .settings-library-market { display: flex; flex-direction: column; gap: 10px; padding-top: 13px; border-top: 1px solid rgba(194, 215, 255, .16); }
 .settings-library-market-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .settings-library-market-head form { display: flex; gap: 6px; flex: 1; justify-content: flex-end; }

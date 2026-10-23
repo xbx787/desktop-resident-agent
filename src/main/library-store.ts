@@ -216,6 +216,18 @@ export class LibraryStore {
     this.workspace = workspace
   }
 
+  /** 只切换启用状态；外部发现的只读条目不允许改。 */
+  async setEnabled(id: string, enabled: boolean): Promise<LibraryItem> {
+    const items = await this.read()
+    const index = items.findIndex((item) => item.id === id)
+    if (index < 0) throw new Error('找不到这个库条目。')
+    if (items[index].external) throw new Error('外部发现的条目由 Claude 配置管理，不能在这里停用。')
+    const updated: LibraryItem = { ...items[index], disabled: !enabled }
+    const next = items.map((item, itemIndex) => itemIndex === index ? updated : item)
+    await this.write(next)
+    return updated
+  }
+
   /** Installs one market entry. MCP entries are configuration only; skills
    *  and plugins are fetched from their source repository into the library. */
   install(entry: LibraryItem): Promise<LibraryItem> {
@@ -326,7 +338,7 @@ export class LibraryStore {
   /** The launch details for the given ids, split by what the engine expects. */
   async launches(ids: readonly string[]): Promise<{ mcp: LibraryItem[]; plugins: LibraryItem[] }> {
     const wanted = new Set(ids)
-    const items = (await this.read()).filter((item) => wanted.has(`${item.kind}:${item.id}`))
+    const items = (await this.read()).filter((item) => wanted.has(`${item.kind}:${item.id}`) && !item.disabled)
     return {
       mcp: items.filter((item) => item.kind === 'mcp' && item.launch?.type === 'mcp'),
       plugins: items.filter((item) => item.kind !== 'mcp' && item.path && existsSync(item.path))

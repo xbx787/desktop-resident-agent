@@ -35,6 +35,9 @@ interface ModelFormState {
   extraEnv: string
   removeExtraEnv: boolean
   advanced: boolean
+  /** 端点返回的模型 id；搜索框过滤它，点一下就填进模型 ID。 */
+  discovered: string[]
+  modelSearch: string
 }
 
 const BASE_SETTINGS_TABS = [
@@ -95,6 +98,8 @@ export function SettingsPage() {
   const [modelForm, setModelForm] = useState<ModelFormState | null>(null)
   const [modelTest, setModelTest] = useState<{ ok: boolean; message: string } | null>(null)
   const [modelTesting, setModelTesting] = useState(false)
+  const [modelDiscovering, setModelDiscovering] = useState(false)
+  const [modelDiscoverMessage, setModelDiscoverMessage] = useState('')
   const [profileDeleteId, setProfileDeleteId] = useState<string | null>(null)
   const [memoryItems, setMemoryItems] = useState<MemoryItem[]>([])
   const [memoryLoading, setMemoryLoading] = useState(false)
@@ -122,6 +127,8 @@ export function SettingsPage() {
   const [marketError, setMarketError] = useState('')
   const [marketLoadedFor, setMarketLoadedFor] = useState<LibraryKind | null>(null)
   const [libraryBusyId, setLibraryBusyId] = useState<string | null>(null)
+  const [libraryHealthBusyId, setLibraryHealthBusyId] = useState<string | null>(null)
+  const [libraryHealth, setLibraryHealth] = useState<Record<string, { ok: boolean; message: string }>>({})
 
   useEffect(() => {
     let active = true
@@ -259,6 +266,32 @@ export function SettingsPage() {
       setNotice({ text: errorMessage(cause), error: true })
     } finally {
       setLibraryBusyId(null)
+    }
+  }
+
+  async function toggleLibraryItem(item: LibraryItem): Promise<void> {
+    if (libraryBusyId || !window.whaleSettings.setLibraryEnabled) return
+    setLibraryBusyId(item.id)
+    try {
+      setLibraries(await window.whaleSettings.setLibraryEnabled(item.id, item.disabled === true))
+      setNotice({ text: item.disabled ? `已启用 ${item.name}。` : `已停用 ${item.name}。`, error: false })
+    } catch (cause) {
+      setNotice({ text: errorMessage(cause), error: true })
+    } finally {
+      setLibraryBusyId(null)
+    }
+  }
+
+  async function checkLibraryItem(item: LibraryItem): Promise<void> {
+    if (libraryHealthBusyId || !window.whaleSettings.probeLibrary) return
+    setLibraryHealthBusyId(item.id)
+    try {
+      const result = await window.whaleSettings.probeLibrary(item.id)
+      setLibraryHealth((current) => ({ ...current, [item.id]: result }))
+    } catch (cause) {
+      setLibraryHealth((current) => ({ ...current, [item.id]: { ok: false, message: errorMessage(cause) } }))
+    } finally {
+      setLibraryHealthBusyId(null)
     }
   }
 
@@ -437,17 +470,21 @@ export function SettingsPage() {
   function openAddModel(): void {
     const provider = PROVIDER_CATALOG[0]
     setModelTest(null)
+    setModelDiscoverMessage('')
     setProfileDeleteId(null)
     setModelForm({ id: null, providerId: provider.id, modelId: provider.models[0].id, name: provider.name,
-      baseUrl: provider.baseUrl, apiKey: '', smallModel: provider.smallModel ?? '', extraEnv: '', removeExtraEnv: false, advanced: false })
+      baseUrl: provider.baseUrl, apiKey: '', smallModel: provider.smallModel ?? '', extraEnv: '', removeExtraEnv: false, advanced: false,
+      discovered: [], modelSearch: '' })
   }
 
   function openEditModel(profile: ModelProfile): void {
     const provider = PROVIDER_CATALOG.find((item) => item.baseUrl === profile.baseUrl && item.models.some((model) => model.id === profile.model))
     setModelTest(null)
+    setModelDiscoverMessage('')
     setProfileDeleteId(null)
     setModelForm({ id: profile.id, providerId: provider?.id ?? 'custom', modelId: profile.model, name: profile.name,
-      baseUrl: profile.baseUrl, apiKey: '', smallModel: profile.smallModel ?? '', extraEnv: '', removeExtraEnv: false, advanced: Boolean(profile.extraEnvConfigured) })
+      baseUrl: profile.baseUrl, apiKey: '', smallModel: profile.smallModel ?? '', extraEnv: '', removeExtraEnv: false, advanced: Boolean(profile.extraEnvConfigured),
+      discovered: [], modelSearch: '' })
   }
 
   function pickModelProvider(providerId: string): void {
@@ -470,6 +507,7 @@ export function SettingsPage() {
     return {
       id: modelForm.id ?? crypto.randomUUID(),
       name, baseUrl, apiKey, model,
+      enabled: saved?.enabled ?? true,
       ...(modelForm.smallModel.trim() ? { smallModel: modelForm.smallModel.trim() } : {}),
       ...(modelForm.extraEnv.trim() ? { extraEnv: modelForm.extraEnv } : modelForm.removeExtraEnv ? { extraEnv: '' } : {})
     }
@@ -502,6 +540,42 @@ export function SettingsPage() {
       setModelTest({ ok: false, message: errorMessage(cause) })
     } finally {
       setModelTesting(false)
+    }
+  }
+
+  async function discoverModels(): Promise<void> {
+    if (!modelForm || modelDiscovering) return
+    const profile = draftModel()
+    if (!profile) {
+      setModelDiscoverMessage('先填好端点、模型 ID 和 API Key，再拉取模型列表。')
+      return
+    }
+    setModelDiscovering(true)
+    setModelDiscoverMessage('')
+    try {
+      if (!window.whaleSettings.discoverModels) throw new Error('当前版本不支持模型发现。')
+      const result = await window.whaleSettings.discoverModels(profile)
+      setModelDiscoverMessage(result.message)
+      if (result.ok) setModelForm((current) => current ? { ...current, discovered: result.models } : current)
+    } catch (cause) {
+      setModelDiscoverMessage(errorMessage(cause))
+    } finally {
+      setModelDiscovering(false)
+    }
+  }
+
+  async function toggleModelProfile(profile: ModelProfile): Promise<void> {
+    if (busy) return
+    setBusy(true)
+    setNotice(null)
+    try {
+      if (!window.whaleSettings.setModelProfileEnabled) throw new Error('当前版本不支持停用模型配置。')
+      await window.whaleSettings.setModelProfileEnabled(profile.id, profile.enabled === false)
+      setSettings(await window.whaleSettings.get())
+    } catch (cause) {
+      setNotice({ text: errorMessage(cause), error: true })
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -760,15 +834,20 @@ export function SettingsPage() {
                 {installedLibraries.map((item) => (
                   <div className="settings-library-item" key={item.id}>
                     <div className="settings-library-copy">
-                      <label>{item.name}{item.version && <span className="settings-library-version">v{item.version}</span>}{item.external && <span className="settings-library-version">本地已有</span>}</label>
+                      <label>{item.name}{item.version && <span className="settings-library-version">v{item.version}</span>}{item.external && <span className="settings-library-version">本地已有</span>}{item.disabled && <span className="settings-library-version">已停用</span>}</label>
                       {item.description && <p>{item.description}</p>}
                       {item.license && <small>许可证：{item.license}</small>}
+                      {libraryHealth[item.id] && <small className={libraryHealth[item.id].ok ? 'settings-library-health is-ok' : 'settings-library-health is-error'} role="status">{libraryHealth[item.id].message}</small>}
                     </div>
                     {item.external
                       ? <span className="settings-library-external">已在环境中</span>
-                      : <button type="button" disabled={libraryBusyId !== null} onClick={() => { void removeLibraryItem(item) }}>
-                          {libraryBusyId === item.id ? '移除中…' : '移除'}
-                        </button>}
+                      : <div className="settings-library-actions">
+                          <button type="button" disabled={libraryBusyId !== null} onClick={() => { void toggleLibraryItem(item) }}>{item.disabled ? '启用' : '停用'}</button>
+                          <button type="button" disabled={libraryHealthBusyId !== null} onClick={() => { void checkLibraryItem(item) }}>{libraryHealthBusyId === item.id ? '检测中…' : '检测'}</button>
+                          <button type="button" disabled={libraryBusyId !== null} onClick={() => { void removeLibraryItem(item) }}>
+                            {libraryBusyId === item.id ? '移除中…' : '移除'}
+                          </button>
+                        </div>}
                   </div>
                 ))}
               </div>}
@@ -808,7 +887,7 @@ export function SettingsPage() {
         {(settings?.modelProfiles ?? []).map((profile) => (
           <div className="settings-row" key={profile.id}>
             <div className="settings-copy">
-              <label>{profile.name}{profile.id === settings?.activeModelProfileId && <span className="settings-model-active">使用中</span>}</label>
+              <label>{profile.name}{profile.id === settings?.activeModelProfileId && <span className="settings-model-active">使用中</span>}{profile.enabled === false && <span className="settings-model-disabled">已停用</span>}</label>
               <p>{profile.baseUrl}</p>
               {profile.needsKeyReentry && <p role="alert">密钥无法在这台电脑解密，请重新输入。</p>}
             </div>
@@ -817,6 +896,9 @@ export function SettingsPage() {
                 <button type="button" className="settings-model-danger" disabled={busy} onClick={() => { void deleteModel(profile.id) }}>确认删除</button>
                 <button type="button" disabled={busy} onClick={() => setProfileDeleteId(null)}>取消</button>
               </> : <>
+                <button type="button" disabled={busy || (profile.enabled !== false && profile.id === settings?.activeModelProfileId)}
+                  title={profile.id === settings?.activeModelProfileId ? '正在使用的模型不能停用' : undefined}
+                  onClick={() => { void toggleModelProfile(profile) }}>{profile.enabled === false ? '启用' : '停用'}</button>
                 <button type="button" disabled={busy} onClick={() => openEditModel(profile)}>编辑</button>
                 <button type="button" disabled={busy} onClick={() => { setProfileDeleteId(profile.id); setModelForm(null) }}>删除</button>
               </>}
@@ -849,6 +931,20 @@ export function SettingsPage() {
             <label>环境变量<textarea rows={3} value={modelForm.extraEnv} spellCheck={false} placeholder={settings?.modelProfiles.find((profile) => profile.id === modelForm.id)?.extraEnvConfigured ? '已保存，留空保持原配置' : 'KEY=VALUE，每行一条'} disabled={busy} onChange={(event) => setModelForm({ ...modelForm, extraEnv: event.target.value, removeExtraEnv: false })} /></label>
             {settings?.modelProfiles.find((profile) => profile.id === modelForm.id)?.extraEnvConfigured && <button type="button" disabled={busy} onClick={() => setModelForm({ ...modelForm, extraEnv: '', removeExtraEnv: true })}>{modelForm.removeExtraEnv ? '保存时将清除环境变量' : '清除已保存的环境变量'}</button>}
           </>}
+          <div className="settings-model-discover-row">
+            <button type="button" disabled={busy || modelDiscovering} onClick={() => { void discoverModels() }}>{modelDiscovering ? '拉取中…' : '发现模型'}</button>
+            <input type="search" aria-label="搜索已发现的模型" placeholder="搜索模型 ID" value={modelForm.modelSearch}
+              disabled={!modelForm.discovered.length}
+              onChange={(event) => setModelForm({ ...modelForm, modelSearch: event.target.value })} />
+          </div>
+          {modelForm.discovered.length > 0 && <div className="settings-model-discovered" aria-label="已发现的模型">
+            {modelForm.discovered
+              .filter((id) => id.toLowerCase().includes(modelForm.modelSearch.trim().toLowerCase()))
+              .slice(0, 24)
+              .map((id) => <button key={id} type="button" className={id === modelForm.modelId ? 'is-active' : ''}
+                onClick={() => setModelForm({ ...modelForm, modelId: id })}>{id}</button>)}
+          </div>}
+          {modelDiscoverMessage && <div className="settings-model-discover-message" role="status">{modelDiscoverMessage}</div>}
           {modelTest && <div className={`settings-model-test${modelTest.ok ? ' is-ok' : ' is-error'}`} role="status">{modelTest.message}</div>}
           <div className="settings-model-form-actions">
             <button type="button" disabled={busy} onClick={() => setModelForm(null)}>取消</button>

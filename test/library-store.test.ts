@@ -54,6 +54,13 @@ describe('LibraryStore', () => {
     expect(resolved.mcp.map((item) => item.id)).toEqual(['io.github.demo/server'])
     expect(resolved.plugins).toEqual([])
 
+    // 停用后仍保留安装，但不再注入；重新启用后恢复。
+    await store.setEnabled('io.github.demo/server', false)
+    expect(await store.launches(['mcp:io.github.demo/server'])).toEqual({ mcp: [], plugins: [] })
+    expect((await store.list())[0]?.disabled).toBe(true)
+    await store.setEnabled('io.github.demo/server', true)
+    expect((await store.launches(['mcp:io.github.demo/server'])).mcp).toHaveLength(1)
+
     await store.remove('io.github.demo/server')
     expect(await store.list()).toEqual([])
     expect(await store.launches(['mcp:io.github.demo/server'])).toEqual({ mcp: [], plugins: [] })

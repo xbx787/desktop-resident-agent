@@ -35,6 +35,10 @@ export interface SettingsAPI {
   /** Creates or updates one model profile; the first one becomes active. */
   saveModelProfile(profile: ModelProfile): Promise<void>
   deleteModelProfile(id: string): Promise<void>
+  /** 只切换启用状态；正在使用的配置不能停用。 */
+  setModelProfileEnabled?(id: string, enabled: boolean): Promise<void>
+  /** 拉取该端点声明的模型 id，用于设置里的模型发现与搜索。 */
+  discoverModels?(profile: ModelProfile): Promise<{ ok: boolean; models: string[]; message: string }>
   /** Sends one tiny request to the endpoint and reports what came back. */
   testModelProfile(profile: ModelProfile): Promise<{ ok: boolean; message: string }>
   voiceGet(): Promise<VoiceSettingsPublic>
@@ -54,6 +58,10 @@ export interface SettingsAPI {
   /** Installs one market entry, then returns the refreshed libraries. */
   installLibrary(item: LibraryItem): Promise<LibrarySnapshot>
   removeLibrary(id: string): Promise<LibrarySnapshot>
+  /** 停用/启用已安装条目；停用后不会注入会话。 */
+  setLibraryEnabled?(id: string, enabled: boolean): Promise<LibrarySnapshot>
+  /** 检查命令、HTTP 服务或安装目录是否还在。 */
+  probeLibrary?(id: string): Promise<{ ok: boolean; message: string }>
   memoryList(): Promise<MemoryItem[]>
   memorySetEnabled(enabled: boolean): Promise<boolean>
   memoryUpdate(id: string, text: string): Promise<MemoryItem>
@@ -79,6 +87,8 @@ const api: SettingsAPI = {
   readAvatar: (kind) => ipcRenderer.invoke('pet:read-avatar', kind),
   saveModelProfile: (profile) => ipcRenderer.invoke('pet:save-model-profile', profile),
   deleteModelProfile: (id) => ipcRenderer.invoke('pet:delete-model-profile', id),
+  setModelProfileEnabled: (id, enabled) => ipcRenderer.invoke('pet:set-model-profile-enabled', id, enabled),
+  discoverModels: (profile) => ipcRenderer.invoke('pet:discover-models', profile),
   testModelProfile: (profile) => ipcRenderer.invoke('pet:test-model-profile', profile),
   voiceGet: () => ipcRenderer.invoke('pet:settings:voice:get'),
   voiceSave: (patch) => ipcRenderer.invoke('pet:settings:voice:save', patch),
@@ -98,6 +108,8 @@ const api: SettingsAPI = {
   searchLibraryMarket: (kind, query) => ipcRenderer.invoke('pet:libraries:search', kind, query),
   installLibrary: (item) => ipcRenderer.invoke('pet:libraries:install', item),
   removeLibrary: (id) => ipcRenderer.invoke('pet:libraries:remove', id),
+  setLibraryEnabled: (id, enabled) => ipcRenderer.invoke('pet:libraries:set-enabled', id, enabled),
+  probeLibrary: (id) => ipcRenderer.invoke('pet:libraries:health', id),
   memoryList: () => ipcRenderer.invoke('pet:memory:list'),
   memorySetEnabled: (enabled) => ipcRenderer.invoke('pet:memory:set-enabled', enabled),
   memoryUpdate: (id, text) => ipcRenderer.invoke('pet:memory:update', id, text),

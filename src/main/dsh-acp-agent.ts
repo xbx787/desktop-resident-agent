@@ -277,7 +277,7 @@ export class DshAcpAgentClient implements ModelClient {
     // DSH 在 initialize 握手时就用 profile 默认模型判断图片能力；必须在进程
     // 启动前把模型钉到目录里的 id，否则会回 image:false。
     try {
-      syncDshAcpModelPatch(this.options.dshHome, this.provider, this.model)
+      syncDshAcpModelPatch(this.options.dshHome, this.provider, this.model, this.providerBaseUrl)
     } catch (error) {
       throw new Error(`无法写入 DSH 模型配置：${error instanceof Error ? error.message : String(error)}`)
     }

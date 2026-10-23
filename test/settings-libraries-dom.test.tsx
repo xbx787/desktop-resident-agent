@@ -106,4 +106,15 @@ describe('settings libraries page', () => {
     await act(async () => click('添加'))
     expect(install).toHaveBeenCalledWith(expect.objectContaining({ id: 'another' }))
   })
+
+  it('toggles an installed library and shows its health result', async () => {
+    const setEnabled = vi.fn(async () => ({ items: [{ ...installed, disabled: true }], busy: false }))
+    const probe = vi.fn(async () => ({ ok: false, message: '找不到命令：npx' }))
+    await mount(bridge({ setLibraryEnabled: setEnabled, probeLibrary: probe }))
+    await act(async () => click('停用'))
+    expect(setEnabled).toHaveBeenCalledWith(installed.id, false)
+    await act(async () => click('检测'))
+    expect(probe).toHaveBeenCalledWith(installed.id)
+    expect(container!.textContent).toContain('找不到命令：npx')
+  })
 })

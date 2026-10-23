@@ -871,6 +871,58 @@ describe('model profiles', () => {
       .rejects.toThrow('重新输入 API Key')
     expect(controller.getSnapshot().conversationLibrary.settings.modelProfiles[0]?.baseUrl).toBe('https://api.example.test/anthropic')
   })
+
+  it('can disable an unused model profile, refuses the active one, and hides disabled profiles from switching', async () => {
+    const controller = new ConversationController(new ConversationStore(testRoot), (_conversationId, onChange) =>
+      new AgentRuntime(new NoteStore(testRoot), undefined, onChange, { respond: async () => ({ text: 'ok' }) }))
+    await controller.initialize()
+    await controller.saveModelProfile(profile('p1', '一号'))
+    await controller.saveModelProfile(profile('p2', '二号'))
+
+    await controller.setModelProfileEnabled('p2', false)
+    expect(controller.getSnapshot().conversationLibrary.settings.modelProfiles.find((item) => item.id === 'p2')?.enabled).toBe(false)
+    await expect(controller.setModelProfile('p2')).rejects.toThrow('已停用')
+    await expect(controller.setModelProfileEnabled('p1', false)).rejects.toThrow('正在使用的模型不能停用')
+
+    await controller.setModelProfileEnabled('p2', true)
+    await controller.setModelProfile('p2')
+    expect(controller.getSnapshot().conversationLibrary.settings.activeModelProfileId).toBe('p2')
+  })
+
+  it('exports a conversation and imports it as a new idle record without the old cloud session or goal', async () => {
+    const store = new ConversationStore(testRoot)
+    const controller = new ConversationController(store, (_conversationId, onChange) =>
+      new AgentRuntime(new NoteStore(testRoot), undefined, onChange, { respond: async () => ({ text: 'ok' }) }))
+    await controller.initialize()
+    const originalId = controller.getSnapshot().conversationLibrary.activeConversationId!
+    const now = new Date().toISOString()
+
+    const exported = await controller.exportConversation(originalId)
+    expect(exported.format).toBe('dsh-conversation')
+    expect(exported.version).toBe(1)
+
+    const library = await controller.importConversation({
+      ...exported,
+      conversation: {
+        ...exported.conversation,
+        timeline: [{ id: 'u1', time: now, kind: 'user', text: '导入内容' }],
+        history: [{ role: 'user', content: '导入内容' }],
+        sdkSessionId: 'cloud-session',
+        taskStatus: 'executing',
+        approvalMode: 'danger-full-access',
+        goal: { condition: '旧目标', phase: 'confirmed', startedAt: now }
+      }
+    })
+    expect(library.activeConversationId).not.toBe(originalId)
+    const imported = await store.getConversation(library.activeConversationId!)
+    expect(imported?.timeline[0]?.text).toBe('导入内容')
+    expect(imported?.sdkSessionId).toBeNull()
+    expect(imported?.goal).toBeNull()
+    expect(imported?.approvalMode).toBe('workspace-write')
+    expect(imported?.taskStatus).toBe('idle')
+
+    await expect(controller.importConversation({ format: 'other' })).rejects.toThrow('导出文件')
+  })
 })
 
 describe('idle direct send', () => {

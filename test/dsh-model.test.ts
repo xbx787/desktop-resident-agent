@@ -18,4 +18,9 @@ describe('DSH 模型 id 规范化', () => {
     expect(normalizeDshModel('deepseek-v4-pro')).toBe('deepseek-v4-pro')
     expect(normalizeDshModel('deepseek-flash')).toBe('deepseek-flash')
   })
+
+  it('自定义供应商的模型 id 不改大小写', () => {
+    expect(normalizeDshModel('Kimi-K3')).toBe('Kimi-K3')
+    expect(normalizeDshModel('GLM-4.6[1M]')).toBe('GLM-4.6')
+  })
 })
