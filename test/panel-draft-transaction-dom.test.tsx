@@ -16,12 +16,12 @@ const settings: ConversationSettings = {
 
 function summary(id: string): ConversationSummary {
   return { id, title: `会话 ${id}`, createdAt: '2026-10-13T00:00:00.000Z', updatedAt: '2026-10-13T00:00:00.000Z', lastActivityAt: '2026-10-13T00:00:00.000Z',
-    archivedAt: null, pinnedAt: null, mode: 'claude_code', taskStatus: 'idle', messageCount: 1, preview: '' }
+    archivedAt: null, pinnedAt: null, mode: 'dsh', taskStatus: 'idle', messageCount: 1, preview: '' }
 }
 
 function snapshot(activeConversationId: string): AppSnapshot {
   return {
-    mode: 'claude_code', avatarState: 'idle', taskStatus: 'idle', modelReady: true, claudeCodeReady: true,
+    mode: 'dsh', avatarState: 'idle', taskStatus: 'idle', modelReady: true, dshReady: true,
     conversationId: activeConversationId, timelineRevision: 1,
     timeline: [{ id: 'notice', kind: 'system', text: '准备就绪', time: '2026-10-13T00:00:00.000Z' }],
     conversationLibrary: { settings, activeConversationId, conversations: [summary('a'), summary('b')] },
@@ -150,7 +150,7 @@ describe('composer submissions stay with their conversation', () => {
     await switchTo('a')
     const restored = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="输入消息"]')!
     expect(restored.value).toBe('整理项目')
-    expect(restored.placeholder).toBe('写清目标与可验证的完成标准，回车设定')
+    expect(restored.placeholder).toBe('写清目标，回车设定；按 Tab 补上“在把我交代的任务全部完成之前不要停下”')
   })
 
   it('allows B to send while A is pending and keeps each conversation locked independently', async () => {

@@ -95,6 +95,18 @@ const TOOLS = [
       required: ['url'],
       additionalProperties: false
     }
+  },
+  {
+    name: 'memory_remember',
+    description: '把主人明确要求长期记住的一条约定追加到 data/memory/MEMORY.md；写进去之后每一轮对话（包括新开的对话）都会读到。只在主人说「记住」「以后都这样」「别再」这类长期要求时使用；踩过的坑、验证结论这类临时记录不要写这里，写 data/memory/NOTES.md。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: '要长期记住的一条约定，写成一句完整的话，最多 400 字' }
+      },
+      required: ['text'],
+      additionalProperties: false
+    }
   }
   // 联网搜索关闭时（PET_MCP_WEB=0），搜索/抓取工具直接从列表里消失，
   // 模型不会先尝试一次再被拒绝。

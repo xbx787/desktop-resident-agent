@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process'
 import readline from 'node:readline'
 import { afterEach, describe, expect, it } from 'vitest'
 import { PET_MCP_TOOLS, PetMcpBridge } from '../src/main/pet-mcp-server'
+import { seedMemoryDocument, setMemoryDocumentPath } from '../src/main/memory-document'
 import { writeDshProfile } from '../src/main/dsh-runtime'
 import type { ConversationBridge } from '../src/main/conversation-tools'
 import type { EvolveBridge } from '../src/main/evolve-tools'
@@ -111,6 +112,28 @@ describe('PetMcpBridge', () => {
     const noKey = await call(bridge, 'deepseek_search', { query: '测试' })
     expect(noKey.body.isError).toBe(true)
     expect(noKey.body.content![0].text).toContain('DeepSeek API Key')
+  })
+
+  it('writes a long-term memory note once and refuses the duplicate', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'pet-memory-'))
+    cleanups.push(() => rmSync(root, { recursive: true, force: true }))
+    const file = seedMemoryDocument(root)
+    cleanups.push(() => setMemoryDocumentPath(null))
+
+    const bridge = new PetMcpBridge()
+    await bridge.start()
+    cleanups.push(() => bridge.close())
+
+    const saved = await call(bridge, 'memory_remember', { text: '以后不要擅自打包或重启。' })
+    expect(saved.body.isError).toBeUndefined()
+    expect(readFileSync(file, 'utf8')).toContain('- 以后不要擅自打包或重启。')
+
+    const again = await call(bridge, 'memory_remember', { text: '以后不要擅自打包或重启。' })
+    expect(again.body.isError).toBe(true)
+    expect(readFileSync(file, 'utf8').match(/不要擅自打包或重启/gu)).toHaveLength(1)
+
+    const empty = await call(bridge, 'memory_remember', { text: '  ' })
+    expect(empty.body.isError).toBe(true)
   })
 })
 

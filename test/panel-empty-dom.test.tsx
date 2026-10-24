@@ -20,7 +20,7 @@ const settings: ConversationSettings = {
 }
 
 function summary(id: string, archivedAt: string | null): ConversationSummary {
-  return { id, title: `会话 ${id}`, createdAt: '2026-10-13T00:00:00.000Z', updatedAt: '2026-10-13T00:00:00.000Z', lastActivityAt: '2026-10-13T00:00:00.000Z', archivedAt, pinnedAt: null, mode: 'claude_code', taskStatus: 'idle', messageCount: 0, preview: '' }
+  return { id, title: `会话 ${id}`, createdAt: '2026-10-13T00:00:00.000Z', updatedAt: '2026-10-13T00:00:00.000Z', lastActivityAt: '2026-10-13T00:00:00.000Z', archivedAt, pinnedAt: null, mode: 'dsh', taskStatus: 'idle', messageCount: 0, preview: '' }
 }
 
 const bridge = new Proxy({} as Record<string, unknown>, {
@@ -36,8 +36,8 @@ const bridge = new Proxy({} as Record<string, unknown>, {
 
 function snapshotWith(conversations: ConversationSummary[], activeConversationId: string | null): AppSnapshot {
   return {
-    mode: 'claude_code', avatarState: 'idle', taskStatus: 'idle',
-    timeline: [], timelineRevision: 0, modelReady: true, claudeCodeReady: true,
+    mode: 'dsh', avatarState: 'idle', taskStatus: 'idle',
+    timeline: [], timelineRevision: 0, modelReady: true, dshReady: true,
     conversationId: activeConversationId ?? undefined,
     conversationLibrary: { settings, activeConversationId, conversations },
     contextUsage: { status: 'unavailable' }

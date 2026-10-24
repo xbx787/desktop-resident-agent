@@ -72,7 +72,7 @@ export function createEvolveToolsServer(bridge: EvolveBridge) {
 
   const restartTool = {
     name: 'restart',
-    description: '保存当前自我进化任务并重启应用。等当前回合结束后执行；可以传 version 切到已经打包好的 release 版本（例如 0.0.88）。自我更新前先用 Bash 运行 npm run pack:release 生成新版本，再传版本号。只在用户明确要求自我更新、并已切到「自我进化」模式时使用。',
+    description: '保存当前自我进化任务并重启应用。等当前回合结束后执行；可以传 version 切到已经打包好的 release 版本（例如 0.0.88）。自我更新前先用 Bash 运行 npm run pack:release 生成新版本，再传版本号。只在用户明确要求自我更新、并已切到「自我进化」模式时使用。重启/切换版本必须走这个工具；禁止用 Stop-Process、taskkill 等外部命令强杀应用，那会连同工具子进程一起终止，应用不会被拉起。',
     inputSchema: {
       version: z.string().optional().describe('要启动的发布版本号，例如 0.0.88；不传则重启当前版本')
     },

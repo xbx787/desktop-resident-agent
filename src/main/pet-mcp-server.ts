@@ -16,6 +16,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { ConversationBridge } from './conversation-tools'
 import type { EvolveBridge } from './evolve-tools'
 import { deepseekFetch, deepseekSearch } from './deepseek-tools'
+import { appendMemoryNote } from './memory-document'
 
 export interface PetMcpToolResult {
   content: Array<{ type: 'text'; text: string }>
@@ -72,7 +73,7 @@ export const PET_MCP_TOOLS: PetMcpToolDefinition[] = [
   },
   {
     name: 'evolve_restart',
-    description: '保存当前自我进化任务并重启应用。等当前回合结束后执行；可以传 version 切到已经打包好的 release 版本（例如 0.0.88）。自我更新前先运行 npm run pack:release 生成新版本，再传版本号。只在用户明确要求自我更新、并已切到「自我进化」模式时使用。',
+    description: '保存当前自我进化任务并重启应用。等当前回合结束后执行；可以传 version 切到已经打包好的 release 版本（例如 0.0.88）。自我更新前先运行 npm run pack:release 生成新版本，再传版本号。只在用户明确要求自我更新、并已切到「自我进化」模式时使用。重启/切换版本必须走这个工具；禁止用 Stop-Process、taskkill 等外部命令强杀应用，那会连同工具子进程一起终止，应用不会被拉起。',
     inputSchema: {
       type: 'object',
       properties: {
@@ -114,6 +115,18 @@ export const PET_MCP_TOOLS: PetMcpToolDefinition[] = [
       type: 'object',
       properties: { url: { type: 'string', description: '要抓取的 HTTP/HTTPS 网址' } },
       required: ['url'],
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'memory_remember',
+    description: '把主人明确要求长期记住的一条约定追加到 data/memory/MEMORY.md；写进去之后每一轮对话（包括新开的对话）都会读到。只在主人说「记住」「以后都这样」「别再」这类长期要求时使用；踩过的坑、验证结论这类临时记录不要写这里，写 data/memory/NOTES.md。',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: '要长期记住的一条约定，写成一句完整的话，最多 400 字' }
+      },
+      required: ['text'],
       additionalProperties: false
     }
   }
@@ -308,6 +321,11 @@ export class PetMcpBridge {
         return ok(await bridge.restart(version || undefined))
       }
       return fail(`未知工具：${tool}`)
+    }
+    if (tool === 'memory_remember') {
+      const result = appendMemoryNote(text(args.text))
+      if (!result.added) return fail(result.reason ?? '没有写入长期记忆。')
+      return ok({ saved: true, file: result.file })
     }
     if (tool === 'deepseek_search') {
       if (!this.deepseekKey) return fail('DeepSeek API Key 尚未配置。')

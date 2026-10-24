@@ -6,7 +6,7 @@ import { isEffortLevel } from '../shared/effort'
 import { containsSensitiveData } from './memory-service'
 import { protectProfiles, restoreProfiles, type SecretCodec } from './secret-storage'
 import type { AgentGoal, ApprovalMode, AvatarSize, ConversationBatchAction, ConversationBatchResult, ConversationLibraryState, ConversationSummary, ContextUsageSnapshot, EffortLevel, ModelMode, ModelProfile, PanelPlacement, PanelTheme, SubagentTask, TaskStatus, TimelineEntry, UserAttachment, ConversationSettings, UiSize } from '../shared/contracts'
-import { AUTO_COMPACT_DEFAULT_PERCENT, PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH, isAgentKernelKind, isAutoCompactPercent, isAvatarRenderer } from '../shared/contracts'
+import { AUTO_COMPACT_DEFAULT_PERCENT, PANEL_MIN_HEIGHT, PANEL_MIN_WIDTH, normalizeAgentKernelKind, normalizeModelMode, isAutoCompactPercent, isAvatarRenderer } from '../shared/contracts'
 import { isPersonaId } from '../shared/personas'
 import { DEFAULT_SKILL_MARKET_SOURCES, isSkillMarketSourceId } from '../shared/skill-market'
 
@@ -123,8 +123,9 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
-function isMode(value: unknown): value is ModelMode {
-  return value === 'demo' || value === 'live' || value === 'claude_code'
+/** 旧记录里的 `claude_code` 仍然可读，读入后由 normalizeModelMode 归一为 `dsh`。 */
+function isStoredMode(value: unknown): boolean {
+  return normalizeModelMode(value) !== null
 }
 
 function isTaskStatus(value: unknown): value is TaskStatus {
@@ -217,7 +218,7 @@ function isRecord(value: unknown): value is LegacyConversationRecord {
     typeof value.updatedAt === 'string' &&
     (value.archivedAt === null || typeof value.archivedAt === 'string') &&
     (value.pinnedAt === undefined || value.pinnedAt === null || typeof value.pinnedAt === 'string') &&
-    isMode(value.mode) &&
+    isStoredMode(value.mode) &&
     (value.taskStatus === undefined || isTaskStatus(value.taskStatus)) &&
     isTimeline(value.timeline) &&
     isHistory(value.history) &&
@@ -322,7 +323,7 @@ function readExtendedSettings(settings: Record<string, unknown>): Pick<Conversat
       ? settings.skillMarketSources.filter(isSkillMarketSourceId)
       : [...DEFAULT_SKILL_MARKET_SOURCES],
     personaId: isPersonaId(settings.personaId) ? settings.personaId : 'xiaojing',
-    agentKernel: isAgentKernelKind(settings.agentKernel) ? settings.agentKernel : 'dsh',
+    agentKernel: normalizeAgentKernelKind(settings.agentKernel) ?? 'dsh',
     autoCompactPercent: isAutoCompactPercent(settings.autoCompactPercent)
       ? settings.autoCompactPercent : AUTO_COMPACT_DEFAULT_PERCENT,
     ...(typeof settings.outputStyle === 'string' && settings.outputStyle.trim()
@@ -357,7 +358,7 @@ function metaOf(record: ConversationRecord): ConversationSummary {
   const meta: ConversationSummary = {
     id: record.id, title: record.title, createdAt: record.createdAt, updatedAt: record.updatedAt,
     lastActivityAt: record.lastActivityAt ?? record.updatedAt, archivedAt: record.archivedAt,
-    pinnedAt: record.pinnedAt, mode: record.mode, taskStatus: record.taskStatus,
+    pinnedAt: record.pinnedAt, mode: normalizeModelMode(record.mode) ?? 'dsh', taskStatus: record.taskStatus,
     messageCount: record.timeline.filter((entry) => entry.kind === 'user' || entry.kind === 'assistant').length,
     preview: record.timeline.length ? summaryPreview(record, []) : ''
   }
@@ -370,7 +371,7 @@ function shellOf(meta: ConversationSummary): ConversationRecord {
   return {
     id: meta.id, title: meta.title, createdAt: meta.createdAt, updatedAt: meta.updatedAt,
     lastActivityAt: meta.lastActivityAt, archivedAt: meta.archivedAt, pinnedAt: meta.pinnedAt,
-    mode: meta.mode, taskStatus: meta.taskStatus, timeline: [], history: [],
+    mode: normalizeModelMode(meta.mode) ?? 'dsh', taskStatus: meta.taskStatus, timeline: [], history: [],
     pendingMessages: [], sdkSessionId: null, goal: null
   }
 }
@@ -379,7 +380,7 @@ function isMeta(value: unknown): value is ConversationSummary {
   if (!isObject(value)) return false
   return typeof value.id === 'string' && typeof value.title === 'string' &&
     typeof value.createdAt === 'string' && typeof value.updatedAt === 'string' &&
-    typeof value.lastActivityAt === 'string' && isMode(value.mode) && isTaskStatus(value.taskStatus)
+    typeof value.lastActivityAt === 'string' && isStoredMode(value.mode) && isTaskStatus(value.taskStatus)
 }
 
 /** A v3 index: settings, one active pointer, and one meta per conversation. */
@@ -413,7 +414,7 @@ function parseIndex(raw: string): { settings: ConversationSettings; activeConver
 
 /** Fills the gaps a legacy record may have (field added after it was written). */
 function completeRecord(record: LegacyConversationRecord): ConversationRecord {
-  return { ...record, pinnedAt: record.pinnedAt ?? null,
+  return { ...record, mode: normalizeModelMode(record.mode) ?? 'dsh', pinnedAt: record.pinnedAt ?? null,
     pendingMessages: record.pendingMessages ?? [], taskStatus: restoredTaskStatus(record.taskStatus), goal: record.goal ?? null }
 }
 
@@ -651,6 +652,7 @@ export class ConversationStore {
     let activeConversationId: string | null = null
     let conversations: ConversationRecord[] = []
     let migrating = false
+    let modeMigrated = false
     let raw: string | undefined
     try {
       raw = await fs.readFile(this.filePath, 'utf8')
@@ -667,8 +669,10 @@ export class ConversationStore {
         for (const meta of index.metas) {
           // A missing or damaged record leaves its list row visible as a shell
           // instead of taking the rest of the library down with it.
+          if ((meta.mode as unknown) === 'claude_code') modeMigrated = true
           try {
             const parsed: unknown = JSON.parse(await fs.readFile(this.recordPath(meta.id), 'utf8'))
+            if (isObject(parsed) && parsed.mode === 'claude_code') modeMigrated = true
             loaded.set(meta.id, isRecord(parsed) ? completeRecord(parsed) : shellOf(meta))
           } catch {
             loaded.set(meta.id, shellOf(meta))
@@ -704,7 +708,7 @@ export class ConversationStore {
     settings.modelProfiles = restored.profiles
     const library: PersistedLibrary = { version: 2, settings, activeConversationId, conversations }
 
-    if (migrating || restored.changed) {
+    if (migrating || restored.changed || modeMigrated) {
       if (migrating && raw !== undefined) {
         await fs.copyFile(this.filePath, path.join(dir, 'library.v2.bak.json')).catch(() => undefined)
       }
@@ -771,10 +775,11 @@ export class ConversationStore {
     return record ? structuredClone(record) : null
   }
 
-  async createConversation(title = DEFAULT_TITLE, mode: ModelMode = 'demo'): Promise<ConversationRecord> {
+  async createConversation(title = DEFAULT_TITLE, mode: ModelMode = 'dsh'): Promise<ConversationRecord> {
     const clean = cleanTitle(title)
-    if (!isMode(mode)) throw new ConversationStoreError('INVALID_INPUT', '不支持这个模型模式。')
-    return this.mutate((draft) => addConversation(draft, clean, mode))
+    const normalized = normalizeModelMode(mode)
+    if (!normalized) throw new ConversationStoreError('INVALID_INPUT', '不支持这个模型模式。')
+    return this.mutate((draft) => addConversation(draft, clean, normalized))
   }
 
   /** 从另一个设备/备份导入一条完整会话：保留消息与用量，但清掉云端会话
@@ -824,8 +829,10 @@ export class ConversationStore {
   async updateConversation(id: string, patch: ConversationPatch): Promise<ConversationRecord> {
     const changes = structuredClone(patch)
     if (changes.title !== undefined) changes.title = cleanTitle(changes.title)
-    if (changes.mode !== undefined && !isMode(changes.mode)) {
-      throw new ConversationStoreError('INVALID_INPUT', '不支持这个模型模式。')
+    if (changes.mode !== undefined) {
+      const normalized = normalizeModelMode(changes.mode)
+      if (!normalized) throw new ConversationStoreError('INVALID_INPUT', '不支持这个模型模式。')
+      changes.mode = normalized
     }
     if (changes.taskStatus !== undefined && !isTaskStatus(changes.taskStatus)) {
       throw new ConversationStoreError('INVALID_INPUT', '任务状态无效。')
@@ -938,7 +945,7 @@ export class ConversationStore {
     return this.mutate((draft) => {
       const now = new Date().toISOString()
       const oldActive = draft.conversations.find((record) => record.id === draft.activeConversationId)
-      const oldMode = oldActive?.mode ?? 'claude_code'
+      const oldMode = oldActive?.mode ?? 'dsh'
       const outcomes: ConversationBatchResult['outcomes'] = []
       const removed = new Set<string>()
       for (const id of unique) {
@@ -1053,7 +1060,7 @@ export class ConversationStore {
     if (personaId !== undefined && !isPersonaId(personaId)) {
       throw new ConversationStoreError('INVALID_INPUT', '人设预设无效。')
     }
-    if (agentKernel !== undefined && !isAgentKernelKind(agentKernel)) {
+    if (agentKernel !== undefined && normalizeAgentKernelKind(agentKernel) === null) {
       throw new ConversationStoreError('INVALID_INPUT', 'Agent 内核无效。')
     }
     if (autoCompactPercent !== undefined && !isAutoCompactPercent(autoCompactPercent)) {
@@ -1086,7 +1093,7 @@ export class ConversationStore {
       if (effort !== undefined) draft.settings.effort = effort
       if (goalMaxIterations !== undefined) draft.settings.goalMaxIterations = goalMaxIterations
       if (goalMaxMinutes !== undefined) draft.settings.goalMaxMinutes = goalMaxMinutes
-      if (agentKernel !== undefined) draft.settings.agentKernel = agentKernel
+      if (agentKernel !== undefined) draft.settings.agentKernel = normalizeAgentKernelKind(agentKernel) ?? 'dsh'
       if (memoryEnabled !== undefined) draft.settings.memoryEnabled = memoryEnabled
       if (modelProfiles !== undefined) {
         draft.settings.modelProfiles = structuredClone(modelProfiles)

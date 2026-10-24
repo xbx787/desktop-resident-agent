@@ -3,7 +3,17 @@ import type { InputActivity } from './input-activity'
 import type { AgentActivity } from './agent-activity'
 
 export type AvatarState = 'idle' | 'thinking' | 'listening' | 'speaking' | 'acting' | 'success' | 'error'
-export type ModelMode = 'demo' | 'live' | 'claude_code'
+/** 会话的执行模式：`dsh` 是小鲸引擎（DeepSeek Harness），`live` 是 DeepSeek 直连。
+ *  旧记录里的 `demo`、`claude_code` 在读取时统一迁移为 `dsh`。 */
+export type ModelMode = 'live' | 'dsh'
+export function normalizeModelMode(value: unknown): ModelMode | null {
+  if (value === 'live') return value
+  if (value === 'dsh' || value === 'claude_code' || value === 'demo') return 'dsh'
+  return null
+}
+export function isModelMode(value: unknown): value is ModelMode {
+  return value === 'live' || value === 'dsh'
+}
 export type BubbleLayout = 'empty' | 'composer' | 'composer_attachments' | 'composer_models' | 'full'
 /** 展开方向：人物在上半屏时窗口向下，在下半屏时窗口向上（跟随人物）。 */
 export type PanelDirection = 'up' | 'down'
@@ -13,11 +23,14 @@ export type PanelPlacement = 'top' | 'bottom' | 'left' | 'right'
 
 /** 聊天面板配色；状态色不随它变化。 */
 export type PanelTheme = 'dark' | 'light'
-/** Stored compatibility union. New and migrated conversations execute with
- * DSH; `claude_code` remains as the historical engine-mode value. */
-export type AgentKernelKind = 'claude_code' | 'dsh'
+/** 当前只有 DSH 内核。旧设置里的 `claude_code` 在读取时归一为 `dsh`。 */
+export type AgentKernelKind = 'dsh'
+export function normalizeAgentKernelKind(value: unknown): AgentKernelKind | null {
+  if (value === 'dsh' || value === 'claude_code') return 'dsh'
+  return null
+}
 export function isAgentKernelKind(value: unknown): value is AgentKernelKind {
-  return value === 'claude_code' || value === 'dsh'
+  return value === 'dsh'
 }
 
 /** Thinking depth: DeepSeek's Anthropic-format effort values plus "off".
@@ -511,7 +524,7 @@ export interface AppSnapshot {
   proposal?: ProposedAction
   currentTask?: string
   modelReady: boolean
-  claudeCodeReady: boolean
+  dshReady: boolean
   /** Which conversation this snapshot describes (the displayed one). The
    *  renderer resets its timeline-revision bookkeeping when it changes. */
   conversationId?: string
@@ -704,9 +717,13 @@ export interface PetAPI {
   /** 面板贴在人物的哪一侧（上/下/左/右）。 */
   getPanelPlacement(): Promise<PanelPlacement>
   onPanelPlacement(callback: (placement: PanelPlacement) => void): () => void
+  /** 尾巴应指向的人物中心，相对面板窗口左缘的像素。 */
+  onPanelTailX(callback: (x: number) => void): () => void
   /** 全局键鼠活动（用于提示框里的实时按键/鼠标指示）。 */
   onInputActivity(callback: (activity: InputActivity) => void): () => void
   showContextMenu(): Promise<void>
+  /** 选中消息文字后右键弹出系统菜单，返回用户选择的动作。 */
+  showTextMenu(payload: { text: string }): Promise<'quote' | 'copy' | null>
   setBalanceOpen(open: boolean): Promise<void>
   /** Flips the balance card from the main process, where the real state lives. */
   toggleBalance(): Promise<void>

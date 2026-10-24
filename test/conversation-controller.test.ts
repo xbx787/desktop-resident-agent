@@ -55,8 +55,8 @@ describe('conversation controller', () => {
 
   it('changes the displayed epoch even after switching away and back to the same parent', async () => {
     const store = new ConversationStore(testRoot)
-    const first = await store.createConversation('第一条', 'demo')
-    const second = await store.createConversation('第二条', 'demo')
+    const first = await store.createConversation('第一条', 'dsh')
+    const second = await store.createConversation('第二条', 'dsh')
     await store.setActiveConversation(first.id)
     const controller = new ConversationController(store,
       (_conversationId, onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))
@@ -70,8 +70,8 @@ describe('conversation controller', () => {
 
   it('notifies a tab switch only after its library and displayed record are ready', async () => {
     const store = new ConversationStore(testRoot)
-    const first = await store.createConversation('A', 'demo')
-    const second = await store.createConversation('B', 'demo')
+    const first = await store.createConversation('A', 'dsh')
+    const second = await store.createConversation('B', 'dsh')
     await store.setActiveConversation(first.id)
     const controller = new ConversationController(store,
       (_conversationId, onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))
@@ -92,11 +92,12 @@ describe('conversation controller', () => {
 
   it('blocks single and bulk removal of a busy child and only targets its owner on model change', async () => {
     const store = new ConversationStore(testRoot)
-    const a = await store.createConversation('A', 'demo')
-    const b = await store.createConversation('B', 'demo')
+    const a = await store.createConversation('A', 'dsh')
+    const b = await store.createConversation('B', 'dsh')
     await store.setActiveConversation(a.id)
+    const direct: ModelClient = { respond: async () => ({ text: 'ok' }) }
     const controller = new ConversationController(store,
-      (_conversationId, onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))
+      (_conversationId, onChange) => new AgentRuntime(new NoteStore(testRoot), direct, onChange))
     await controller.initialize()
     const busy = new Set([b.id])
     controller.setSideBusyPredicate((id) => busy.has(id))
@@ -110,7 +111,7 @@ describe('conversation controller', () => {
     ])
     const configChanges: Array<string | undefined> = []
     controller.setRuntimeConfigurationChangeListener((id) => { configChanges.push(id) })
-    await controller.setModelMode('demo', b.id)
+    await controller.setModelMode('live', b.id)
     expect(configChanges).toEqual([b.id])
     await controller.updateSettings({ effort: 'high' })
     expect(configChanges).toEqual([b.id, undefined])
@@ -121,8 +122,8 @@ describe('conversation controller', () => {
 
   it('defers auto-archive while any side child is busy', async () => {
     const store = new ConversationStore(testRoot)
-    const a = await store.createConversation('A', 'demo')
-    const b = await store.createConversation('B', 'demo')
+    const a = await store.createConversation('A', 'dsh')
+    const b = await store.createConversation('B', 'dsh')
     await store.setActiveConversation(a.id)
     const controller = new ConversationController(store,
       (_conversationId, onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))
@@ -139,7 +140,7 @@ describe('conversation controller', () => {
 
   it('seeds side chat only with committed, visible and nonsensitive turns', async () => {
     const store = new ConversationStore(testRoot)
-    const record = await store.createConversation('主线', 'demo')
+    const record = await store.createConversation('主线', 'dsh')
     const row = (id: string, kind: 'user' | 'assistant' | 'system', text: string) =>
       ({ id, kind, text, time: '2026-10-16T00:00:00.000Z' })
     await store.updateConversation(record.id, {
@@ -172,20 +173,20 @@ describe('conversation controller', () => {
 
   it('shows recorded turn metrics and total spend when opening a cold conversation', async () => {
     const store = new ConversationStore(testRoot)
-    const cold = await store.createConversation('旧会话', 'claude_code')
+    const cold = await store.createConversation('旧会话', 'dsh')
     const metrics = { startedAt: '2026-10-13T02:00:00.000Z', finishedAt: '2026-10-13T02:00:02.000Z',
       usedTokens: 42, usage: { total: 42, input: 30, output: 12 }, spentYuan: 0.321 }
     const contextUsage = { status: 'available' as const, usedTokens: 558_806, maxTokens: 1_000_000,
       usedPercent: 55.9, remainingTokens: 441_194, checkedAt: '2026-10-23T07:13:47.673Z' }
     await store.updateConversation(cold.id, { taskStatus: 'done', spentYuan: 0.321, contextUsage,
       timeline: [{ id: 'cold-user', kind: 'user', time: metrics.startedAt, text: '旧问题', metrics }] })
-    await store.createConversation('当前会话', 'claude_code')
+    await store.createConversation('当前会话', 'dsh')
     const controller = new ConversationController(store,
       (_conversationId, onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))
     await controller.initialize()
     await controller.selectConversation(cold.id)
     const snapshot = controller.getSnapshot()
-    expect(snapshot.mode).toBe('demo')
+    expect(snapshot.mode).toBe('dsh')
     expect(snapshot.timeline[0].metrics).toEqual(metrics)
     expect(snapshot.conversationSpentYuan).toBe(0.321)
     expect(snapshot.taskMetrics).toBeUndefined()
@@ -243,12 +244,13 @@ describe('conversation controller', () => {
 
   it('skips a conversation awaiting approval during a batch archive', async () => {
     const store = new ConversationStore(testRoot)
+    const direct: ModelClient = { respond: async () => ({ text: '', note: { title: '审批测试', content: '内容' } }) }
     const controller = new ConversationController(store,
-      (_conversationId, onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))
+      (_conversationId, onChange) => new AgentRuntime(new NoteStore(testRoot), direct, onChange))
     await controller.initialize()
     const id = controller.getSnapshot().conversationId!
-    await controller.setModelMode('demo')
-    await controller.sendMessage('记录：审批前先不要写入')
+    await controller.setModelMode('live')
+    await controller.sendMessage('写一条笔记')
     await until(() => controller.getSnapshot().taskStatus === 'awaiting_approval', 'approval state')
     expect((await controller.batchManageConversations('archive', [id])).outcomes).toEqual([
       { id, status: 'skipped', reason: 'busy' }
@@ -321,7 +323,7 @@ describe('conversation controller', () => {
 
   it('delivers a referenced conversation through native steering while keeping visible history clean', async () => {
     const store = new ConversationStore(testRoot)
-    const source = await store.createConversation('源会话', 'claude_code')
+    const source = await store.createConversation('源会话', 'dsh')
     await store.updateConversation(source.id, {
       timeline: [
         { id: randomUUID(), kind: 'user', time: new Date().toISOString(), text: '源问题' },
@@ -329,7 +331,7 @@ describe('conversation controller', () => {
       ],
       history: [{ role: 'user', content: '源问题' }, { role: 'assistant', content: '源最终答复' }]
     })
-    await store.createConversation('目标会话', 'claude_code')
+    await store.createConversation('目标会话', 'dsh')
     let finish!: (reply: ModelReply) => void
     const guidance: string[] = []
     const model: ModelClient & { steer: (text: string) => boolean } = {
@@ -445,6 +447,7 @@ describe('conversation controller', () => {
     const direct: ModelClient = { respond: async () => ({ text: 'should not run' }) }
     const controller = new ConversationController(new ConversationStore(testRoot), (_conversationId, onChange) => new AgentRuntime(new NoteStore(testRoot), direct, onChange))
     await controller.initialize()
+    await controller.setModelMode('live')
     await expect(controller.sendMessage('分析文档', [
       { name: 'draft.docx', content: '', path: path.join(testRoot, 'draft.docx') }
     ])).rejects.toThrow('请切换到小鲸引擎模式')
@@ -711,7 +714,7 @@ describe('conversation controller', () => {
 
   it('shows pending messages after restart without executing them until the user sends again', async () => {
     const disk = new ConversationStore(testRoot)
-    const existing = await disk.createConversation('重启前', 'claude_code')
+    const existing = await disk.createConversation('重启前', 'dsh')
     await disk.updateConversation(existing.id, { pendingMessages: [{
       id: 'waiting-1', text: '旧待发消息', attachments: [], createdAt: new Date().toISOString()
     }] })
@@ -1189,8 +1192,8 @@ describe('parallel conversations', () => {
 
   it('hands a message from one conversation to another with its source', async () => {
     const store = new ConversationStore(testRoot)
-    const source = await store.createConversation('开发2', 'demo')
-    const target = await store.createConversation('开发1', 'demo')
+    const source = await store.createConversation('开发2', 'dsh')
+    const target = await store.createConversation('开发1', 'dsh')
     await store.setActiveConversation(source.id)
     const controller = new ConversationController(store,
       (_conversationId, onChange) => new AgentRuntime(new NoteStore(testRoot), undefined, onChange))

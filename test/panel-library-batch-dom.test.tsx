@@ -18,13 +18,13 @@ function summary(id: string, archived = false): ConversationSummary {
   return {
     id, title: `会话 ${id}`, createdAt: '2026-10-13T00:00:00.000Z', updatedAt: '2026-10-13T00:00:00.000Z', lastActivityAt: '2026-10-13T00:00:00.000Z',
     archivedAt: archived ? '2026-10-13T01:00:00.000Z' : null, pinnedAt: null,
-    mode: 'claude_code', taskStatus: 'idle', messageCount: 1, preview: `来自 ${id} 的消息`
+    mode: 'dsh', taskStatus: 'idle', messageCount: 1, preview: `来自 ${id} 的消息`
   }
 }
 
 function snapshot(): AppSnapshot {
   return {
-    mode: 'claude_code', avatarState: 'idle', taskStatus: 'idle', modelReady: true, claudeCodeReady: true,
+    mode: 'dsh', avatarState: 'idle', taskStatus: 'idle', modelReady: true, dshReady: true,
     conversationId: 'a', timelineRevision: 1,
     timeline: [{ id: 'notice', kind: 'system', text: '准备就绪', time: '2026-10-13T00:00:00.000Z' }],
     conversationLibrary: {

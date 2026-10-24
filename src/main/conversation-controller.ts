@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { AgentCapabilities, AppSnapshot, ApprovalMode, AskAnswers, ContextUsageSnapshot, ConversationBatchAction, ConversationBatchResult, ModelMode, ModelProfile, TimelineEntry, UserAttachment } from '../shared/contracts'
-import { AUTO_COMPACT_DEFAULT_PERCENT } from '../shared/contracts'
+import { AUTO_COMPACT_DEFAULT_PERCENT, normalizeModelMode } from '../shared/contracts'
 import { CLAUDE_BASE_URL, DEFAULT_CLAUDE_MODEL } from './claude-code'
 import { deleteTurnEntries, type AgentRuntime } from './agent-runtime'
 import type { DialogueLine } from './deepseek'
@@ -108,7 +108,7 @@ export class ConversationController {
   private readonly writtenSubagents = new Map<string, string>()
   private operations: Promise<void> = Promise.resolve()
   /** Last seen readiness flags — a cold snapshot still has to answer them. */
-  private readiness = { modelReady: false, claudeCodeReady: false }
+  private readiness = { modelReady: false, dshReady: false }
   private turnHooks: ConversationTurnHooks = {}
   private onDisplayedConversationChange?: (id: string | null) => void
   private onRuntimeConfigurationChange?: (conversationId?: string) => void
@@ -266,7 +266,7 @@ export class ConversationController {
     let state = await this.store.getState()
     let record = state.activeConversationId ? await this.store.getConversation(state.activeConversationId) : null
     if (!record) {
-      record = await this.store.createConversation('新对话', 'claude_code')
+      record = await this.store.createConversation('新对话', 'dsh')
       state = await this.store.getState()
     }
     this.activeId = record.id
@@ -337,7 +337,7 @@ export class ConversationController {
     this.runtimes.set(id, runtime)
     if (!this.pending.has(id)) this.pending.set(id, structuredClone(rec.pendingMessages))
     const snap = runtime.getSnapshot()
-    this.readiness = { modelReady: snap.modelReady, claudeCodeReady: snap.claudeCodeReady }
+    this.readiness = { modelReady: snap.modelReady, dshReady: snap.dshReady }
     return runtime
   }
 
@@ -416,9 +416,8 @@ export class ConversationController {
     }
     // Cold conversation: served from its record, full timeline, idle.
     const record = this.displayedRecord?.id === id ? this.displayedRecord : null
-    const savedMode = record?.mode ?? 'claude_code'
-    const availableMode = savedMode === 'claude_code' && this.readiness.claudeCodeReady ? 'claude_code'
-      : savedMode === 'live' && this.readiness.modelReady ? 'live' : 'demo'
+    const savedMode = normalizeModelMode(record?.mode) ?? 'dsh'
+    const availableMode = savedMode === 'live' && this.readiness.modelReady ? 'live' : 'dsh'
     return {
       mode: availableMode,
       avatarState: 'idle',
@@ -431,7 +430,7 @@ export class ConversationController {
       // 首帧会停在“暂不可读取”，直到运行时重新查询。
       contextUsage: record?.contextUsage ?? { status: 'unavailable' },
       modelReady: this.readiness.modelReady,
-      claudeCodeReady: this.readiness.claudeCodeReady,
+      dshReady: this.readiness.dshReady,
       conversationId: id,
       conversationLibrary: library,
       pendingMessages: (this.pending.get(id) ?? []).map(visiblePending)
@@ -577,7 +576,7 @@ export class ConversationController {
   private async setDisplayed(id: string): Promise<ConversationRecord> {
     let record = await this.store.getConversation(id)
     if (!record) {
-      record = await this.store.createConversation('新对话', 'claude_code')
+      record = await this.store.createConversation('新对话', 'dsh')
     }
     const nextLibrary = await this.store.getState()
     const previousId = this.activeId
@@ -699,12 +698,12 @@ export class ConversationController {
         }
         runtime.setLibraries(launch.mcp, launch.plugins)
       }
-      if (runtime.getSnapshot().mode !== 'claude_code' && attachments.some((item) => item.path && !item.content)) {
+      if (runtime.getSnapshot().mode !== 'dsh' && attachments.some((item) => item.path && !item.content)) {
         throw new ConversationStoreError('INVALID_INPUT', '当前模型没有本地文件读取工具。请切换到小鲸引擎模式后再发送此文件。')
       }
       const queue = this.queueOf(id)
       if (this.pausedQueues.has(id) || runtime.getQueuePauseReason()) {
-        if (clean === '/goal clear' && runtime.getSnapshot().mode === 'claude_code') {
+        if (clean === '/goal clear' && runtime.getSnapshot().mode === 'dsh') {
           // Allow a goal-clear command through without releasing older work.
           this.scheduleDrain(id, message, true)
           return visiblePending(message)
@@ -806,7 +805,7 @@ export class ConversationController {
       try {
         await prepared.run
         const snapshot = runtime.getSnapshot()
-        if (snapshot.taskStatus === 'done' && snapshot.mode !== 'demo' && this.turnHooks.afterSuccessfulTurn) {
+        if (snapshot.taskStatus === 'done' && this.turnHooks.afterSuccessfulTurn) {
           const history = runtime.exportConversationState().history
           const last = history.at(-1)
           const turn: CompletedTurn = {
@@ -847,7 +846,7 @@ export class ConversationController {
     const id = conversationId ?? this.activeId
     if (!id) return
     const runtime = this.runtimes.get(id)
-    if (!runtime || runtime.getSnapshot().mode !== 'claude_code') return
+    if (!runtime || runtime.getSnapshot().mode !== 'dsh') return
     if (runtime.isRunning()) await runtime.interruptTurn()
     await this.sendMessage('/goal clear', [], 'queue', id)
   }
@@ -929,7 +928,7 @@ export class ConversationController {
     return this.serialize(async () => {
       const mode = this.displayedRuntime()?.getSnapshot().mode
         ?? this.library?.conversations.find((item) => item.id === this.activeId)?.mode
-        ?? 'claude_code'
+        ?? 'dsh'
       const record = await this.store.createConversation(title, mode)
       return this.setDisplayed(record.id).then(() => record)
     })

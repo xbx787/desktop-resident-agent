@@ -1,6 +1,6 @@
 {
   "name": "desktop-resident-agent",
-  "version": "0.0.109",
+  "version": "0.0.115",
   "private": true,
   "license": "UNLICENSED",
   "author": "DesktopPetProject",
@@ -111,6 +111,20 @@
     "win": {
       "icon": "src/renderer/assets/whale-tray-icon-pixel.ico",
       "target": "dir"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false,
+      "include": "build/installer.nsh",
+      "installerIcon": "src/renderer/assets/whale-tray-icon-pixel.ico",
+      "uninstallerIcon": "src/renderer/assets/whale-tray-icon-pixel.ico",
+      "installerHeaderIcon": "src/renderer/assets/whale-tray-icon-pixel.ico"
     }
   }
 }

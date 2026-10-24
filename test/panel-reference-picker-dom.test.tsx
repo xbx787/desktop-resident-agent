@@ -20,12 +20,12 @@ const settings: ConversationSettings = {
 
 function conversation(id: string, title: string, messageCount: number): ConversationSummary {
   return { id, title, createdAt: '2026-10-13T00:00:00Z', updatedAt: '2026-10-13T01:00:00Z', lastActivityAt: '2026-10-13T01:00:00Z',
-    archivedAt: null, pinnedAt: null, mode: 'claude_code', taskStatus: 'idle', messageCount, preview: '' }
+    archivedAt: null, pinnedAt: null, mode: 'dsh', taskStatus: 'idle', messageCount, preview: '' }
 }
 
 const snapshot: AppSnapshot = {
-  mode: 'claude_code', avatarState: 'idle', taskStatus: 'idle', timeline: [], timelineRevision: 0,
-  modelReady: true, claudeCodeReady: true, conversationId: activeId,
+  mode: 'dsh', avatarState: 'idle', taskStatus: 'idle', timeline: [], timelineRevision: 0,
+  modelReady: true, dshReady: true, conversationId: activeId,
   conversationLibrary: { settings, activeConversationId: activeId, conversations: [
     conversation(activeId, '当前会话', 0), conversation(sourceId, '项目计划', 4)
   ] }, contextUsage: { status: 'unavailable' }

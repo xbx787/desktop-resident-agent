@@ -68,6 +68,32 @@ describe('persistent conversation library', () => {
       .rejects.toMatchObject({ code: 'INVALID_INPUT' })
   })
 
+  it('migrates legacy claude_code records to dsh when the library is opened', async () => {
+    const store = new ConversationStore(testRoot)
+    const legacy = await store.createConversation('旧模式会话', 'dsh')
+    const recordPath = recordFile(testRoot, legacy.id)
+    const record = JSON.parse(await fs.readFile(recordPath, 'utf8')) as { mode: string }
+    record.mode = 'claude_code'
+    await fs.writeFile(recordPath, JSON.stringify(record, null, 2) + '\n', 'utf8')
+    const library = JSON.parse(await fs.readFile(store.filePath, 'utf8')) as {
+      conversations: Array<{ id: string; mode: string }>
+    }
+    const meta = library.conversations.find((item) => item.id === legacy.id)
+    expect(meta).toBeTruthy()
+    meta!.mode = 'claude_code'
+    await fs.writeFile(store.filePath, JSON.stringify(library, null, 2) + '\n', 'utf8')
+
+    const reopened = new ConversationStore(testRoot)
+    expect((await reopened.getConversation(legacy.id))?.mode).toBe('dsh')
+    expect((await reopened.getState()).conversations.find((item) => item.id === legacy.id)?.mode).toBe('dsh')
+    const migratedRecord = JSON.parse(await fs.readFile(recordPath, 'utf8')) as { mode: string }
+    const migratedLibrary = JSON.parse(await fs.readFile(store.filePath, 'utf8')) as {
+      conversations: Array<{ id: string; mode: string }>
+    }
+    expect(migratedRecord.mode).toBe('dsh')
+    expect(migratedLibrary.conversations.find((item) => item.id === legacy.id)?.mode).toBe('dsh')
+  })
+
   it('keeps disk and memory unchanged if a batch write fails, then accepts a retry', async () => {
     const store = new ConversationStore(testRoot)
     const first = await store.createConversation('保留一')
@@ -124,7 +150,7 @@ describe('persistent conversation library', () => {
   it('keeps unlimited conversations while five only controls the quick-switch display', async () => {
     const store = new ConversationStore(testRoot)
     const created = await Promise.all(Array.from({ length: 18 }, (_, index) =>
-      store.createConversation(`会话 ${index + 1}`, 'claude_code')))
+      store.createConversation(`会话 ${index + 1}`, 'dsh')))
 
     expect((await store.getState()).settings.visibleConversationTabs).toBe(5)
     expect((await store.listConversations({ archived: false })).length).toBe(18)
@@ -379,7 +405,7 @@ describe('persistent conversation library', () => {
 
   it('stores complete model history and SDK context independently of a returned object', async () => {
     const store = new ConversationStore(testRoot)
-    const session = await store.createConversation('技术实现', 'claude_code')
+    const session = await store.createConversation('技术实现', 'dsh')
     const history = Array.from({ length: 101 }, (_, index) => ({
       role: index % 2 === 0 ? 'user' as const : 'assistant' as const,
       content: `第 ${index} 条消息`
@@ -437,7 +463,7 @@ describe('persistent conversation library', () => {
 describe('accrued conversation spend', () => {
   it('survives a reload instead of resetting with the process', async () => {
     const store = new ConversationStore(testRoot)
-    const record = await store.createConversation('花了钱的会话', 'claude_code')
+    const record = await store.createConversation('花了钱的会话', 'dsh')
     const metrics = { startedAt: '2026-10-13T02:00:00.000Z', finishedAt: '2026-10-13T02:00:02.000Z',
       usedTokens: 42, usage: { total: 42, input: 30, output: 12 }, spentYuan: 0.4212 }
     await store.updateConversation(record.id, { spentYuan: 0.4212,
@@ -452,9 +478,9 @@ describe('accrued conversation spend', () => {
 describe('listing order follows activity, not edits', () => {
   it('keeps a session in place when it is renamed', async () => {
     const store = new ConversationStore(testRoot)
-    const first = await store.createConversation('一', 'claude_code')
+    const first = await store.createConversation('一', 'dsh')
     await new Promise((resolve) => setTimeout(resolve, 20))
-    await store.createConversation('二', 'claude_code')
+    await store.createConversation('二', 'dsh')
     const before = (await store.getState()).conversations.map((item) => item.id)
     await store.updateConversation(before[1], { title: '改了名的' })
     const after = (await store.getState()).conversations.map((item) => item.id)
@@ -464,9 +490,9 @@ describe('listing order follows activity, not edits', () => {
 
   it('moves a session to the front when a message lands in it', async () => {
     const store = new ConversationStore(testRoot)
-    const older = await store.createConversation('旧的', 'claude_code')
+    const older = await store.createConversation('旧的', 'dsh')
     await new Promise((resolve) => setTimeout(resolve, 20))
-    await store.createConversation('新的', 'claude_code')
+    await store.createConversation('新的', 'dsh')
     await new Promise((resolve) => setTimeout(resolve, 20))
     await store.updateConversation(older.id, {
       timeline: [{ id: 'note', kind: 'system', text: '干过活', time: new Date().toISOString() }]
@@ -479,7 +505,7 @@ describe('listing order follows activity, not edits', () => {
 describe('search matches every word', () => {
   it('finds a message that has both words anywhere, in any order', async () => {
     const store = new ConversationStore(testRoot)
-    const record = await store.createConversation('格式修正', 'claude_code')
+    const record = await store.createConversation('格式修正', 'dsh')
     await store.updateConversation(record.id, {
       timeline: [{ id: 'u', kind: 'user', text: '先看范围，再改格式。', time: new Date().toISOString() }]
     })
@@ -492,8 +518,8 @@ describe('search matches every word', () => {
 describe('per-conversation storage', () => {
   it('isolates a damaged record so the rest of the library survives', async () => {
     const store = new ConversationStore(testRoot)
-    const healthy = await store.createConversation('健康的', 'claude_code')
-    const broken = await store.createConversation('坏掉的', 'claude_code')
+    const healthy = await store.createConversation('健康的', 'dsh')
+    const broken = await store.createConversation('坏掉的', 'dsh')
     await store.updateConversation(healthy.id, {
       timeline: [{ id: 't', kind: 'user', text: '内容', time: new Date().toISOString() }]
     })

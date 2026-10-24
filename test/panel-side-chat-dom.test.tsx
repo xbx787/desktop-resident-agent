@@ -15,19 +15,19 @@ const settings: ConversationSettings = {
 }
 
 const mainSnapshot: AppSnapshot = {
-  mode: 'claude_code', avatarState: 'idle', taskStatus: 'idle', modelReady: true, claudeCodeReady: true,
+  mode: 'dsh', avatarState: 'idle', taskStatus: 'idle', modelReady: true, dshReady: true,
   conversationId: 'main-a', timelineRevision: 1,
   timeline: [{ id: 'main-entry', kind: 'assistant', time: '2026-10-15T10:00:00.000Z', text: '主线里的内容' }],
   conversationLibrary: {
     settings, activeConversationId: 'main-a',
     conversations: [{ id: 'main-a', title: '主线', createdAt: '2026-10-15T10:00:00.000Z',
       updatedAt: '2026-10-15T10:00:00.000Z', lastActivityAt: '2026-10-15T10:00:00.000Z',
-      archivedAt: null, pinnedAt: null, mode: 'claude_code', taskStatus: 'idle', messageCount: 1, preview: '' }]
+      archivedAt: null, pinnedAt: null, mode: 'dsh', taskStatus: 'idle', messageCount: 1, preview: '' }]
   }
 }
 
 const sideRuntime: AppSnapshot = {
-  mode: 'claude_code', avatarState: 'idle', taskStatus: 'idle', modelReady: true, claudeCodeReady: true,
+  mode: 'dsh', avatarState: 'idle', taskStatus: 'idle', modelReady: true, dshReady: true,
   conversationId: 'side-1', timelineRevision: 1,
   timeline: [{ id: 'side-entry', kind: 'assistant', time: '2026-10-15T10:01:00.000Z', text: '临时会话里的内容' }]
 }

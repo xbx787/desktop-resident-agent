@@ -6,7 +6,7 @@ import { EFFORT_LABELS } from '../shared/effort';
 import { EffortSlider } from './effort-slider';
 import { EventImages } from './event-images';
 import { formatSelectionQuote } from './message-quote';
-import { mcpToolRef, toolLabel } from '../shared/tool-labels';
+import { mcpServerLabel, mcpToolRef, toolLabel } from '../shared/tool-labels';
 import { AttachmentPreview, previewPlacement, type PreviewPlacement } from './attachment-preview';
 import { agentTasks } from './agent-tasks';
 import { fileBadge, splitAttachmentNote } from './attachment-note';
@@ -252,7 +252,7 @@ function stampText(iso: string): string {
   return `${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}`;
 }
 
-const modeLabels: Record<ModelMode, string> = { demo: '演示模式', live: 'DeepSeek 直连', claude_code: '小鲸引擎 + DeepSeek' };
+const modeLabels: Record<ModelMode, string> = { live: 'DeepSeek 直连', dsh: '小鲸引擎 + DeepSeek' };
 
 /** First line of a user message, trimmed for the turn menu's title. */
 function turnMenuTitle(entry: TimelineEntry): string {
@@ -367,7 +367,7 @@ export const TimelineItem = memo(function TimelineItem({ entry, running = false,
     const mcp = mcpToolRef(name);
     const mcpToolLabel = mcp ? toolLabel(mcp.tool) : '';
     const rowLabel = mcp
-      ? `${mcp.server} · ${mcpToolLabel === '外部工具' || mcpToolLabel === '工具' ? mcp.tool : mcpToolLabel}`
+      ? `${mcpServerLabel(mcp.server)} · ${mcpToolLabel === '外部工具' || mcpToolLabel === '工具' ? mcp.tool : mcpToolLabel}`
       : label;
     const rowDetail = display.toolRowDetail ?? 'brief';
     const rawArgument = abbreviateWorkspace(toolArgumentPreview(entry.tool?.input), display.workspace);
@@ -677,6 +677,17 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
       document.body.classList.remove('panel-placement-right');
     };
   }, [placement]);
+  // 尾巴指向人物：主进程按人物中心算好相对面板窗口的左缘距离。
+  useEffect(() => {
+    if (!document.body.classList.contains('panel-window')) return;
+    const unsubscribe = window.pet.onPanelTailX((x) => {
+      document.body.style.setProperty('--panel-tail-x', `${x}px`);
+    });
+    return () => {
+      unsubscribe();
+      document.body.style.removeProperty('--panel-tail-x');
+    };
+  }, []);
   // 主题只作用于聊天面板；状态色在 CSS 里单独成组，不跟主题覆盖。
   const panelTheme = mainSnapshot?.conversationLibrary?.settings.panelTheme ?? 'dark';
   useEffect(() => {
@@ -833,7 +844,6 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
   const feedWrapRef = useRef<HTMLDivElement>(null);
   const openImageViewer = useCallback((name: string, url: string) => setImageViewer({ name, url }), []);
   openImageViewerRef.current = openImageViewer;
-  const [quoteSelection, setQuoteSelection] = useState<{ text: string; x: number; y: number } | null>(null);
   const composerStash = useRef(new Map<string, StashedComposer<DroppedAttachment>>());
   const goalPromptStash = useRef(new Map<string, boolean>());
   const composerStateRef = useRef({ draft, attachments });
@@ -1267,14 +1277,14 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
   // turn finishes: loading a conversation resets it to "unreadable", and waiting
   // for the next reply (or opening the model picker) left it blank for minutes.
   useEffect(() => {
-    if (snapshot?.mode !== 'claude_code') return;
+    if (snapshot?.mode !== 'dsh') return;
     refreshContextUsage();
   }, [library?.activeConversationId, snapshot?.mode, sideSessionId, sideExpanded]);
 
   // A finished turn just changed the context: refresh the meter on its own
   // instead of waiting for someone to open the model picker.
   useEffect(() => {
-    if (!snapshot?.taskMetrics?.finishedAt || snapshot?.mode !== 'claude_code') return;
+    if (!snapshot?.taskMetrics?.finishedAt || snapshot?.mode !== 'dsh') return;
     refreshContextUsage();
   }, [snapshot?.taskMetrics?.finishedAt, snapshot?.mode, sideSessionId, sideExpanded]);
 
@@ -1382,9 +1392,9 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
 
   useEffect(() => {
     voiceManagerRef.current?.updateFromSnapshot(snapshot ?? {
-      mode: 'demo',
+      mode: 'dsh',
       modelReady: false,
-      claudeCodeReady: false,
+      dshReady: false,
       avatarState: 'idle',
       taskStatus: 'idle',
       timeline: [],
@@ -2431,47 +2441,32 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
     };
   }, [composerOpen]);
 
-  // Selecting text inside a message floats a 引用／复制 bar over the feed; the
-  // mousedown handler clears it, and the bar itself cancels that clear so the
-  // click can read the selection back.
+  // 选中消息文字后右键：弹系统菜单，选“引用”放进输入框，或在原地复制。
   useEffect(() => {
     if (!visible) return;
-    const onMouseUp = (): void => {
-      const wrap = feedWrapRef.current;
+    const onContextMenu = (event: globalThis.MouseEvent): void => {
       const selection = window.getSelection?.();
       const text = selection?.toString().trim() ?? '';
+      if (!text) return;
       const anchor = selection?.anchorNode;
       const element = anchor instanceof Element ? anchor : anchor?.parentElement ?? null;
       const message = element?.closest('.panel-event-assistant, .panel-event-user') ?? null;
-      if (!text || !selection?.rangeCount || !message || !wrap?.contains(message)) { setQuoteSelection(null); return; }
-      const range = selection.getRangeAt(0).getBoundingClientRect();
-      if (!range.width && !range.height) { setQuoteSelection(null); return; }
-      const frame = wrap.getBoundingClientRect();
-      // The bar rides above the selection: the drag ends with the pointer just
-      // below it, and a bar in that spot sits under the cursor's own shadow.
-      // Only when the selection is too close to the top does it drop below.
-      const above = range.top - frame.top - 30;
-      setQuoteSelection({
-        text,
-        // 52 ≈ half of the 引用＋复制 capsule, so it never slides off the edge.
-        x: Math.max(52, Math.min(range.left + range.width / 2 - frame.left, frame.width - 52)),
-        y: above >= 6 ? above : range.bottom - frame.top + 6
-      });
+      if (!message || !feedWrapRef.current?.contains(message)) return;
+      event.preventDefault();
+      void window.pet.showTextMenu({ text })
+        .then((action) => {
+          if (action === 'quote') applyQuote(text);
+          else if (action === 'copy') void writeClipboard(text);
+        })
+        .catch(() => undefined);
     };
-    const onMouseDown = (): void => setQuoteSelection(null);
-    document.addEventListener('mouseup', onMouseUp);
-    document.addEventListener('mousedown', onMouseDown);
-    return () => {
-      document.removeEventListener('mouseup', onMouseUp);
-      document.removeEventListener('mousedown', onMouseDown);
-    };
+    document.addEventListener('contextmenu', onContextMenu);
+    return () => document.removeEventListener('contextmenu', onContextMenu);
   }, [visible]);
 
-  function applyQuote(): void {
-    const selected = quoteSelection;
-    if (!selected) return;
-    setQuoteSelection(null);
-    const block = formatSelectionQuote(selected.text);
+  function applyQuote(text: string): void {
+    if (!text) return;
+    const block = formatSelectionQuote(text);
     setDraft((current) => (current.trim() ? `${current.trimEnd()}\n\n${block}\n` : `${block}\n`));
     setComposerOpen(true);
     requestAnimationFrame(() => {
@@ -2480,16 +2475,6 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
       editor.focus();
       editor.setSelectionRange(editor.value.length, editor.value.length);
     });
-  }
-
-  // Copy is the quiet sibling of 引用: same selection, straight to the
-  // clipboard, no toast (the standard keeps success silent; the bar closing
-  // is the acknowledgement).
-  async function copyQuote(): Promise<void> {
-    const selected = quoteSelection;
-    if (!selected) return;
-    setQuoteSelection(null);
-    await writeClipboard(selected.text);
   }
 
   // A popover owns Escape while it is open: the first Esc closes the popover, a
@@ -2622,6 +2607,29 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
     setResizingPanel(true);
     petBridge().resizeGhost({ x: event.screenX, y: event.screenY });
   }
+  // 尾巴尖上的小白点：横向拖人物。y 固定为按下时的屏幕坐标，主进程把人物
+  // 限制在屏幕工作区内，左右不会出界。
+  const tailDrag = useRef<{ pointerId: number; screenY: number } | null>(null);
+  function beginTailDrag(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    tailDrag.current = { pointerId: event.pointerId, screenY: event.screenY };
+    void petBridge().beginDrag({ x: event.screenX, y: event.screenY });
+  }
+  function moveTailDrag(event: ReactPointerEvent<HTMLDivElement>): void {
+    const session = tailDrag.current;
+    if (!session || session.pointerId !== event.pointerId) return;
+    void petBridge().dragMove({ x: event.screenX, y: session.screenY });
+  }
+  function endTailDrag(event: ReactPointerEvent<HTMLDivElement>): void {
+    const session = tailDrag.current;
+    if (!session) return;
+    tailDrag.current = null;
+    try { event.currentTarget.releasePointerCapture(session.pointerId); } catch { /* 已释放 */ }
+    void petBridge().endDrag();
+  }
   function beginWindowDrag(event: ReactPointerEvent<HTMLElement>, fromHeader = false): void {
     // 顶栏空白也允许拖整组窗口；按钮、标签、输入框都留给它们自己。
     if (event.button !== 0 || (!fromHeader && event.target !== event.currentTarget)) return;
@@ -2730,6 +2738,8 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
       void addFiles(Array.from(event.dataTransfer.files));
     }}>
       {expanded && <div className={`panel-resize-grip${resizingPanel ? ' is-resizing' : ''}`} role="separator" aria-label="调整面板大小" onPointerDown={beginPanelResize} onPointerMove={movePanelResize} onPointerUp={endPanelResize} onPointerCancel={endPanelResize} onLostPointerCapture={() => endPanelResize()} />}
+      {!compactEmpty && <div className="panel-tail-dot" role="separator" aria-label="左右拖动人物" title="左右拖动人物"
+        onPointerDown={beginTailDrag} onPointerMove={moveTailDrag} onPointerUp={endTailDrag} onPointerCancel={endTailDrag} />}
       {(!compactEmpty || composerOpen) && <button type="button" className="panel-expand-toggle panel-window-action" aria-label={expanded ? '还原对话气泡' : '放大对话气泡'} title={expanded ? '还原对话' : '放大对话'} onClick={() => { void toggleExpanded().catch(() => undefined); }}>
         {expanded ? <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 8h4V4M12 4v4h4M16 12h-4v4M8 16v-4H4" /></svg> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M8 4H4v4M12 4h4v4M16 12v4h-4M4 12v4h4" /></svg>}
       </button>}
@@ -2883,11 +2893,10 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
           <div className="panel-feed" ref={feedRef} aria-label="对话与任务时间线" onScroll={(event) => {
             const feed = event.currentTarget;
             // 切换对话后的程序滚动保持跟随，不算用户离开底部。
-            if (switchJumpRef.current) { followFeedRef.current = true; setFeedAtBottom(true); setQuoteSelection(null); return; }
+            if (switchJumpRef.current) { followFeedRef.current = true; setFeedAtBottom(true); return; }
             const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 48;
             followFeedRef.current = atBottom;
             setFeedAtBottom(atBottom);
-            setQuoteSelection(null);
             // Reaching the top pulls in the next stretch of older history.
             if (feed.scrollTop < 240) loadEarlier();
           }}>
@@ -2965,26 +2974,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
               />
             )}
           </div>
-          {quoteSelection && <div
-            className="panel-quote-bar"
-            style={{ left: quoteSelection.x, top: quoteSelection.y }}
-            onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
-          >
-            <button
-              type="button"
-              className="panel-quote-button"
-              aria-label="引用选中内容"
-              title="把选中的内容作为引用放进输入框"
-              onClick={applyQuote}
-            >引用</button>
-            <button
-              type="button"
-              className="panel-quote-button"
-              aria-label="复制选中内容"
-              title="复制选中的内容"
-              onClick={() => { void copyQuote(); }}
-            >复制</button>
-          </div>}
+
           {!feedAtBottom && !modelPickerOpen && !effortMenuOpen && !contextMenuOpen && <button
             type="button"
             className={`panel-scroll-bottom${active ? ' is-running' : ''}`}
@@ -3072,7 +3062,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
                   maxLength={8000}
                   rows={1}
                   style={{ height: composerHeight }}
-                  placeholder={sideExpanded ? '在临时会话中提问…' : goalPrompting ? '写清目标与可验证的完成标准，回车设定' : '输入消息…（Enter 发送 · Ctrl+Enter 插话 · Esc 打断）'}
+                  placeholder={sideExpanded ? '在临时会话中提问…' : goalPrompting ? '写清目标，回车设定；按 Tab 补上“在把我交代的任务全部完成之前不要停下”' : '输入消息…（Enter 发送 · Ctrl+Enter 插话 · Esc 打断）'}
                   aria-controls={suggestionOpen ? 'panel-composer-suggestions' : undefined}
                   aria-expanded={suggestionOpen && (suggestionLoading || suggestionItems.length > 0)}
                   aria-activedescendant={suggestionOpen && suggestionItems.length > 0 ? `panel-suggestion-${suggestionSelected}` : undefined}
@@ -3111,6 +3101,19 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
                         return;
                       }
                     }
+                    // 目标模式：Tab 直接补上“全部完成前不要停”，再回车就设定。
+                    if (goalPrompting && event.key === 'Tab' && !event.nativeEvent.isComposing) {
+                      event.preventDefault();
+                      const editor = editorRef.current;
+                      if (!editor || editor.value.trim()) return;
+                      const defaultGoal = '在把我交代的任务全部完成之前不要停下';
+                      setDraft(defaultGoal);
+                      requestAnimationFrame(() => {
+                        editor.focus();
+                        editor.setSelectionRange(defaultGoal.length, defaultGoal.length);
+                      });
+                      return;
+                    }
                     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                       event.preventDefault();
                       void send(event.ctrlKey || event.metaKey ? 'steer' : 'queue');
@@ -3137,20 +3140,20 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
                         顺序固定，图标在前；菜单外面不再单独摆目标/计划按钮。 */}
                     <div className="panel-popover-modes">
                       <div className="panel-popover-heading">模式</div>
-                      <button type="button" role="switch" aria-checked={goalPrompting || Boolean(snapshot?.goal)} className={`panel-mode-toggle is-goal${goalPrompting || snapshot?.goal ? ' is-on' : ''}`} disabled={sideExpanded || snapshot?.mode !== 'claude_code'}
-                        title={goalPrompting || snapshot?.goal ? '关闭目标模式' : '打开后在输入框里写下目标并回车'}
+                      <button type="button" role="switch" aria-checked={goalPrompting || Boolean(snapshot?.goal)} className={`panel-mode-toggle is-goal${goalPrompting || snapshot?.goal ? ' is-on' : ''}`} disabled={sideExpanded || snapshot?.mode !== 'dsh'}
+                        title={goalPrompting || snapshot?.goal ? '关闭目标模式' : '打开后写目标；按 Tab 补上“全部完成前不要停”，回车设定'}
                         onClick={toggleGoal}>
                         <span className="panel-mode-toggle-main"><span className="panel-mode-icon"><GoalIcon /></span><span>目标模式</span></span>
                         <span className="panel-mode-switch" aria-hidden="true" />
                       </button>
-                      <button type="button" role="switch" aria-checked={Boolean(snapshot?.planMode)} className={`panel-mode-toggle is-plan${snapshot?.planMode ? ' is-on' : ''}`} disabled={snapshot?.mode !== 'claude_code'}
+                      <button type="button" role="switch" aria-checked={Boolean(snapshot?.planMode)} className={`panel-mode-toggle is-plan${snapshot?.planMode ? ' is-on' : ''}`} disabled={snapshot?.mode !== 'dsh'}
                         onClick={() => { void choosePlanMode(!snapshot?.planMode); }}>
                         <span className="panel-mode-toggle-main"><span className="panel-mode-icon"><PlanIcon /></span><span>计划模式</span></span>
                         <span className="panel-mode-switch" aria-hidden="true" />
                       </button>
                       <button type="button" role="switch" aria-checked={library?.settings.webSearchEnabled !== false}
                         className={`panel-mode-toggle is-web${library?.settings.webSearchEnabled !== false ? ' is-on' : ''}`}
-                        disabled={sideExpanded || snapshot?.mode !== 'claude_code'}
+                        disabled={sideExpanded || snapshot?.mode !== 'dsh'}
                         title={library?.settings.webSearchEnabled !== false ? '关闭后模型不会尝试联网搜索' : '打开后模型可以联网搜索'}
                         onClick={() => { void run((bridge) => bridge.setWebSearchEnabled(library?.settings.webSearchEnabled === false)); }}>
                         <span className="panel-mode-toggle-main"><span className="panel-mode-icon"><WebSearchIcon /></span><span>联网搜索</span></span>
@@ -3183,7 +3186,7 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
                     <EffortSlider value={snapshot?.effort ?? 'max'} disabled={!snapshot} onCommit={chooseEffort} />
                   </div>
                 </div>}
-                {snapshot?.mode === 'claude_code' && <div className="panel-approval-wrap" ref={approvalMenuRef}>
+                {snapshot?.mode === 'dsh' && <div className="panel-approval-wrap" ref={approvalMenuRef}>
                   <button type="button" className={`panel-tool-button panel-approval-button is-${approvalMode === 'workspace-write' ? 'write' : approvalMode === 'danger-full-access' ? 'bypass' : approvalMode === 'selfEvolve' ? 'evolve' : 'readonly'}`}
                     aria-label={`审批模式：${APPROVAL_MODE_LABELS[approvalMode]}`}
                     aria-haspopup="dialog" aria-expanded={approvalMenuOpen}
@@ -3232,13 +3235,13 @@ export function PanelBubble({ visible, snapshot: mainSnapshot, error, run, direc
                       }}>
                       自动压缩阈值 {library?.settings.autoCompactPercent ?? AUTO_COMPACT_DEFAULT_PERCENT}%
                     </div>
-                    <button type="button" className="panel-compact-button" disabled={contextCompacting || !snapshot || snapshot.mode === 'demo'} onClick={() => { void compactContext(); }}>{contextCompacting ? '压缩中…' : '压缩上下文'}</button>
+                    <button type="button" className="panel-compact-button" disabled={contextCompacting || !snapshot || !snapshot.dshReady} onClick={() => { void compactContext(); }}>{contextCompacting ? '压缩中…' : '压缩上下文'}</button>
                   </div>
                 </div>
                 <VoiceButton phase={voicePhase}
                   canListen={voiceReady && Boolean(voiceManagerRef.current?.available ?? voiceConfig?.siliconFlowAvailable)}
                   disabled={Boolean(busy) && voicePhase === 'idle'} onToggle={toggleVoice} />
-                <button type={active && !draft.trim() && !attachments.length ? 'button' : 'submit'} className={`panel-send${sendingCurrent ? ' is-sending' : ''}`} disabled={(!active && !draft.trim() && !attachments.length) || Boolean(busy) || sendingCurrent || !snapshot || (contextCompacting && !(active && !draft.trim() && !attachments.length))} aria-label={goalPrompting ? '设定目标' : sendingCurrent ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务' : active ? '排队发送消息' : '发送消息'} title={goalPrompting ? '回车设定目标' : sendingCurrent ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务（Esc）' : active ? snapshot?.mode === 'claude_code' ? 'Enter 排队发送，Ctrl+Enter 插队发送' : 'Enter 排队发送，Ctrl+Enter 优先排队' : '发送消息（Enter）'} onClick={active && !draft.trim() && !attachments.length ? () => { void stop(); } : undefined}>
+                <button type={active && !draft.trim() && !attachments.length ? 'button' : 'submit'} className={`panel-send${sendingCurrent ? ' is-sending' : ''}`} disabled={(!active && !draft.trim() && !attachments.length) || Boolean(busy) || sendingCurrent || !snapshot || (contextCompacting && !(active && !draft.trim() && !attachments.length))} aria-label={goalPrompting ? '设定目标' : sendingCurrent ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务' : active ? '排队发送消息' : '发送消息'} title={goalPrompting ? '回车设定目标' : sendingCurrent ? '发送中…' : active && !draft.trim() && !attachments.length ? '停止任务（Esc）' : active ? snapshot?.mode === 'dsh' ? 'Enter 排队发送，Ctrl+Enter 插队发送' : 'Enter 排队发送，Ctrl+Enter 优先排队' : '发送消息（Enter）'} onClick={active && !draft.trim() && !attachments.length ? () => { void stop(); } : undefined}>
                   {sendingCurrent ? <span className="panel-send-spinner" aria-hidden="true" /> : active && !draft.trim() && !attachments.length ? <span className="panel-stop-square" /> : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11m-5-5 5 5-5 5" /></svg>}
                 </button>
               </div>

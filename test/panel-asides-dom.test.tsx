@@ -19,7 +19,7 @@ const settings: ConversationSettings = {
 
 const conversation: ConversationSummary = {
   id: 'a', title: '会话 a', createdAt: '2026-10-15T00:00:00.000Z', updatedAt: '2026-10-15T00:00:00.000Z',
-  lastActivityAt: '2026-10-15T00:00:00.000Z', archivedAt: null, pinnedAt: null, mode: 'claude_code',
+  lastActivityAt: '2026-10-15T00:00:00.000Z', archivedAt: null, pinnedAt: null, mode: 'dsh',
   taskStatus: 'idle', messageCount: 4, preview: ''
 }
 
@@ -34,8 +34,8 @@ const timeline: TimelineEntry[] = [
 ]
 
 const snapshot: AppSnapshot = {
-  mode: 'claude_code', avatarState: 'idle', taskStatus: 'idle',
-  timeline, timelineRevision: 1, modelReady: true, claudeCodeReady: true,
+  mode: 'dsh', avatarState: 'idle', taskStatus: 'idle',
+  timeline, timelineRevision: 1, modelReady: true, dshReady: true,
   conversationId: 'a',
   conversationLibrary: { settings, activeConversationId: 'a', conversations: [conversation] }
 }

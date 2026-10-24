@@ -88,7 +88,7 @@ npm.cmd run dev
 
 - **DeepSeek Harness（DSH）**：© DeepSeek，按 MIT 许可证使用。发布包携带裁剪后的 DSH 运行时；小鲸通过配置和可复现补丁接入 ACP，不包含 DSH Web 界面。
 - **模型端点**：默认使用用户自行配置的 DeepSeek API，也可配置应用支持的其他端点。每位使用者需使用自己的密钥；本项目不代付、不转售或中介模型用量。本项目与 DeepSeek 无隶属或背书关系。
-- **旧版兼容代码**：仓库及构建产物仍保留部分历史 Claude Agent SDK 适配器和成长实验兼容代码，用于迁移与回归；当前对话内核不加载 Claude Code，发布包不携带或启动 `claude.exe`。
+- **旧版兼容代码**：仓库及构建产物仍保留部分历史 Claude Agent SDK 适配器和成长实验兼容代码，用于迁移与回归；当前对话内核不加载 Claude Code，发布包不携带或启动 `claude.exe`。旧会话记录里的 `claude_code` 模式名会在加载时自动迁移为 `dsh`，新记录只写 `dsh`。
 - **角色素材**：角色立绘来自公开角色页，权利归原作者或权利方所有，仅作个人桌面使用；公开分发前请确认授权或替换为原创素材。
 - **Live2D Cubism Core**：© Live2D Inc.，按 [Live2D Proprietary Software License Agreement](https://www.live2d.com/eula/live2d-proprietary-software-license-agreement_en.html) 作为 Redistributable Code 随应用分发。原始版权声明不得修改或移除；来源、获取日期和 SHA-256 见 `resources/live2d/NOTICE.md`。正式公开发布前请复核当前 Live2D 的分发条款。
 - **Arch-chan 模型**：CC0 1.0 Universal，来源 [Speykious/arch-chan](https://github.com/Speykious/arch-chan)，仅作 Live2D 技术预览，不是小鲸的默认形象或人设素材。

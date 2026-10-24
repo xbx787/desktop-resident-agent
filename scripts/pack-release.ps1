@@ -61,6 +61,16 @@ if (-not (Test-Path -LiteralPath $exe) -or -not (Test-Path -LiteralPath $icon)) 
   throw 'Packaged executable or icon is missing.'
 }
 
+# 用已验证的 win-unpacked 生成安装包：不重新打包，避免把修复前的链接带进去。
+$nsisTemp = Join-Path $releaseDir '.nsis-temp'
+New-Item -ItemType Directory -Force -Path $nsisTemp | Out-Null
+$env:TEMP = $nsisTemp
+$env:TMP = $nsisTemp
+$env:ELECTRON_BUILDER_CACHE = Join-Path $projectRoot '.cache\electron-builder'
+& npx electron-builder --win nsis "--prepackaged=$unpacked" "--config.directories.output=$releaseDir"
+if ($LASTEXITCODE -ne 0) { throw 'Installer build failed.' }
+Remove-Item -LiteralPath $nsisTemp -Recurse -Force -ErrorAction SilentlyContinue
+
 if (-not $NoShortcutSwitch) {
   if ((Split-Path -Leaf $releaseBase) -ne 'release') { throw 'Shortcut switch needs a release root named release.' }
   & (Join-Path $PSScriptRoot 'switch-shortcuts.ps1') -ProjectRoot (Split-Path -Parent $releaseBase) -ReleaseDir $releaseDir

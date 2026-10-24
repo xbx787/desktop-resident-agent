@@ -235,6 +235,24 @@ describe('TurnStats', () => {
     expect(peak).toContain('<i class="panel-turn-tier is-peak">峰</i>')
   })
 
+  it('keeps a readable token figure when a turn was interrupted or only a bare total survived', () => {
+    const reply: TimelineEntry = { id: 'a1', kind: 'assistant', time: '2026-10-10T10:00:06.000Z', text: '停在这里。' }
+    // 中断后只剩总 token：显示数字，费用单独标「未统计」，绝不退回「用量未记录」。
+    const interrupted = renderToStaticMarkup(<TurnStats running={false} entries={[reply]} metrics={{
+      startedAt: '2026-10-10T10:00:00.000Z', finishedAt: '2026-10-10T10:00:08.000Z', usedTokens: 1234
+    }} showMissingUsage />)
+    expect(interrupted).toContain('1.2K token')
+    expect(interrupted).not.toContain('用量未记录')
+    expect(interrupted).toContain('费用未统计')
+
+    // 只有 usage.total 的路径同样不能说是「未记录」。
+    const bare = renderToStaticMarkup(<TurnStats running={false} entries={[]} metrics={{
+      startedAt: '2026-10-10T10:00:00.000Z', finishedAt: '2026-10-10T10:00:08.000Z', usage: { total: 1234 }
+    }} showMissingUsage />)
+    expect(bare).toContain('1.2K token')
+    expect(bare).not.toContain('用量未记录')
+  })
+
   it('gives the rule a result under it even while the turn still runs', () => {
     const usage = { total: 1_936_000, input: 160_000, output: 120_000, cacheRead: 1_620_000, cacheCreate: 36_000 }
     const html = renderToStaticMarkup(<TurnStats running entries={[]} metrics={{

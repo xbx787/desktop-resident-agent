@@ -33,7 +33,7 @@ const ROOTS: Array<{ css: string; root: RegExp }> = [
  *  re-checks this against the real cascade when run under Electron. */
 const BUTTON_CLASSES = [
   'panel-ask-tab', 'panel-ask-option', 'panel-ask-skip', 'panel-ask-submit',
-  'panel-plan-revise', 'panel-plan-approve', 'panel-quote-button', 'panel-tasks-summary',
+  'panel-plan-revise', 'panel-plan-approve', 'panel-tasks-summary',
   'panel-compact-button'
 ]
 

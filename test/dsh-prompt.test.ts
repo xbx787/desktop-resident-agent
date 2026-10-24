@@ -12,9 +12,12 @@ describe('DSH 宿主规则', () => {
     expect(off).not.toContain('优先使用 mcp__pet__deepseek_search')
   })
 
-  it('始终要求命令写中文说明，并让模型用文字提问', () => {
+  it('始终要求命令写中文说明、思考链也用中文', () => {
     const rules = buildDshHostRules({ webSearchEnabled: true })
     expect(rules).toContain('description 字段必须用简短中文')
+    expect(rules).toContain('思考链（thinking / 推理过程）也必须用中文写')
+    expect(rules).toContain('data/memory/NOTES.md')
+    expect(rules).toContain('不读就等于没有')
     expect(rules).toContain('直接用文字提问')
     expect(rules).toContain('不要调用 create_goal')
     expect(rules).toContain('每做完一小步')

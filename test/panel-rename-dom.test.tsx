@@ -21,13 +21,13 @@ function conversation(id: string, title: string): ConversationSummary {
   const now = new Date().toISOString()
   return {
     id, title, createdAt: now, updatedAt: now, lastActivityAt: now, archivedAt: null, pinnedAt: null,
-    mode: 'claude_code', taskStatus: 'idle', messageCount: 1, preview: '预览'
+    mode: 'dsh', taskStatus: 'idle', messageCount: 1, preview: '预览'
   }
 }
 
 function snapshot(): AppSnapshot {
   return {
-    mode: 'claude_code', avatarState: 'idle', taskStatus: 'idle', modelReady: true, claudeCodeReady: true,
+    mode: 'dsh', avatarState: 'idle', taskStatus: 'idle', modelReady: true, dshReady: true,
     conversationId: 'a', timelineRevision: 1,
     timeline: [{ id: 'notice', kind: 'system', text: '准备就绪', time: new Date().toISOString() }],
     conversationLibrary: {

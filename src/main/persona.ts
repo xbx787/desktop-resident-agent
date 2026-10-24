@@ -1,9 +1,37 @@
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { DEFAULT_PERSONA_ID, personaById } from '../shared/personas'
 
 /** Current user's character preference. Public builds can supply a neutral address. */
 export interface PersonaOptions {
   userAddress?: string
   assistantName?: string
+}
+
+/** 人格文件目录，形如 data/persona/<id>.md。为空时只使用内置预设。 */
+let personaDirectory: string | null = null
+
+/** 由主进程启动时注入；测试和库用法不调用时保持内置行为。 */
+export function setPersonaDirectory(directory: string | null): void {
+  personaDirectory = directory
+}
+
+function cleanName(value: string | undefined, fallback: string): string {
+  return (value ?? fallback).replace(/[\r\n\u0000-\u001f]/gu, '').slice(0, 24) || fallback
+}
+
+/** 读取 data/persona/<id>.md，替换 {{address}} 与 {{name}}；不存在或为空时返回 null。 */
+function readPersonaFile(id: string, address: string, name: string): string | null {
+  if (!personaDirectory) return null
+  try {
+    const text = readFileSync(path.join(personaDirectory, `${id}.md`), 'utf8')
+      .replace(/\{\{address\}\}/gu, address)
+      .replace(/\{\{name\}\}/gu, name)
+      .trim()
+    return text || null
+  } catch {
+    return null
+  }
 }
 
 /** 工作规则与人设解耦：换性格只换前面那段，工具、汇报、诚信这些不变。 */
@@ -25,11 +53,14 @@ function coreRules(address: string, name: string): string {
   ].join('\n')
 }
 
-/** 按当前预设生成人设：默认小鲸走原来的完整文本，其他预设只替换性格段。 */
+/** 按当前预设生成人设：优先 data/persona/<id>.md，读不到再回退内置预设。 */
 export function buildPersona(personaId: string | null | undefined, options: PersonaOptions = {}): string {
   const preset = personaById(personaId)
+  const address = cleanName(options.userAddress ?? '主人', '你')
+  const name = cleanName(options.assistantName, preset.name)
+  const fromFile = readPersonaFile(preset.id, address, name)
+  if (fromFile) return fromFile
   if (preset.id === DEFAULT_PERSONA_ID) return buildXiaojingPersona(options)
-  const address = (options.userAddress ?? '主人').replace(/[\r\n\u0000-\u001f]/gu, '').slice(0, 24) || '你'
   return `${preset.persona}\n${coreRules(address, preset.name)}`
 }
 

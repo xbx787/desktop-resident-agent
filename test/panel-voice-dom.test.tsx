@@ -17,11 +17,11 @@ const settings: ConversationSettings = {
 }
 
 const snapshot: AppSnapshot = {
-  mode: 'claude_code', avatarState: 'idle', taskStatus: 'idle', timeline: [], timelineRevision: 0,
-  modelReady: true, claudeCodeReady: true, conversationId: activeId,
+  mode: 'dsh', avatarState: 'idle', taskStatus: 'idle', timeline: [], timelineRevision: 0,
+  modelReady: true, dshReady: true, conversationId: activeId,
   conversationLibrary: { settings, activeConversationId: activeId, conversations: [
     { id: activeId, title: '当前会话', createdAt: '2026-10-18T00:00:00Z', updatedAt: '2026-10-18T00:00:00Z',
-      lastActivityAt: '2026-10-18T00:00:00Z', archivedAt: null, pinnedAt: null, mode: 'claude_code',
+      lastActivityAt: '2026-10-18T00:00:00Z', archivedAt: null, pinnedAt: null, mode: 'dsh',
       taskStatus: 'idle', messageCount: 0, preview: '' }
   ] }, contextUsage: { status: 'unavailable' }
 }

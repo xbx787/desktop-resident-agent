@@ -32,7 +32,7 @@ function controllerFor(store: ConversationStore): ConversationController {
 describe('the last conversation leaving the tab strip', () => {
   it('publishes the empty library when the only conversation is archived', async () => {
     const store = new ConversationStore(testRoot)
-    const only = await store.createConversation('唯一会话', 'claude_code')
+    const only = await store.createConversation('唯一会话', 'dsh')
     const controller = controllerFor(store)
     await controller.initialize()
     await controller.selectConversation(only.id)
@@ -55,7 +55,7 @@ describe('the last conversation leaving the tab strip', () => {
 
   it('publishes the empty library when the only conversation is deleted', async () => {
     const store = new ConversationStore(testRoot)
-    const only = await store.createConversation('唯一会话', 'claude_code')
+    const only = await store.createConversation('唯一会话', 'dsh')
     const controller = controllerFor(store)
     await controller.initialize()
     await controller.selectConversation(only.id)
@@ -70,7 +70,7 @@ describe('the last conversation leaving the tab strip', () => {
 
   it('hands the panel to the survivor when the displayed conversation is archived', async () => {
     const store = new ConversationStore(testRoot)
-    const first = await store.createConversation('先建的会话', 'claude_code')
+    const first = await store.createConversation('先建的会话', 'dsh')
     const controller = controllerFor(store)
     await controller.initialize()
     const shown = await controller.createConversation('第二个会话')
@@ -84,7 +84,7 @@ describe('the last conversation leaving the tab strip', () => {
 
   it('leaves the displayed conversation alone when a background tab is archived', async () => {
     const store = new ConversationStore(testRoot)
-    const background = await store.createConversation('后台会话', 'claude_code')
+    const background = await store.createConversation('后台会话', 'dsh')
     const controller = controllerFor(store)
     await controller.initialize()
     const shown = await controller.createConversation('显示中的会话')

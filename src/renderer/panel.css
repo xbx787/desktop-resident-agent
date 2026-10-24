@@ -79,13 +79,12 @@ body.panel-direction-down .panel-bubble:not([hidden]) { animation-name: panel-ap
 /* 可见弧线从窗口边缘内缩 3px，和面板自身的圆角边之间留出一点缝；保留
    圆弧两端各约 6px 的直线，不再是光秃秃的四分之一圆。 */
 .panel-resize-grip::before { content: ''; position: absolute; inset: 3px; border: 2px solid rgba(190, 214, 255, .52); border-radius: 15px; clip-path: inset(0 17px 17px 0); opacity: .85; transition: opacity .12s ease, border-color .12s ease, filter .12s ease; pointer-events: none; }
-/* 以原 34×34 热区的中心为准收到 20×20：中心落在面板内 (7,7)，方框范围
-   变成 -3..17；菜单键从 17px 起，紧贴热区右缘。 */
-.panel-resize-grip::after { content: ''; position: absolute; left: -3px; top: -3px; width: 20px; height: 20px; pointer-events: auto; }
+/* 只有左上角 10×10 接收指针：紧贴窗口边缘，不会盖住从 17px 起的会话库按钮。 */
+.panel-resize-grip::after { content: ''; position: absolute; left: 0; top: 0; width: 10px; height: 10px; pointer-events: auto; }
 .panel-resize-grip:hover::before, .panel-resize-grip.is-resizing::before { opacity: 1; border-color: rgba(205, 225, 255, .95); filter: drop-shadow(0 0 3px rgba(160, 205, 255, .55)); }
 body.panel-direction-down .panel-resize-grip { top: auto; bottom: 0; cursor: nesw-resize; }
 body.panel-direction-down .panel-resize-grip::before { clip-path: inset(17px 17px 0 0); }
-body.panel-direction-down .panel-resize-grip::after { top: auto; bottom: -3px; }
+body.panel-direction-down .panel-resize-grip::after { top: auto; bottom: 0; }
 /* While dragging, the cursor must not flip back to text/pointer as the window
    moves under the pointer; remove the class on every way a drag can end. */
 body.is-resizing-panel, body.is-resizing-panel * { cursor: nwse-resize !important; user-select: none !important; }
@@ -124,6 +123,45 @@ body.is-resizing-panel .panel-resize-grip::before {
   clip-path: polygon(0 0, 100% 0, 50% 100%);
   pointer-events: none;
 }
+/* 面板窗口里的尾巴跟着人物走：主进程把人物中心换算成相对窗口左缘的像素。 */
+body.panel-window .panel-bubble:not(.is-empty)::after {
+  left: var(--panel-tail-x, 50%);
+  right: auto;
+  transform: translateX(-50%);
+}
+/* 尾巴尖上的小白点：5px 热区（半径 2.5px），横向拖动人物。只改 x，
+   主进程会把人物限制在屏幕工作区内，左右不会出界。 */
+.panel-tail-dot { display: none; }
+body.panel-window .panel-tail-dot {
+  position: absolute;
+  z-index: 6;
+  left: var(--panel-tail-x, 50%);
+  bottom: -8px;
+  display: block;
+  width: 5px;
+  height: 5px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  transform: translate(-50%, 50%);
+  cursor: ew-resize;
+  touch-action: none;
+}
+.panel-tail-dot::before {
+  content: '';
+  position: absolute;
+  inset: .5px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 3px rgba(160, 205, 255, .55);
+  pointer-events: none;
+}
+body.panel-placement-left .panel-tail-dot,
+body.panel-placement-right .panel-tail-dot { display: none; }
+/* 麦克风按钮完整留在工具栏内：下半部分曾经被裁到不可点。 */
+.panel-composer-toolbar .panel-microphone-button { position: relative; z-index: 3; min-height: 29px; }
 
 /* 贴在人物左侧/右侧时，面板填满窗口高度，不画上下小三角（侧向贴边以窗口
    边缘本身表示方向）。 */
@@ -889,15 +927,7 @@ body.panel-placement-right .panel-bubble::after { display: none; }
 .panel-ask-submit:hover:not(:disabled) { background: #f7d9ab; }
 .panel-ask-submit:disabled { opacity: .55; }
 
-/* The floating quote/copy bar over a text selection in the feed: one capsule
-   holding both actions, split by a hairline — two loose pills read as clutter.
-   Width and wrapping are pinned: with `left` near the right edge a shrink-wrap
-   box used to squeeze into the sliver left of it and stack each label onto its
-   own line, turning the capsule into a ball. */
-.panel-quote-bar { position: absolute; z-index: 9; transform: translateX(-50%); display: flex; align-items: stretch; width: max-content; white-space: nowrap; overflow: hidden; border: 1px solid rgba(190, 213, 253, .32); border-radius: 999px; background: rgba(23, 43, 87, .97); box-shadow: 0 4px 14px rgba(4, 14, 39, .3); }
-.panel-quote-button { padding: 4px 10px; border: 0; color: #dbe8ff; background: transparent; font-family: inherit; font-size: var(--text-xs) !important; }
-.panel-quote-button + .panel-quote-button { border-left: 1px solid rgba(190, 213, 253, .24); }
-.panel-quote-button:hover { background: rgba(41, 66, 122, .98); }
+
 
 /* Pictures ride in the message itself; the file line below shrinks to whatever
    is not an image. Clicking a thumbnail opens the viewer overlay. */

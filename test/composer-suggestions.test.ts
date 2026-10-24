@@ -58,7 +58,7 @@ describe('composer trigger detection', () => {
       id, title: ['当前会话', '项目计划', '旧项目计划'][index],
       createdAt: '2026-10-13T00:00:00Z', updatedAt: `2026-10-13T0${index}:00:00Z`, lastActivityAt: `2026-10-13T0${index}:00:00Z`,
       archivedAt: index === 2 ? '2026-10-13T03:00:00Z' : null,
-      pinnedAt: null, mode: 'claude_code', taskStatus: 'idle', messageCount: index === 0 ? 1 : 4, preview: ''
+      pinnedAt: null, mode: 'dsh', taskStatus: 'idle', messageCount: index === 0 ? 1 : 4, preview: ''
     }));
     const matches = sessionSuggestionItems(summaries, '计划', ids[0]);
     expect(matches.map((item) => item.label)).toEqual(['旧项目计划', '项目计划']);

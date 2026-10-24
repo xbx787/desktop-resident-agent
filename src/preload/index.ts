@@ -95,6 +95,11 @@ const api: PetAPI = {
     ipcRenderer.on('pet:panel-placement', listener)
     return () => ipcRenderer.removeListener('pet:panel-placement', listener)
   },
+  onPanelTailX: (callback) => {
+    const listener = (_event: Electron.IpcRendererEvent, x: number): void => callback(x)
+    ipcRenderer.on('pet:panel-tail-x', listener)
+    return () => ipcRenderer.removeListener('pet:panel-tail-x', listener)
+  },
   onInputActivity: (callback) => {
     const listener = (_event: Electron.IpcRendererEvent, activity: import('../shared/input-activity').InputActivity): void => callback(activity)
     ipcRenderer.on('pet:input-activity', listener)
@@ -106,6 +111,7 @@ const api: PetAPI = {
     return () => ipcRenderer.removeListener('pet:panel-direction', listener)
   },
   showContextMenu: () => ipcRenderer.invoke('pet:show-context-menu'),
+  showTextMenu: (payload) => ipcRenderer.invoke('pet:show-text-menu', payload),
   setBalanceOpen: (open) => ipcRenderer.invoke('pet:set-balance-open', open),
   toggleBalance: () => ipcRenderer.invoke('pet:toggle-balance'),
   onBalanceOpen: (callback) => {

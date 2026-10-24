@@ -3,6 +3,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { DshAcpAgentClient } from '../src/main/dsh-acp-agent'
+import { setPersonaDirectory } from '../src/main/persona'
 import type { DshAcpRuntime } from '../src/main/dsh-acp-runtime'
 import type { PetMcpBridge } from '../src/main/pet-mcp-server'
 
@@ -38,7 +39,18 @@ class FakeRuntime {
   async start(): Promise<void> {}
   async newSession(): Promise<{ sessionId: string }> { return { sessionId: 'session-1' } }
   async resumeSession(sessionId: string): Promise<{ sessionId: string }> { return { sessionId } }
-  onNotification(): () => void { return () => undefined }
+  prompts: Array<{ sessionId: string; blocks: Array<{ type: string; text?: string }> }> = []
+  promptScript: Array<() => void> = []
+  private listeners = new Set<(notification: unknown) => void>()
+  onNotification(listener: (notification: unknown) => void): () => void {
+    this.listeners.add(listener)
+    return () => { this.listeners.delete(listener) }
+  }
+  emit(kind: string, update: Record<string, unknown>): void {
+    for (const listener of [...this.listeners]) {
+      listener({ method: 'session/update', params: { sessionId: 'session-1', update: { sessionUpdate: kind, ...update } } })
+    }
+  }
 
   async request(method: string, params: Record<string, unknown>): Promise<unknown> {
     this.requests.push({ method, params })
@@ -53,7 +65,11 @@ class FakeRuntime {
     return { configOptions: this.configOptions }
   }
 
-  async prompt(): Promise<{ stopReason: string }> { return { stopReason: 'end_turn' } }
+  async prompt(sessionId: string, blocks: Array<{ type: string; text?: string }>): Promise<{ stopReason: string }> {
+    this.prompts.push({ sessionId, blocks })
+    for (const step of this.promptScript) step()
+    return { stopReason: 'end_turn' }
+  }
   async compact(): Promise<{ shadowed?: number; tokens?: number }> {
     this.compactCalls += 1
     return this.compactResult
@@ -101,6 +117,56 @@ describe('DSH ACP 会话模型设置', () => {
 
     const profile = await fs.readFile(path.join(root, 'profiles', 'acp', 'cordis.patch.yml'), 'utf8')
     expect(profile).toContain('model: deepseek-flash')
+  })
+
+  it('把人设和宿主规则放在用户消息前面，因为 ACP 没有系统提示通道', async () => {
+    const { client, runtime } = await create()
+    await client.respond([{ role: 'user', content: '只回一个字：好' }], new AbortController().signal)
+    const text = runtime.prompts[0]?.blocks[0]?.text ?? ''
+    expect(text).toContain('你叫小鲸')
+    expect(text).toContain('宿主说明')
+    expect(text).toContain('只回一个字：好')
+    expect(text.indexOf('你叫小鲸')).toBeLessThan(text.indexOf('只回一个字：好'))
+  })
+
+  it('每轮重读人设文件：改完下一轮就带上新文本', async () => {
+    const { client, runtime, root } = await create()
+    const directory = path.join(root, 'persona')
+    await fs.mkdir(directory, { recursive: true })
+    const file = path.join(directory, 'xiaojing.md')
+    await fs.writeFile(file, '你是初版人设。', 'utf8')
+    setPersonaDirectory(directory)
+    try {
+      await client.respond([{ role: 'user', content: '第一句' }], new AbortController().signal)
+      await fs.writeFile(file, '你是改过的人设。', 'utf8')
+      await client.respond([{ role: 'user', content: '第二句' }], new AbortController().signal)
+    } finally {
+      setPersonaDirectory(null)
+    }
+    expect(runtime.prompts[0]?.blocks[0]?.text).toContain('初版人设')
+    expect(runtime.prompts[1]?.blocks[0]?.text).toContain('改过的人设')
+  }, 20_000)
+
+  it('最终回复只取最后一次工具调用之后的文字，不把整轮旁白拼成一段', async () => {
+    const { client, runtime } = await create()
+    runtime.promptScript = [
+      () => runtime.emit('agent_message_chunk', { messageId: 'm1', content: { type: 'text', text: '先校准一次：' } }),
+      () => runtime.emit('tool_call', { toolCallId: 't1', title: 'Move', rawInput: {} }),
+      () => runtime.emit('tool_call_update', { toolCallId: 't1', status: 'completed' }),
+      () => runtime.emit('agent_message_chunk', { messageId: 'm2', content: { type: 'text', text: '参数在下面。' } })
+    ]
+    const reply = await client.respond([{ role: 'user', content: '继续' }], new AbortController().signal)
+    expect(reply.text).toBe('参数在下面。')
+  })
+
+  it('工具调用后没有新文字时，回退到最后一条旁白', async () => {
+    const { client, runtime } = await create()
+    runtime.promptScript = [
+      () => runtime.emit('agent_message_chunk', { messageId: 'm1', content: { type: 'text', text: '已经改好。' } }),
+      () => runtime.emit('tool_call', { toolCallId: 't1', title: 'Edit', rawInput: {} })
+    ]
+    const reply = await client.respond([{ role: 'user', content: '继续' }], new AbortController().signal)
+    expect(reply.text).toBe('已经改好。')
   })
 
   it('运行中 setProvider 收到 deepseek-flash[1m] 也会规范化后再写 DSH 配置', async () => {

@@ -9,7 +9,7 @@ const ago = (days: number, extraMs = 0): string => new Date(NOW - days * DAY_MS 
 function summary(id: string, options: Partial<ConversationSummary> = {}): ConversationSummary {
   return {
     id, title: id, createdAt: ago(40), updatedAt: ago(1), lastActivityAt: ago(1), archivedAt: null,
-    pinnedAt: null, mode: 'demo', taskStatus: 'idle', messageCount: 0, preview: '',
+    pinnedAt: null, mode: 'dsh', taskStatus: 'idle', messageCount: 0, preview: '',
     ...options
   }
 }

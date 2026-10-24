@@ -16,13 +16,13 @@ const settings: ConversationSettings = {
 
 const conversation: ConversationSummary = {
   id: 'a', title: '会话 a', createdAt: '2026-10-13T00:00:00.000Z', updatedAt: '2026-10-13T00:00:00.000Z',
-  lastActivityAt: '2026-10-13T00:00:00.000Z', archivedAt: null, pinnedAt: null, mode: 'claude_code',
+  lastActivityAt: '2026-10-13T00:00:00.000Z', archivedAt: null, pinnedAt: null, mode: 'dsh',
   taskStatus: 'idle', messageCount: 3, preview: ''
 }
 
 function snapshot(): AppSnapshot {
   return {
-    mode: 'claude_code', avatarState: 'idle', taskStatus: 'idle', modelReady: true, claudeCodeReady: true,
+    mode: 'dsh', avatarState: 'idle', taskStatus: 'idle', modelReady: true, dshReady: true,
     conversationId: 'a', timelineRevision: 1,
     timeline: [
       { id: 'user-1', kind: 'user', text: '开始', time: '2026-10-13T00:00:00.000Z' },

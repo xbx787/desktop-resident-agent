@@ -7,6 +7,7 @@ import { ConversationStore } from '../src/main/conversation-store'
 import { AgentTurnError } from '../src/main/agent-errors'
 import type { DialogueLine, ModelClient, ModelReply } from '../src/main/deepseek'
 import { NoteStore } from '../src/main/note-store'
+import { setMemoryDocumentPath } from '../src/main/memory-document'
 import { usageSpendYuan } from '../src/shared/deepseek-pricing'
 import type { AgentGoal, ApprovalMode, AskQuestionRequest, PlanApprovalRequest, SubagentTask } from '../src/shared/contracts'
 
@@ -27,36 +28,6 @@ afterEach(async () => {
 })
 
 describe('approved test-note capability', () => {
-  it('does not write before approval, then creates and reads back one new file', async () => {
-    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined)
-    await runtime.sendMessage('记录：今天验证桌面智能体的审批流程')
-    const proposal = runtime.getSnapshot().proposal
-    expect(proposal?.target).toContain(path.join('sandbox', 'notes'))
-    await expect(fs.stat(proposal!.target)).rejects.toMatchObject({ code: 'ENOENT' })
-
-    await runtime.approveAction(proposal!.id)
-    const finalState = runtime.getSnapshot()
-    expect(finalState.taskStatus).toBe('done')
-    expect(finalState.proposal).toBeUndefined()
-    expect(await fs.readFile(proposal!.target, 'utf8')).toBe(proposal!.content)
-  })
-
-  it('does not create a file after rejection or stop', async () => {
-    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined)
-    await runtime.sendMessage('记录：这条应被拒绝')
-    const rejected = runtime.getSnapshot().proposal!
-    runtime.rejectAction(rejected.id)
-    await runtime.approveAction(rejected.id)
-    await expect(fs.stat(rejected.target)).rejects.toMatchObject({ code: 'ENOENT' })
-
-    await runtime.sendMessage('记录：这条应被停止')
-    const stopped = runtime.getSnapshot().proposal!
-    runtime.stop()
-    await runtime.approveAction(stopped.id)
-    expect(runtime.getSnapshot().taskStatus).toBe('cancelled')
-    await expect(fs.stat(stopped.target)).rejects.toMatchObject({ code: 'ENOENT' })
-  })
-
   it('refuses overwrite and any caller-supplied path outside the sandbox', async () => {
     const store = new NoteStore(testRoot)
     const draft = store.makeDraft('标题', '内容')
@@ -181,9 +152,9 @@ describe('task cancellation', () => {
       vi.setSystemTime(new Date('2026-10-13T02:00:00.000Z')) // Beijing 10:00, peak
       await runtime.sendMessage('第一轮')
       const firstCharge = runtime.exportConversationState().spentYuan
-      runtime.setModelMode('demo') // Emits again after completion; must not bill twice.
+      runtime.setModelMode('dsh') // Emits again after completion; must not bill twice.
       expect(runtime.exportConversationState().spentYuan).toBe(firstCharge)
-      runtime.setModelMode('claude_code')
+      runtime.setModelMode('dsh')
       vi.setSystemTime(new Date('2026-10-13T12:00:00.000Z')) // Beijing 20:00, off peak
       await runtime.sendMessage('第二轮')
       const saved = runtime.exportConversationState()
@@ -333,7 +304,7 @@ describe('task cancellation', () => {
     }
     runtime.restoreConversation({
       id: 'large', title: '大会话', createdAt: '', updatedAt: '', archivedAt: null, pinnedAt: null,
-      mode: 'claude_code' as const, taskStatus: 'done' as const,
+      mode: 'dsh' as const, taskStatus: 'done' as const,
       timeline: [], history: [], pendingMessages: [], sdkSessionId: 'session-large', contextUsage
     })
     await expect(runtime.getContextUsage()).resolves.toMatchObject({
@@ -383,6 +354,33 @@ describe('task cancellation', () => {
     expect(runtime.getSnapshot().taskStatus).toBe('done')
   })
 
+  it('sends the long-term memory document with every turn without persisting it', async () => {
+    const memoryFile = path.join(testRoot, 'MEMORY.md')
+    await fs.writeFile(memoryFile, '## 必须遵守\n- 不许擅自打包或重启。\n', 'utf8')
+    setMemoryDocumentPath(memoryFile)
+    try {
+      const calls: DialogueLine[][] = []
+      const model: ModelClient = {
+        respond: async (history) => {
+          calls.push(structuredClone(history))
+          return { text: '记住了' }
+        }
+      }
+      const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+      await runtime.sendMessage('继续')
+      expect(calls[0].at(-1)?.content.startsWith('## 长期记忆')).toBe(true)
+      expect(calls[0].at(-1)?.content).toContain('不许擅自打包或重启')
+      expect(calls[0].at(-1)?.content).toContain('继续')
+      // 只是每轮注入，不能写进会话历史，否则重启后会越叠越多。
+      expect(JSON.stringify(runtime.exportConversationState().history)).not.toContain('不许擅自打包或重启')
+
+      await runtime.sendMessage('再继续')
+      expect(calls[1].at(-1)?.content).toContain('不许擅自打包或重启')
+    } finally {
+      setMemoryDocumentPath(null)
+    }
+  })
+
   it('drops an early streamed answer when the final reply repeats it', async () => {
     const early = '不用。现在之所以会 close，是因为切换模式和进程环境绑在了同一刻。'
     const final = `${early} 现在改成下一次发消息前再生效。`
@@ -398,6 +396,20 @@ describe('task cancellation', () => {
     await runtime.sendMessage('解释')
     const assistants = runtime.getSnapshot().timeline.filter((entry) => entry.kind === 'assistant')
     expect(assistants.map((entry) => entry.text)).toEqual([final])
+  })
+
+  it('does not add a second bubble when the streamed answer equals the final reply', async () => {
+    const answer = '参数在下面。'
+    const model: ModelClient = {
+      respond: async (_history, _signal, progress) => {
+        progress?.(answer, 0)
+        return { text: answer }
+      }
+    }
+    const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
+    await runtime.sendMessage('继续')
+    const assistants = runtime.getSnapshot().timeline.filter((entry) => entry.kind === 'assistant')
+    expect(assistants.map((entry) => entry.text)).toEqual([answer])
   })
 
   it('keeps one structured tool activity entry as the SDK tool completes', async () => {
@@ -553,7 +565,7 @@ describe('task cancellation', () => {
     const runtime = new AgentRuntime(new NoteStore(testRoot), direct, undefined, sdk)
     const record = {
       id: 'saved', title: '旧会话', createdAt: '', updatedAt: '', archivedAt: null, pinnedAt: null,
-      mode: 'claude_code' as const, taskStatus: 'done' as const,
+      mode: 'dsh' as const, taskStatus: 'done' as const,
       timeline: [], history: [], pendingMessages: [], sdkSessionId: 'session-old'
     }
     runtime.restoreConversation(record)
@@ -562,7 +574,7 @@ describe('task cancellation', () => {
     expect(runtime.exportConversationState().sdkSessionId).toBe('session-next')
     runtime.setModelMode('live')
     await runtime.sendMessage('另一模型的回合')
-    runtime.setModelMode('claude_code')
+    runtime.setModelMode('dsh')
     await runtime.sendMessage('重新开始 SDK 会话')
     expect(resumed).toEqual(['session-old', null])
   })
@@ -578,7 +590,7 @@ describe('task cancellation', () => {
     const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, sdk)
     runtime.restoreConversation({
       id: 'interrupted', title: '被打断的会话', createdAt: '', updatedAt: '', archivedAt: null, pinnedAt: null,
-      mode: 'claude_code' as const, taskStatus: 'cancelled' as const,
+      mode: 'dsh' as const, taskStatus: 'cancelled' as const,
       timeline: [], history: [{ role: 'user' as const, content: '还没回答的问题' }],
       pendingMessages: [], sdkSessionId: 'session-live'
     })
@@ -627,7 +639,7 @@ describe('task cancellation', () => {
     }
     runtime.restoreConversation({
       id: 'usage', title: '用量会话', createdAt: '', updatedAt: '', archivedAt: null, pinnedAt: null,
-      mode: 'claude_code' as const, taskStatus: 'done' as const,
+      mode: 'dsh' as const, taskStatus: 'done' as const,
       timeline: [], history: [], pendingMessages: [], sdkSessionId: null, contextUsage
     })
     expect(runtime.getSnapshot().contextUsage).toMatchObject(contextUsage)
@@ -640,7 +652,7 @@ describe('task cancellation', () => {
     } as ModelClient)
     runtime.restoreConversation({
       id: 'subagents', title: '子代理会话', createdAt: '', updatedAt: '', archivedAt: null, pinnedAt: null,
-      mode: 'claude_code' as const, taskStatus: 'done' as const,
+      mode: 'dsh' as const, taskStatus: 'done' as const,
       timeline: [], history: [], pendingMessages: [], sdkSessionId: null,
       subagents: [
         { taskId: 'a', description: '运行中的', status: 'running', toolUses: 2 },
@@ -667,7 +679,7 @@ describe('task cancellation', () => {
     const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, sdk)
     runtime.restoreConversation({
       id: 'dead', title: '失效会话', createdAt: '', updatedAt: '', archivedAt: null, pinnedAt: null,
-      mode: 'claude_code' as const, taskStatus: 'done' as const,
+      mode: 'dsh' as const, taskStatus: 'done' as const,
       timeline: [], history: [], pendingMessages: [], sdkSessionId: 'session-dead'
     })
     await runtime.sendMessage('继续')
@@ -690,7 +702,7 @@ describe('task cancellation', () => {
     const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, sdk)
     runtime.restoreConversation({
       id: 'stopped', title: '被停止的会话', createdAt: '', updatedAt: '', archivedAt: null, pinnedAt: null,
-      mode: 'claude_code' as const, taskStatus: 'done' as const,
+      mode: 'dsh' as const, taskStatus: 'done' as const,
       timeline: [], history: [{ role: 'assistant' as const, content: '之前的回复' }],
       pendingMessages: [], sdkSessionId: 'session-old'
     })
@@ -770,7 +782,7 @@ describe('local goal loop for kernels without a goal driver', () => {
     const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
     runtime.restoreConversation({
       id: 'local-goal', title: '本地目标', createdAt: '', updatedAt: '', archivedAt: null, pinnedAt: null,
-      mode: 'claude_code' as const, taskStatus: 'done' as const,
+      mode: 'dsh' as const, taskStatus: 'done' as const,
       timeline: [], history: [], pendingMessages: [], sdkSessionId: null,
       goal: { condition: '旧目标', phase: 'confirmed' as const, iterations: 1, startedAt: new Date().toISOString() }
     })
@@ -820,7 +832,7 @@ describe('plan mode and /goal truth', () => {
     expect(runtime.getSnapshot().planMode).toBe(true)
   })
   it('carries a goal and plan mode through the saved record and back', async () => {
-    const record = await new ConversationStore(testRoot).createConversation('保存', 'claude_code')
+    const record = await new ConversationStore(testRoot).createConversation('保存', 'dsh')
     const planted = { ...record, planMode: true, goal: {
       condition: '完成改进', phase: 'confirmed' as const, iterations: 2, startedAt: new Date().toISOString()
     } }
@@ -841,7 +853,7 @@ describe('plan mode and /goal truth', () => {
   })
 
   it('restores a saved goal as unverified until the CLI reports it again', async () => {
-    const record = await new ConversationStore(testRoot).createConversation('目标', 'claude_code')
+    const record = await new ConversationStore(testRoot).createConversation('目标', 'dsh')
     const model: ModelClient = { respond: async () => ({ text: 'ok' }) }
     const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, model)
     runtime.restoreConversation({ ...record, goal: {
@@ -906,7 +918,7 @@ describe('plan mode and /goal truth', () => {
   })
 
   it('restores a saved approval mode, including records written before it existed', async () => {
-    const record = await new ConversationStore(testRoot).createConversation('审批', 'claude_code')
+    const record = await new ConversationStore(testRoot).createConversation('审批', 'dsh')
     const current: ModelClient = { respond: async () => ({ text: 'ok' }), setApprovalMode: async () => true }
     const runtime = new AgentRuntime(new NoteStore(testRoot), undefined, undefined, current)
     runtime.restoreConversation({ ...record, approvalMode: 'acceptEdits' as unknown as ApprovalMode })

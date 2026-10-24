@@ -2,6 +2,18 @@
 
 本文件记录每个版本的显著变化。v0.0.34 起的版本代码进入 Git；近期部分本机版本尚未推送或创建 GitHub Release，以各版“验证边界”和实际 Git 引用为准。更早版本（v0.0.7 ~ v0.0.33）的说明仅存于本文件，代码未进入版本控制，无法重建 tag。
 
+## [0.0.112] - 2026-10-23（已打包）
+
+### 内核模式改名
+- 会话模式 `claude_code` 改名为 `dsh`：代码、会话记录和 UI 标签统一使用 `dsh`，界面仍显示「小鲸引擎 + DeepSeek」。
+- 旧 `library.json` 与记录文件里的 `claude_code` 在启动加载时自动改写为 `dsh`；旧设置里的 `agentKernel: "claude_code"` 也归一为 `dsh`。
+- 内部字段 `claudeCodeModel` / `claudeCodeReady` 改名为 `dshKernel` / `dshReady`，避免把 DSH 内核误读成 Claude Code。
+
+### 发布包与重启
+- 修复 0.0.110 打包后整体移动目录导致 DSH junction 指向临时路径、内核降级为演示模式的问题；`fix-dsh-links.ps1` 现在能按包内镜像原地修复被移动的发布目录。
+- 重启改为最终保存对话后再 `app.relaunch` 到目标 exe；启动时只修复缺失/失效的快捷方式，不再把指向新版的快捷方式改回旧版。
+- `evolve_restart` 工具说明明确禁止用 `Stop-Process` / `taskkill` 外部强杀应用。
+
 ## [0.0.108] - 2026-10-23（已打包）
 
 ### DSH 提问与审批

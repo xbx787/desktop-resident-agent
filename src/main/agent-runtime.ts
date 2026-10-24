@@ -1,4 +1,4 @@
-import { normalizeApprovalMode, type AgentCapabilities, type AgentGoal, type ApprovalMode, type AppSnapshot, type AskAnswers, type ContextUsageSnapshot, type EffortLevel, type ModelMode, type ModelProfile, type ProposedAction, type SubagentTask, type TimelineEntry, type ToolPermissionRequest, type UserAttachment } from '../shared/contracts'
+import { normalizeApprovalMode, normalizeModelMode, type AgentCapabilities, type AgentGoal, type ApprovalMode, type AppSnapshot, type AskAnswers, type ContextUsageSnapshot, type EffortLevel, type ModelMode, type ModelProfile, type ProposedAction, type SubagentTask, type TimelineEntry, type ToolPermissionRequest, type UserAttachment } from '../shared/contracts'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { AgentKernel } from './agent-kernel'
@@ -13,9 +13,13 @@ import { agentActivityForTool, type AgentActivity } from '../shared/agent-activi
 import type { ConversationRecord } from './conversation-store'
 import { NoteStore, type NoteDraft } from './note-store'
 import { attachmentContext, expandFileMentions, validAttachmentList } from './local-context'
+import { memoryDocumentBlock } from './memory-document'
 import type { ConversationBridge, ConversationTarget } from './conversation-tools'
 
-const DEMO_HINT = '演示模式仅支持「记录：内容」的测试笔记流程。'
+const MODE_SWITCH_TEXT: Record<ModelMode, string> = {
+  dsh: '已切换到小鲸引擎 + DeepSeek。',
+  live: '已切换到 DeepSeek Flash。'
+}
 
 /** 图片输入的格式与上限；超过上限或读不到时退化为“路径提示”，不阻断发送。 */
 const PROMPT_IMAGE_MIME: Record<string, string> = {
@@ -81,13 +85,16 @@ export class AgentRuntime {
   private readonly state: AppSnapshot
   private readonly history: DialogueLine[] = []
   private readonly configuredModel: ModelClient | undefined
-  private readonly claudeCodeModel: ModelClient | undefined
+  private readonly dshKernel: ModelClient | undefined
   private model: ModelClient | undefined
   private draft?: NoteDraft
   private activeRequest?: AbortController
   private currentTurnUserId?: string
   /** 上一轮的用户消息 id：停止后补到的用量要写回它。 */
   private lastTurnUserId?: string
+  /** 停止（含静默退出）后 DSH 仍可能把最后一笔用量落盘；窗口内允许补到那一轮。 */
+  private lateUsageUntil = 0
+  private lateUsageUserId?: string
   private generation = 0
   private contextGeneration = 0
   private sdkSessionId: string | null = null
@@ -130,29 +137,29 @@ export class AgentRuntime {
     private readonly store: NoteStore,
     model: AgentKernel | undefined,
     private readonly onChange: () => void = () => {},
-    claudeCodeModel?: AgentKernel,
+    dshKernel?: AgentKernel,
     private readonly workspaceRoot?: string,
     evolveHooks?: Omit<EvolveBridge, 'enabled'>
   ) {
     this.configuredModel = model
-    this.claudeCodeModel = claudeCodeModel
-    this.model = claudeCodeModel ?? model
-    this.localGoalKernel = (claudeCodeModel as { goalMode?: string } | undefined)?.goalMode === 'local'
-    claudeCodeModel?.setGoalListener?.((goal) => this.observeGoal(goal))
-    claudeCodeModel?.setSteerEchoListener?.((messageId) => this.settleSteerEcho(messageId))
-    claudeCodeModel?.setPlanModeListener?.((on) => {
+    this.dshKernel = dshKernel
+    this.model = dshKernel ?? model
+    this.localGoalKernel = (dshKernel as { goalMode?: string } | undefined)?.goalMode === 'local'
+    dshKernel?.setGoalListener?.((goal) => this.observeGoal(goal))
+    dshKernel?.setSteerEchoListener?.((messageId) => this.settleSteerEcho(messageId))
+    dshKernel?.setPlanModeListener?.((on) => {
       this.state.planMode = on
       this.emit()
     })
     // The CLI can enter/leave plan mode on its own (EnterPlanMode); mirror it.
-    claudeCodeModel?.setApprovalModeListener?.((mode) => {
+    dshKernel?.setApprovalModeListener?.((mode) => {
       this.state.approvalMode = normalizeApprovalMode(mode)
       this.state.planMode = this.state.approvalMode === 'read-only'
       this.emit()
     })
     // A tool call parked in default/acceptEdits mode. While any interaction
     // waits on the user the task is awaiting approval, not executing.
-    claudeCodeModel?.setPermissionListener?.((permission) => {
+    dshKernel?.setPermissionListener?.((permission) => {
       this.state.permission = permission
       this.syncApprovalWait()
       this.emit()
@@ -160,33 +167,33 @@ export class AgentRuntime {
     // Automatic compaction: the CLI decides by itself at the threshold. Only
     // the auto flag is handled here; a manual compact owns the same state via
     // compactContext().
-    claudeCodeModel?.setCompactingListener?.((state) => {
+    dshKernel?.setCompactingListener?.((state) => {
       this.state.contextCompacting = state.active
       this.state.contextCompactingAuto = state.active && state.auto
       this.emit()
     })
     // A parked AskUserQuestion lives in the snapshot while the panel shows it.
-    claudeCodeModel?.setQuestionListener?.((question) => {
+    dshKernel?.setQuestionListener?.((question) => {
       this.state.question = question;
       this.syncApprovalWait();
       this.emit();
     });
     // A parked ExitPlanMode lives there too until the plan is approved or sent back.
-    claudeCodeModel?.setPlanListener?.((plan) => {
+    dshKernel?.setPlanListener?.((plan) => {
       this.state.plan = plan;
       if (plan) this.state.approvedPlan = undefined;
       this.syncApprovalWait();
       this.emit();
     });
     // Task-tool subagents; the SDK client throttles progress to 2 s.
-    claudeCodeModel?.setSubagentTasksListener?.((tasks) => {
+    dshKernel?.setSubagentTasksListener?.((tasks) => {
       this.state.subagents = tasks;
       this.emit();
     });
     this.state = {
-      mode: claudeCodeModel ? 'claude_code' : model ? 'live' : 'demo',
+      mode: dshKernel ? 'dsh' : 'live',
       modelReady: Boolean(model),
-      claudeCodeReady: Boolean(claudeCodeModel),
+      dshReady: Boolean(dshKernel),
       avatarState: 'idle',
       taskStatus: 'idle',
       effort: 'max',
@@ -195,16 +202,16 @@ export class AgentRuntime {
       contextCompactingAuto: false,
       timeline: [],
       subagents: [],
-      subagentControls: Boolean(claudeCodeModel && (
-        typeof (claudeCodeModel as { backgroundTask?: unknown }).backgroundTask === 'function' ||
-        typeof (claudeCodeModel as { stopTask?: unknown }).stopTask === 'function'
+      subagentControls: Boolean(dshKernel && (
+        typeof (dshKernel as { backgroundTask?: unknown }).backgroundTask === 'function' ||
+        typeof (dshKernel as { stopTask?: unknown }).stopTask === 'function'
       )),
       timelineRevision: 0
     }
     // The tools stay registered for the runtime's lifetime; only the approval
     // tier decides whether they do anything.
-    if (claudeCodeModel && evolveHooks) {
-      claudeCodeModel.setEvolveBridge?.({
+    if (dshKernel && evolveHooks) {
+      dshKernel.setEvolveBridge?.({
         ...evolveHooks,
         enabled: () => this.state.approvalMode === 'selfEvolve'
       })
@@ -212,24 +219,26 @@ export class AgentRuntime {
   }
 
   setModelMode(mode: ModelMode, silent = false): void {
+    const next = normalizeModelMode(mode)
+    if (!next) throw new Error('模型选项无效。')
     if (this.isRunning()) throw new Error('任务进行中时不能切换模型。')
-    if (mode === 'live' && !this.configuredModel) throw new Error('尚未配置 DeepSeek API Key。')
-    if (mode === 'claude_code' && !this.claudeCodeModel) throw new Error('小鲸引擎或 DeepSeek API Key 尚未就绪。')
-    if (this.state.mode === mode) return
+    if (next === 'live' && !this.configuredModel) throw new Error('尚未配置 DeepSeek API Key。')
+    if (next === 'dsh' && !this.dshKernel) throw new Error('小鲸引擎或 DeepSeek API Key 尚未就绪。')
+    if (this.state.mode === next) return
     this.contextGeneration += 1
-    if (this.state.mode === 'claude_code') this.disposeClaudeQuery()
+    if (this.state.mode === 'dsh') this.disposeAgentQuery()
     this.clearGoalTimer()
     this.state.goal = null
     this.queuePauseReason = null
     // A resumed SDK session would otherwise miss turns handled by another model.
     this.sdkSessionId = null
-    this.model = mode === 'claude_code' ? this.claudeCodeModel : mode === 'live' ? this.configuredModel : undefined
-    this.state.mode = mode
+    this.model = next === 'dsh' ? this.dshKernel : next === 'live' ? this.configuredModel : undefined
+    this.state.mode = next
     this.markContextUsageStale()
     this.state.taskMetrics = undefined
     this.state.modelReady = Boolean(this.configuredModel)
     if (silent) this.emit()
-    else this.add('system', mode === 'claude_code' ? '已切换到小鲸引擎 + DeepSeek。' : mode === 'live' ? '已切换到 DeepSeek Flash。' : '已切换到演示模式。')
+    else this.add('system', MODE_SWITCH_TEXT[next])
   }
 
   /** Memory is added only to the model request copy, never to the visible or saved history. */
@@ -256,11 +265,11 @@ export class AgentRuntime {
    *  channel. A cold query records the choice for the next session. */
   async setApprovalMode(mode: ApprovalMode): Promise<void> {
     if ((this.state.approvalMode ?? 'workspace-write') === mode) return
-    const client = this.claudeCodeModel
+    const client = this.dshKernel
     // Older clients (and test doubles) only know the plan switch.
     const fallbackToPlan = !client?.setApprovalMode && Boolean(client?.setPlanMode) &&
       (mode === 'read-only' || mode === 'danger-full-access')
-    if (this.state.mode !== 'claude_code' || !client || (!client.setApprovalMode && !fallbackToPlan)) {
+    if (this.state.mode !== 'dsh' || !client || (!client.setApprovalMode && !fallbackToPlan)) {
       throw new Error('当前模型不支持审批模式。')
     }
     try {
@@ -299,7 +308,7 @@ export class AgentRuntime {
     list: () => ConversationTarget[]
     send: (target: string, text: string, sourceConversationId: string) => Promise<{ id: string; title: string }>
   }): void {
-    const model = this.claudeCodeModel as (ModelClient & { setConversationBridge?: (bridge?: ConversationBridge) => void }) | undefined
+    const model = this.dshKernel as (ModelClient & { setConversationBridge?: (bridge?: ConversationBridge) => void }) | undefined
     if (!model?.setConversationBridge) return
     model.setConversationBridge(bridge ? {
       list: bridge.list,
@@ -489,7 +498,7 @@ export class AgentRuntime {
     if (this.state.effort === level) return
     this.state.effort = level
     this.configuredModel?.setEffort?.(level)
-    this.claudeCodeModel?.setEffort?.(level)
+    this.dshKernel?.setEffort?.(level)
     this.onChange()
   }
 
@@ -530,7 +539,7 @@ export class AgentRuntime {
   async getContextUsage(): Promise<ContextUsageSnapshot> {
     const model = this.model as (ModelClient & { getContextUsage?: (sessionId?: string | null) => Promise<ContextUsageSnapshot> }) | undefined
     const current = this.state.contextUsage
-    if (this.state.mode !== 'claude_code' || !model?.getContextUsage) {
+    if (this.state.mode !== 'dsh' || !model?.getContextUsage) {
       return current?.status === 'available'
         ? { ...structuredClone(current), stale: true }
         : { status: 'unavailable' }
@@ -543,7 +552,7 @@ export class AgentRuntime {
     } catch {
       usage = { status: 'unavailable' }
     }
-    if (generation !== this.contextGeneration || this.state.mode !== 'claude_code' || sessionId !== this.sdkSessionId) {
+    if (generation !== this.contextGeneration || this.state.mode !== 'dsh' || sessionId !== this.sdkSessionId) {
       return current?.status === 'available'
         ? { ...structuredClone(current), stale: true }
         : { status: 'unavailable' }
@@ -564,7 +573,7 @@ export class AgentRuntime {
   async compactConversation(): Promise<void> {
     if (this.isRunning()) throw new Error('当前任务完成后才能手动压缩上下文。')
     const model = this.model as (ModelClient & { compact?: (sessionId?: string | null) => Promise<ContextUsageSnapshot> }) | undefined
-    if (this.state.mode !== 'claude_code' || !model?.compact) throw new Error('当前模型不支持手动压缩。')
+    if (this.state.mode !== 'dsh' || !model?.compact) throw new Error('当前模型不支持手动压缩。')
     this.state.contextCompacting = true
     this.state.contextCompactingAuto = false
     this.emit()
@@ -596,7 +605,7 @@ export class AgentRuntime {
 
   /** Adds guidance to the active SDK turn at its next native execution boundary. */
   async steerMessage(rawText: string, attachments: UserAttachment[] = [], sessionContext = ''): Promise<boolean> {
-    if (!this.isBusy() || this.state.mode !== 'claude_code') return false
+    if (!this.isBusy() || this.state.mode !== 'dsh') return false
     // 一次只允许一条待确认的插话。但回显可能一直不来（或 id 对不上），
     // 不能让一次插话把整轮锁死：消息已经贴回时间线，或等满 20 秒，就放行。
     if (this.pendingSteer) {
@@ -691,7 +700,7 @@ export class AgentRuntime {
   restoreConversation(record: ConversationRecord): void {
     if (this.isRunning()) throw new Error('任务进行中时不能切换会话。')
     this.contextGeneration += 1
-    if (this.state.mode === 'claude_code') this.disposeClaudeQuery()
+    if (this.state.mode === 'dsh') this.disposeAgentQuery()
     this.generation += 1
     this.history.splice(0, this.history.length, ...structuredClone(record.history))
     // A restore replaces the whole history; the next publish sends it in full.
@@ -729,14 +738,14 @@ export class AgentRuntime {
     this.queuePauseReason = null
     this.draft = undefined
     this.thinkingOpen = false
-    const mode = record.mode === 'claude_code' && this.claudeCodeModel ? 'claude_code'
-      : record.mode === 'live' && this.configuredModel ? 'live' : 'demo'
+    const recordMode = normalizeModelMode(record.mode)
+    const mode: ModelMode = recordMode === 'live' && this.configuredModel ? 'live' : 'dsh'
     this.state.mode = mode
-    this.model = mode === 'claude_code' ? this.claudeCodeModel : mode === 'live' ? this.configuredModel : undefined
+    this.model = mode === 'dsh' ? this.dshKernel : mode === 'live' ? this.configuredModel : undefined
     // The CLI keeps the whole transcript on disk, so a saved session is always
     // the best context source — even when the last stored turn is an unanswered
     // user message (that turn simply continues inside the resumed session).
-    this.sdkSessionId = mode === 'claude_code' ? record.sdkSessionId : null
+    this.sdkSessionId = mode === 'dsh' ? record.sdkSessionId : null
     // The approval mode survives the restart: the client records the preference
     // and builds the next query with it; the CLI re-reports the real state on
     // init. Records written before the mode existed fall back to planMode.
@@ -746,11 +755,11 @@ export class AgentRuntime {
     this.state.approvalMode = savedMode
     this.state.planMode = savedMode === 'read-only'
     if (savedMode !== 'read-only') this.lastNonPlanApproval = savedMode
-    if (mode === 'claude_code' && savedMode !== 'danger-full-access') {
-      void Promise.resolve(this.claudeCodeModel?.setApprovalMode?.(savedMode)).catch(() => undefined)
+    if (mode === 'dsh' && savedMode !== 'danger-full-access') {
+      void Promise.resolve(this.dshKernel?.setApprovalMode?.(savedMode)).catch(() => undefined)
     }
 
-    if (mode !== 'claude_code') this.state.goal = null
+    if (mode !== 'dsh') this.state.goal = null
     else this.armGoalTimer()
     this.emit()
   }
@@ -823,14 +832,14 @@ export class AgentRuntime {
       this.addSystem('附件数量或大小超过限制。', 'error')
       return
     }
-    if (this.state.mode !== 'claude_code' && attachments.some((item) => item.path && !item.content)) {
+    if (this.state.mode !== 'dsh' && attachments.some((item) => item.path && !item.content)) {
       this.addSystem('当前模型没有本地文件读取工具。请切换到小鲸引擎模式后再发送此文件。', 'error')
       return
     }
     const context = attachmentContext(attachments)
     let prompt = [text, context].filter(Boolean).join('\n\n')
     if (!prompt) return
-    if (this.state.mode === 'claude_code' && this.localGoalKernel) {
+    if (this.state.mode === 'dsh' && this.localGoalKernel) {
       const localGoal = this.trackLocalGoal(text)
       if (localGoal === 'handled') return
       if (localGoal) prompt = [localGoal, context].filter(Boolean).join('\n\n')
@@ -847,7 +856,7 @@ export class AgentRuntime {
 
     const goalBeforeRef = this.state.goal
     const goalBefore = goalBeforeRef ? structuredClone(goalBeforeRef) : null
-    if (this.state.mode === 'claude_code' && !this.localGoalKernel) this.trackGoal(text)
+    if (this.state.mode === 'dsh' && !this.localGoalKernel) this.trackGoal(text)
     const goalChanged = this.state.goal !== goalBeforeRef
     const goalTracked = this.state.goal
     this.generation += 1
@@ -881,13 +890,7 @@ export class AgentRuntime {
       })()
 
     if (!this.model) {
-      const noteBody = /^(?:记录|记下|测试笔记)\s*[:：]\s*([\s\S]+)$/u.exec(text)?.[1]?.trim()
-      if (noteBody) {
-        const title = noteBody.split(/\r?\n/u, 1)[0].slice(0, 40) || '测试笔记'
-        this.offerNote(title, noteBody)
-      } else {
-        this.finishWithText(DEMO_HINT)
-      }
+      this.finishWithText('当前没有可用的模型。请在设置里选择模型，或检查小鲸引擎是否正常启动。')
       return
     }
 
@@ -919,6 +922,14 @@ export class AgentRuntime {
           modelHistory[modelHistory.length - 1] = { ...last, content: `${last.content}\n\n<user_memory>\n${memory}\n</user_memory>` }
         }
       }
+      // 长期记忆放在用户原文之前：它是硬性要求，不是可以忽略的背景事实。
+      // 文件在每轮开始时重新读盘（按 mtime 缓存），所以主人改完下一轮就生效，
+      // 新开的对话同样从头带上。
+      const memoryDocument = memoryDocumentBlock()
+      if (memoryDocument) {
+        const last = modelHistory[modelHistory.length - 1]
+        modelHistory[modelHistory.length - 1] = { ...last, content: `${memoryDocument}\n\n${last.content}` }
+      }
       if (abort.signal.aborted || currentGeneration !== this.generation) return
       const personaRevision = this.personaRevision
       // 没有图片附件时不要多一个 await，保持原本的同步时序。
@@ -944,25 +955,32 @@ export class AgentRuntime {
           }
         }
         this.emit()
-      }, this.state.mode === 'claude_code' ? this.sdkSessionId : null,
+      }, this.state.mode === 'dsh' ? this.sdkSessionId : null,
       (event) => {
         if (event.phase === 'start') progressEntryId = undefined
         this.recordToolEvent(event, currentGeneration)
       }, (usage) => {
-        if (!this.state.taskMetrics) return
         const live = currentGeneration === this.generation
+        const late = !live && Date.now() <= this.lateUsageUntil
         // 停止之后 DSH 才把最后一笔用量落盘：也要补到刚结束的那一轮，
-        // 否则界面会一直显示“用量未记录”。
-        if (!live && this.state.taskStatus !== 'cancelled') return
-        this.state.taskMetrics.usedTokens = usage.total
-        this.state.taskMetrics.usage = usage
-        if (!live) {
-          const user = this.state.timeline.find((entry) => entry.id === this.lastTurnUserId && entry.kind === 'user')
-          if (user) {
-            user.metrics = structuredClone(this.state.taskMetrics)
-            this.markTimelineDirty(user)
-          }
+        // 否则界面会一直显示“用量未记录”。静默退出（idle）同样适用。
+        if (!live && this.state.taskStatus !== 'cancelled' && !late) return
+        if (live) {
+          if (!this.state.taskMetrics) return
+          this.state.taskMetrics.usedTokens = usage.total
+          this.state.taskMetrics.usage = usage
+          this.emit()
+          return
         }
+        // 停止后的迟到读数：只补到刚结束那条用户消息上，不碰可能已经开始的新轮。
+        if (!late) return
+        const user = this.state.timeline.find((entry) =>
+          entry.id === (this.lateUsageUserId ?? this.lastTurnUserId) && entry.kind === 'user')
+        if (!user) return
+        const base = user.metrics ?? this.state.taskMetrics
+        if (!base) return
+        user.metrics = { ...structuredClone(base), usedTokens: usage.total, usage: { ...usage } }
+        this.markTimelineDirty(user)
         this.emit()
       }, (partial, segment) => {
         if (currentGeneration !== this.generation || !partial) return
@@ -996,7 +1014,7 @@ export class AgentRuntime {
       // A persona changed during this turn. Its result belongs to the old
       // query, so never resume that SDK session under the new persona.
       if (personaRevision !== this.personaRevision) this.sdkSessionId = null
-      else if (this.state.mode === 'claude_code') await this.getContextUsage().catch(() => undefined)
+      else if (this.state.mode === 'dsh') await this.getContextUsage().catch(() => undefined)
     } catch (error) {
       if (currentGeneration !== this.generation) return
       // A goal typed into this failed send never reached the CLI: restore the
@@ -1099,32 +1117,32 @@ export class AgentRuntime {
    *  kill switch for a runaway command. Only the SDK client has such an
    *  operation; every other model has no local tool to stop. */
   async interruptTurn(): Promise<void> {
-    if (this.model !== this.claudeCodeModel) return
-    await this.claudeCodeModel?.interrupt?.()
+    if (this.model !== this.dshKernel) return
+    await this.dshKernel?.interrupt?.()
   }
 
   /** Points the SDK client at a saved model profile (null = launch
    *  environment). A cloud session from the old endpoint resolves itself
    *  through the session-missing path on the next send. */
   setModelProfile(profile: ModelProfile | null): void {
-    this.claudeCodeModel?.setProvider?.(profile ?? undefined)
+    this.dshKernel?.setProvider?.(profile ?? undefined)
   }
 
   /** The names the persona addresses, applied to every client. */
   /** 开关联网搜索。关闭时 Claude 客户端会把搜索/抓取工具从工具列表移除，
    *  并在人设里明确写明不可搜索。 */
   setWebSearch(on: boolean): void {
-    this.claudeCodeModel?.setWebSearchEnabled?.(on)
+    this.dshKernel?.setWebSearchEnabled?.(on)
   }
 
   /** 自动压缩阈值（百分比）；随下一次 query 与发送前的预算检查生效。 */
   setAutoCompactPercent(percent: number): void {
-    this.claudeCodeModel?.setAutoCompactPercent?.(percent)
+    this.dshKernel?.setAutoCompactPercent?.(percent)
   }
 
   /** 本对话用 @ 添加的库；下一次 query 生效。 */
   setLibraries(mcpServers: Record<string, unknown>, plugins: string[]): void {
-    const clients = new Set([this.model, this.claudeCodeModel, this.configuredModel])
+    const clients = new Set([this.model, this.dshKernel, this.configuredModel])
     for (const client of clients) client?.setLibraries?.(mcpServers, plugins)
   }
 
@@ -1135,7 +1153,7 @@ export class AgentRuntime {
     if (this.personaId === id) return
     this.personaId = id
     this.personaRevision += 1
-    this.claudeCodeModel?.setPersonaId?.(id)
+    this.dshKernel?.setPersonaId?.(id)
     this.configuredModel?.setPersonaId?.(id)
     this.contextGeneration += 1
     this.sdkSessionId = null
@@ -1151,7 +1169,7 @@ export class AgentRuntime {
   }
 
   setIdentity(identity: { userName: string; assistantName: string }): void {
-    this.claudeCodeModel?.setIdentity?.(identity)
+    this.dshKernel?.setIdentity?.(identity)
     this.configuredModel?.setIdentity?.(identity)
   }
 
@@ -1161,9 +1179,9 @@ export class AgentRuntime {
     this.outputStyle = outputStyle?.trim() || undefined
     this.appendSystemPrompt = appendSystemPrompt?.trim() || undefined
     this.loadUserSettings = loadUserSettings
-    this.claudeCodeModel?.setOutputStyle?.(this.outputStyle)
-    this.claudeCodeModel?.setAppendSystemPrompt?.(this.appendSystemPrompt)
-    this.claudeCodeModel?.setLoadUserSettings?.(loadUserSettings)
+    this.dshKernel?.setOutputStyle?.(this.outputStyle)
+    this.dshKernel?.setAppendSystemPrompt?.(this.appendSystemPrompt)
+    this.dshKernel?.setLoadUserSettings?.(loadUserSettings)
   }
 
   /** Whether the CLI reads ~/.claude settings. No session invalidation: the
@@ -1171,7 +1189,7 @@ export class AgentRuntime {
   setLoadUserSettings(on: boolean): void {
     if (this.loadUserSettings === on) return
     this.loadUserSettings = on
-    this.claudeCodeModel?.setLoadUserSettings?.(on)
+    this.dshKernel?.setLoadUserSettings?.(on)
   }
 
   /** A user change to the response style or extra instructions. The CLI
@@ -1181,7 +1199,7 @@ export class AgentRuntime {
     const next = style?.trim() || undefined
     if (this.outputStyle === next) return
     this.outputStyle = next
-    this.claudeCodeModel?.setOutputStyle?.(next)
+    this.dshKernel?.setOutputStyle?.(next)
     this.invalidateSdkPrompt()
   }
 
@@ -1189,7 +1207,7 @@ export class AgentRuntime {
     const next = text?.trim() || undefined
     if (this.appendSystemPrompt === next) return
     this.appendSystemPrompt = next
-    this.claudeCodeModel?.setAppendSystemPrompt?.(next)
+    this.dshKernel?.setAppendSystemPrompt?.(next)
     this.invalidateSdkPrompt()
   }
 
@@ -1204,7 +1222,7 @@ export class AgentRuntime {
    *  transcript, but writes no "已停止思考" notice — closing the app should
    *  not look like the user stopped the task. */
   stop(reason?: string, silent = false): void {
-    if (this.state.mode !== 'claude_code' && (this.state.taskStatus === 'executing' || this.state.taskStatus === 'verifying')) {
+    if (this.state.mode !== 'dsh' && (this.state.taskStatus === 'executing' || this.state.taskStatus === 'verifying')) {
       if (!silent) this.add('system', '写入已经开始，当前步骤会完成读回验证；不会继续执行其他动作。')
       return
     }
@@ -1245,9 +1263,14 @@ export class AgentRuntime {
     else this.finishRunningTools('已停止')
     if (!silent) {
       // 不再写「已停止思考」：停止本身就是结果，不需要再补一句解释。
-      const notice = reason ?? (this.state.mode === 'claude_code' ? '' : '任务已停止，待批准的操作已取消。')
+      const notice = reason ?? (this.state.mode === 'dsh' ? '' : '任务已停止，待批准的操作已取消。')
       if (notice) this.add('system', notice)
     }
+    // 静默停止（退出/重启）也要落终：否则重启后这轮没有 metrics，界面显示
+    // “用量未记录”。同时开一个迟到窗口，等 DSH 把最后一笔用量补上。
+    this.lateUsageUserId = this.currentTurnUserId ?? this.lastTurnUserId
+    this.lateUsageUntil = Date.now() + 30_000
+    this.settleTurn()
   }
 
   /** Releases the SDK query as well as cancelling the current turn. Closing a
@@ -1256,7 +1279,7 @@ export class AgentRuntime {
   async dispose(): Promise<void> {
     this.stop()
     this.contextGeneration += 1
-    const client = this.claudeCodeModel as (ModelClient & { dispose?: () => Promise<void> | void }) | undefined
+    const client = this.dshKernel as (ModelClient & { dispose?: () => Promise<void> | void }) | undefined
     await client?.dispose?.()
   }
 
@@ -1309,13 +1332,13 @@ export class AgentRuntime {
       this.state.taskStatus = 'awaiting_approval'
       return
     }
-    if (this.state.taskStatus !== 'awaiting_approval' || this.state.mode !== 'claude_code' || !this.isBusy()) return
+    if (this.state.taskStatus !== 'awaiting_approval' || this.state.mode !== 'dsh' || !this.isBusy()) return
     this.state.taskStatus = this.hasRunningTool() ? 'executing' : 'planning'
     this.state.avatarState = this.state.taskStatus === 'executing' ? 'acting' : 'thinking'
   }
 
-  private disposeClaudeQuery(): void {
-    const client = this.claudeCodeModel as (ModelClient & { dispose?: () => Promise<void> | void }) | undefined
+  private disposeAgentQuery(): void {
+    const client = this.dshKernel as (ModelClient & { dispose?: () => Promise<void> | void }) | undefined
     if (!client?.dispose) return
     try {
       void Promise.resolve(client.dispose()).catch(() => undefined)
@@ -1350,7 +1373,7 @@ export class AgentRuntime {
       }
       this.emit()
     }
-    if (this.state.mode === 'claude_code' && reply.sdkSessionId) this.sdkSessionId = reply.sdkSessionId
+    if (this.state.mode === 'dsh' && reply.sdkSessionId) this.sdkSessionId = reply.sdkSessionId
     if (reply.compacted) this.addSystem('上下文已自动压缩，可继续当前会话。', undefined, undefined, '上下文压缩')
     if (reply.text) {
       this.history.push({ role: 'assistant', content: reply.text })
@@ -1362,7 +1385,11 @@ export class AgentRuntime {
           this.emit()
         } else {
           this.dropSupersededAssistant(reply.text)
-          this.add('assistant', reply.text)
+          // 流式输出已经把这句话写进最后一条助手气泡时不再补一条：
+          // 同一条回答出现两次，就是界面上那段重复的来路。
+          const last = this.state.timeline.at(-1)
+          const alreadyShown = last?.kind === 'assistant' && last.text.trim() === reply.text.trim()
+          if (!alreadyShown) this.add('assistant', reply.text)
         }
       }
     }
@@ -1588,8 +1615,30 @@ export class AgentRuntime {
 
   /** The CLI's command/skill catalog, when the engine backs this runtime. */
   getCommandCatalog(): { commands: string[]; skills: string[] } | undefined {
-    const model = this.claudeCodeModel as (ModelClient & { getCommandCatalog?: () => { commands: string[]; skills: string[] } }) | undefined
+    const model = this.dshKernel as (ModelClient & { getCommandCatalog?: () => { commands: string[]; skills: string[] } }) | undefined
     return model?.getCommandCatalog?.()
+  }
+
+  /** 停止/退出时把当前轮落终：时间戳、费用、用户消息上的 metrics。
+   *  emit() 只在 done/failed/cancelled 时做同样的事；静默停止是 idle，
+   *  不单独收尾就会在重启后显示“用量未记录”。 */
+  private settleTurn(): void {
+    const metrics = this.state.taskMetrics
+    if (!metrics) return
+    if (!metrics.finishedAt) metrics.finishedAt = new Date().toISOString()
+    // 已有价格说明这一轮结算过；再算一次会把花费重复累加到会话总额。
+    if (metrics.spentYuan === undefined) this.accrueSpend()
+    const userId = this.currentTurnUserId ?? this.lastTurnUserId
+    if (userId) {
+      const user = this.state.timeline.find((entry) => entry.id === userId && entry.kind === 'user')
+      if (user) {
+        user.metrics = structuredClone(metrics)
+        this.markTimelineDirty(user)
+      }
+    }
+    this.lastTurnUserId = userId
+    this.currentTurnUserId = undefined
+    this.emit()
   }
 
   /** Charge only when both billed token buckets are known. A bare total is a

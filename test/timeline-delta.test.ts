@@ -112,7 +112,7 @@ describe('timeline deltas', () => {
       updatedAt: now,
       archivedAt: null,
       pinnedAt: null,
-      mode: 'demo',
+      mode: 'dsh',
       taskStatus: 'idle',
       timeline: [{ id: 'e1', time: now, kind: 'user', text: '旧消息' }],
       history: [],

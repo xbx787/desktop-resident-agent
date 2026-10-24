@@ -72,6 +72,29 @@ foreach ($link in $links) {
     continue
   }
 
+  # 发布目录可能被整体移动（先打包到暂存目录，再挪到 release）。pnpm 的绝对
+  # junction 会继续指向旧位置；只要目标在 node_modules\ 之后还能找到包内同名
+  # 镜像，就按当前包重建。这样挪动后的包可以原地修复，不必重新打包。
+  $packageAt = $targetFull.IndexOf($marker, [StringComparison]::OrdinalIgnoreCase)
+  if ($packageAt -ge 0 -and -not $targetFull.StartsWith($referencePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    $relative = $targetFull.Substring($packageAt + $marker.Length)
+    $internal = Join-Path $nodeModules $relative
+    if (Test-Path -LiteralPath $internal) {
+      if ($Check) {
+        $bad.Add("$($link.FullName): points at a moved package: $targetFull")
+        continue
+      }
+      try {
+        Remove-ReparsePoint $link.FullName
+        New-InternalJunction $link.FullName $internal
+        $repaired++
+      } catch {
+        $bad.Add("$($link.FullName): $($_.Exception.Message)")
+      }
+      continue
+    }
+  }
+
   if (-not $targetFull.StartsWith($referencePrefix, [StringComparison]::OrdinalIgnoreCase)) {
     $bad.Add("$($link.FullName): target escapes the release and is not the build reference: $targetFull")
     continue

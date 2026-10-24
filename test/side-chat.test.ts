@@ -38,7 +38,7 @@ function harness(model: ModelClient & { steer?: (text: string) => Promise<boolea
       runtimes.push(runtime)
       return runtime
     },
-    () => ({ parentConversationId, mode: 'claude_code', settings: currentSettings, history }),
+    () => ({ parentConversationId, mode: 'dsh', settings: currentSettings, history }),
     async () => '', visibleEvents, undefined,
     () => parentConversationId,
     () => currentSettings,
@@ -98,11 +98,11 @@ describe('temporary side chat', () => {
   })
 
   it('rejects empty and main-only commands before opening or queueing a child', async () => {
-    expect(() => validateSideChatMessage('', [], 'claude_code')).toThrow('消息不能为空')
-    expect(() => validateSideChatMessage('/goal 继续', [], 'claude_code')).toThrow('仅适用于主会话')
-    expect(() => validateSideChatMessage('/compact', [], 'claude_code')).toThrow('仅适用于主会话')
-    expect(() => validateSideChatMessage('/new 标题', [], 'claude_code')).toThrow('仅适用于主会话')
-    expect(() => validateSideChatMessage('/side 问题', [], 'claude_code')).toThrow('已经在临时会话中')
+    expect(() => validateSideChatMessage('', [], 'dsh')).toThrow('消息不能为空')
+    expect(() => validateSideChatMessage('/goal 继续', [], 'dsh')).toThrow('仅适用于主会话')
+    expect(() => validateSideChatMessage('/compact', [], 'dsh')).toThrow('仅适用于主会话')
+    expect(() => validateSideChatMessage('/new 标题', [], 'dsh')).toThrow('仅适用于主会话')
+    expect(() => validateSideChatMessage('/side 问题', [], 'dsh')).toThrow('已经在临时会话中')
     expect(() => validateSideChatMessage('', [{ name: 'file.docx', content: '', path: path.resolve('file.docx') }], 'live'))
       .toThrow('没有本地文件读取工具')
     expect(validateSideChatMessage('', [{ name: 'note.txt', content: '内容' }], 'live')).toBe('')
@@ -328,7 +328,7 @@ describe('temporary side chat', () => {
     await vi.waitFor(() => expect(side.isBusyForParent('parent-a')).toBe(true))
     const summary: ConversationSummary = {
       id: 'parent-a', title: 'A', createdAt: '', updatedAt: '', lastActivityAt: '',
-      archivedAt: null, pinnedAt: null, mode: 'claude_code', taskStatus: 'done', messageCount: 0, preview: ''
+      archivedAt: null, pinnedAt: null, mode: 'dsh', taskStatus: 'done', messageCount: 0, preview: ''
     }
     expect(side.withSideStatuses([summary])[0].taskStatus).toMatch(/planning|executing/)
     expect(side.withSideStatuses([{ ...summary, taskStatus: 'awaiting_approval' }])[0].taskStatus).toBe('awaiting_approval')

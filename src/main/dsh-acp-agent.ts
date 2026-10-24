@@ -192,6 +192,8 @@ export class DshAcpAgentClient implements ModelClient {
   /** 设置里的“输出风格”和“追加指令”，DSH 没有这两个概念，拼进系统提示。 */
   private outputStyle = ''
   private appendSystemPrompt = ''
+  /** 人设 + 宿主规则：每轮跟在用户消息前面送进模型（见 respond）。 */
+  private promptPreamble = ''
   /** 开关在回合进行中被改动：等这一轮结束后重建进程，不打断回答。 */
   private pendingRestart = false
   private subagentListener?: (tasks: SubagentTask[]) => void
@@ -238,7 +240,10 @@ export class DshAcpAgentClient implements ModelClient {
       outputStyle: this.outputStyle,
       appendSystemPrompt: this.appendSystemPrompt
     })
-    this.runtime.setSystemPrompt(`${persona}${hostRules}`)
+    this.promptPreamble = `${persona}${hostRules}`
+    // 仍然写进进程环境：sdk-minimal 的 profile 用 personaPrefix 读它，
+    // ACP 侧则等 DSH 支持后再切回系统提示。
+    this.runtime.setSystemPrompt(this.promptPreamble)
   }
 
   private get runtime(): DshAcpRuntime { return this.options.runtime }
@@ -255,6 +260,9 @@ export class DshAcpAgentClient implements ModelClient {
     images?: ModelImage[]
   ): Promise<ModelReply> {
     if (signal.aborted) throw new Error('已停止。')
+    // 人设文件（data/persona/<id>.md）可能刚被改过：每轮重读一次，文本没变
+    // 时 setSystemPrompt 不会动进程，变了下一轮就带上新文本。
+    this.applyPersona()
     // 联网/压缩设置或联网开关在上一轮进行中改动过：等回合结束再重建进程。
     if (this.pendingRestart) {
       this.pendingRestart = false
@@ -336,6 +344,9 @@ export class DshAcpAgentClient implements ModelClient {
     const messageTexts = new Map<number, string>()
     let messageSegment = -1
     let currentMessageId = ''
+    /** 最后一次工具调用发生在哪一段文字之后：这之后的文字才是这一轮的回答。
+     *  之前的都是过程旁白，拼接起来会把整轮旁白当成答复重复一遍。 */
+    let lastToolSegment = -1
     const thoughtTexts = new Map<number, string>()
     let thoughtSegment = -1
     let currentThoughtId = ''
@@ -380,6 +391,7 @@ export class DshAcpAgentClient implements ModelClient {
         noteGenerationDelta()
         if (next) onThinking?.(next, thoughtSegment)
       } else if (kind === 'tool_call') {
+        lastToolSegment = messageSegment
         const toolCallId = textValue(update.toolCallId)
         const title = textValue(update.title) || 'unknown_tool'
         const input = update.rawInput === undefined ? '' : JSON.stringify(update.rawInput)
@@ -432,7 +444,10 @@ export class DshAcpAgentClient implements ModelClient {
       void this.runtime.cancel(sessionId)
     }
     // 图片块只在握手声明支持时发送；不支持的模型仍能从文本里的路径用读图工具打开。
-    const promptBlocks: DshAcpPromptBlock[] = [{ type: 'text', text: latestUser }]
+    // ACP 内核不消费 DSH_SYSTEM_PROMPT（只有 sdk-minimal 的 profile 读它），
+    // 所以人设和宿主规则跟着用户消息一起送进去：这是实测能到达模型的通道。
+    const promptText = this.promptPreamble ? `${this.promptPreamble}\n\n---\n\n${latestUser}` : latestUser
+    const promptBlocks: DshAcpPromptBlock[] = [{ type: 'text', text: promptText }]
     if (this.runtime.supportsImagePrompts) {
       for (const image of images ?? []) {
         promptBlocks.push({ type: 'image', mimeType: image.mimeType, data: image.data })
@@ -465,10 +480,14 @@ export class DshAcpAgentClient implements ModelClient {
 
     // 收尾再等一次落盘，补上最后一条 assistant/message 的用量。
     await reportUsage(25)
-    const text = [...messageTexts.entries()]
+    // 这一轮的回答只取最后一次工具调用之后的文字。把所有段落拼起来会让
+    // 界面把整轮过程旁白当成答复再重复一遍（实测过，见 #1）。
+    const ordered = [...messageTexts.entries()]
       .sort(([a], [b]) => a - b)
-      .map(([, value]) => value)
-      .join('')
+      .filter(([, value]) => value.trim())
+    const afterTool = ordered.filter(([index]) => index > lastToolSegment)
+    const answer = afterTool.length ? afterTool : ordered.slice(-1)
+    const text = answer.map(([, value]) => value).join('\n\n')
     return {
       text,
       sdkSessionId: sessionId,

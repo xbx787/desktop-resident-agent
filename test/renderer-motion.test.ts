@@ -30,10 +30,20 @@ function keyframeProperties(css: string): Map<string, string[]> {
   return frames
 }
 
-/** The body of the first rule that opens with exactly `<selector> {`. */
+/** The body of the first rule that opens with exactly `<selector> {`.
+ *  选择器必须独立成条：像 `.panel-thought-label.panel-live-label` 这种组合
+ *  选择器里也含 `.panel-live-label`，按子串找会先命中它、读到别人的规则体。 */
 function ruleBody(css: string, selector: string): string | null {
-  const start = css.indexOf(`${selector} {`)
-  if (start < 0) return null
+  const needle = `${selector} {`
+  let start = -1
+  let from = 0
+  for (;;) {
+    const found = css.indexOf(needle, from)
+    if (found < 0) return null
+    // 前一个字符属于选择器标识符时，说明这是组合选择器的一部分。
+    if (found === 0 || !/[A-Za-z0-9_-]/u.test(css[found - 1])) { start = found; break }
+    from = found + 1
+  }
   const open = css.indexOf('{', start)
   const close = css.indexOf('}', open)
   return css.slice(open + 1, close)

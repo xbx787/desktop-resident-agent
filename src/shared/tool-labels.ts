@@ -65,7 +65,7 @@ const TOOL_LABELS: Record<string, string> = {
   // Windows MCP / MCP 通用工具：调用行里显示中文动作，而不是 Screenshot 这类英文名。
   request_approval: '请求批准',
   conversations_list: '列出对话',
-  conversations_send_message: '发送对话消息',
+  conversations_send_message: '发送对话',
   evolve_status: '查看进化',
   evolve_schedule: '安排进化',
   evolve_restart: '重启应用',
@@ -168,4 +168,18 @@ export function mcpToolRef(name: string): { server: string; tool: string } | nul
   const dsh = /^mcp[:/]([^:/]+)[:/](.+)$/u.exec(trimmed)
   if (dsh) return { server: dsh[1], tool: dsh[2] }
   return null
+}
+
+/** 常见 MCP 服务器名 → 短中文名，让工具行读成“桌面控制 · 截屏”。
+ *  未登记的服务器保留原名：用户需要知道到底是哪一个 MCP。 */
+const MCP_SERVER_LABELS: Record<string, string> = {
+  'windows-mcp': '桌面控制',
+  pet: '小鲸',
+  deepseek: '联网',
+  filesystem: '文件',
+  memory: '记忆'
+}
+
+export function mcpServerLabel(server: string): string {
+  return MCP_SERVER_LABELS[server.trim().toLowerCase()] ?? server
 }

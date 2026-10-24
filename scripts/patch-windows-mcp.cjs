@@ -89,7 +89,11 @@ for _index in range(_RIPPLE_FRAMES):
           `_NOTICE_TITLE = "AI is controlling this computer"`,
           `_NOTICE_TITLE = "AI 正在控制这台电脑"`
         ],
-        new: `_NOTICE_TITLE = "小鲸正在控制这台电脑"`
+        new: `_NOTICE_TITLE = "AI 正在控制这台电脑"`
+      },
+      {
+        old: `_NOTICE_TITLE = "小鲸正在控制这台电脑"`,
+        new: `_NOTICE_TITLE = "AI 正在控制这台电脑"`
       },
       {
         old: [

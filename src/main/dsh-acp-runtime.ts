@@ -69,6 +69,8 @@ interface PendingRequest {
   resolve: (value: unknown) => void
   reject: (error: Error) => void
   timer: ReturnType<typeof setTimeout>
+  /** 发出这个请求的子进程；进程退出时只清它自己的请求。 */
+  child: ChildProcessWithoutNullStreams
 }
 
 /** ACP requires an absolute executable. Resolve a bare `npx`/`node` from PATH
@@ -135,7 +137,6 @@ export class DshAcpRuntime {
   private readonly listeners = new Set<(notification: DshAcpNotification) => void>()
   private requestHandler: ((request: DshAcpServerRequest) => Promise<unknown>) | undefined
   private startPromise: Promise<void> | undefined
-  private stderrTail = ''
   private runGeneration = 0
   /** 会话通知序号：prompt 重连前用它判断这一轮是否已经开始产出。 */
   private activitySerial = 0
@@ -210,18 +211,17 @@ export class DshAcpRuntime {
       windowsHide: true
     })
     this.child = child
-    this.stderrTail = ''
+    // stderr 属于这个子进程：旧进程退出时不能把它的报错混进新进程的错误里。
+    let stderrTail = ''
     child.stderr.on('data', (chunk) => {
-      this.stderrTail = (this.stderrTail + chunk.toString()).slice(-4_000)
+      stderrTail = (stderrTail + chunk.toString()).slice(-4_000)
     })
     const lines = readline.createInterface({ input: child.stdout })
-    lines.on('line', (line) => this.handleLine(line))
+    lines.on('line', (line) => this.handleLine(line, child))
     child.on('exit', (code) => {
-      for (const pending of this.pending.values()) {
-        clearTimeout(pending.timer)
-        pending.reject(new Error(`DSH ACP 已退出（${code ?? 'unknown'}）${this.stderrTail ? `：${this.stderrTail}` : ''}`))
-      }
-      this.pending.clear()
+      // 只拒绝这个子进程自己的请求。旧进程退出时如果把共享 pending 全清，
+      // 会误杀刚启动的新进程正在等结果的请求，用户就会看到“连接中断”。
+      this.rejectPendingOf(child, `DSH ACP 已退出（${code ?? 'unknown'}）${stderrTail ? `：${stderrTail}` : ''}`)
       if (this.child === child) {
         this.child = undefined
         this.startPromise = undefined
@@ -255,7 +255,9 @@ export class DshAcpRuntime {
     child.stdin.write(`${JSON.stringify(message)}\n`)
   }
 
-  private handleLine(line: string): void {
+  private handleLine(line: string, child: ChildProcessWithoutNullStreams): void {
+    // 被替换的旧进程可能还有迟到的 stdout：丢弃，别把上一轮的内容混进新回合。
+    if (this.child !== child) return
     let message: Record<string, unknown>
     try {
       message = JSON.parse(line) as Record<string, unknown>
@@ -307,7 +309,7 @@ export class DshAcpRuntime {
         this.pending.delete(id)
         reject(new Error(`DSH ACP 请求超时：${method}`))
       }, timeoutMs)
-      this.pending.set(id, { resolve, reject, timer })
+      this.pending.set(id, { resolve, reject, timer, child })
       this.write({ jsonrpc: '2.0', id, method, params })
     })
   }
@@ -406,11 +408,23 @@ export class DshAcpRuntime {
     await this.request('session/close', { sessionId }, 30_000).catch(() => undefined)
   }
 
+  /** 只拒绝这个子进程自己的请求：旧进程退出时不能误杀新进程刚发出的请求。 */
+  private rejectPendingOf(child: ChildProcessWithoutNullStreams, message: string): void {
+    for (const [id, pending] of this.pending) {
+      if (pending.child !== child) continue
+      this.pending.delete(id)
+      clearTimeout(pending.timer)
+      pending.reject(new Error(message))
+    }
+  }
+
   async close(): Promise<void> {
     const child = this.child
     if (!child) return
     this.child = undefined
     this.startPromise = undefined
+    // 主动关闭时立刻让它自己的请求失败，不用等 200ms 后的 exit。
+    this.rejectPendingOf(child, 'DSH ACP 已退出（closed）：运行时重启')
     try { child.stdin.end() } catch { /* already closed */ }
     await new Promise<void>((resolve) => setTimeout(resolve, 200))
     if (!child.killed) child.kill()
